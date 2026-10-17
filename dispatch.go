@@ -1052,7 +1052,7 @@ func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
 // slot takes exactly 2 passes (2 renders), which is the floor: the handler has
 // to run on a render that already saw the posted values.
 //
-// Each pass re-renders the whole tree, but an embedded child keeps the instance
+// Each pass re-renders the whole tree, but a child keeps the instance
 // its first pass made (see Ctx.passUnits), so its OnInit runs once, as a root's
 // does.
 const maxHydratePasses = 8

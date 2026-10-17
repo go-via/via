@@ -833,7 +833,7 @@ func TestDispatchPlain_hydratesAChildSignalInABranchAnotherPostedChildSignalOpen
 	code, body := app.ChildAction("0", 1).Body(`{"d__mode":"x","d__name":"bob"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "seen: saw:bob",
-		"an embedded child must discover a branch its own posted signal opens, exactly as a root does")
+		"a child must discover a branch its own posted signal opens, exactly as a root does")
 }
 
 type echoKid struct{ Name via.Signal[string] }
@@ -895,7 +895,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	assert.Contains(t, body, "does not bind it")
 }
 
-// fixKid is a plain embedded child whose OnInit seeds the state its handler
+// fixKid is a plain child whose OnInit seeds the state its handler
 // reads — the state a later discovery pass used to skip.
 type fixKid struct {
 	loaded string

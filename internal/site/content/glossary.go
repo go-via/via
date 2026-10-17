@@ -180,7 +180,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"The parts", "/start#the-parts"}, {"A composition is a struct", "/compositions#a-composition-is-a-struct"}},
 			nil},
 		{"Wire pane",
-			[]h.H{s("A go-via.dev feature, not part of via: the pane under each demo card that lists the demo's action POSTs, their statuses, and the SSE patches it receives.")},
+			[]h.H{s("A go-via.dev feature, not part of via: the pane under each demo card that lists the demo's action POSTs and their statuses, the patches that answer them or arrive on its stream, and its signal values.")},
 			[]seeLink{{"Run a counter", "/start#run-a-counter"}},
 			nil},
 	}

@@ -95,7 +95,7 @@ func (a stateSeed[T]) apply(handle unsafe.Pointer) any {
 	return s.val
 }
 
-// StateOf seeds a State with v, so a parent can hand an embedded child its
+// StateOf seeds a State with v, so a parent can hand a child its
 // starting value from a composite literal. A unit seeding its own state wants
 // the zero [State] plus a [State.Set] in OnInit instead — that one can read the
 // request, the path params and the session; a literal cannot:

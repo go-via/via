@@ -179,7 +179,7 @@ var refPackages = []refPackage{
 func viaExtra(d *shell.Doc) h.H {
 	return h.Div(
 		d.H3("Lifecycle hooks"),
-		h.P(h.Str("Four methods on your own type, duck-typed: a unit opts in by having one. A hook-named "+
+		h.P(h.Str("View is required. OnInit, OnReload and PageMeta are duck-typed: a unit opts in by having one. A hook-named "+
 			"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
 			"signature is logged once.")),
 		refTable("Method", hooks),

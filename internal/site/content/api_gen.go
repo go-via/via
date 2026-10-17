@@ -84,7 +84,7 @@ var apiSymbols = []apiSymbol{
 	{"via", "State.Get", "method", "func (s *State[T]) Get() T", "Get returns this connection's value.", ""},
 	{"via", "State.Set", "method", "func (s *State[T]) Set(v T)", "Set assigns the value on this unit instance.", ""},
 	{"via", "State.Track", "method", "func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T)", "Track keeps s equal to a store announced on t: it seeds s from load now, seeds it again once the stream has subscribed, and then applies every publish.", ""},
-	{"via", "StateOf", "func", "func StateOf[T any](v T) State[T]", "StateOf seeds a State with v, so a parent can hand an embedded child its starting value from a composite literal.", ""},
+	{"via", "StateOf", "func", "func StateOf[T any](v T) State[T]", "StateOf seeds a State with v, so a parent can hand a child its starting value from a composite literal.", ""},
 	{"via", "StateTrack", "func", "func StateTrack[T any](t *topic.Topic[T], load func() T) State[T]", "StateTrack is the literal form of State.Track: a State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, and follows t.", ""},
 	{"via", "Style", "type", "type Style struct{ … }", "Style is one stylesheet — Href for a <link rel=\"stylesheet\">, Inline for a <style> admitted by the sha256 of its exact bytes.", ""},
 	{"via", "VersionedSessionStore", "type", "type VersionedSessionStore interface{ … }", "VersionedSessionStore is the optional half of SessionStore, for a backend that can make a write conditional on the revision it read.", ""},

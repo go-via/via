@@ -195,7 +195,7 @@ func (p *unitPusher) recoverFatal() {
 		if p.frameID != "" {
 			panic(rec)
 		}
-		msg = "via: live push aborted — an embedded child's OnInit failed; tearing the " +
+		msg = "via: live push aborted — a child's OnInit failed; tearing the " +
 			"stream down so the client reloads and gets the real answer"
 		attrs = []any{"err", v.err, "redirect", v.redirect}
 	case liveNestingViolation:

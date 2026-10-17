@@ -629,13 +629,13 @@ func TestStateTrack_worksOnAnEmbeddedChild(t *testing.T) {
 
 	status, body := app.Get("/")
 	require.Equal(t, http.StatusOK, status)
-	assert.Contains(t, body, "kid: 4", "an embedded child's literal must seed at its own init")
+	assert.Contains(t, body, "kid: 4", "a child's literal must seed at its own init")
 
 	conn := app.Connect()
 	defer conn.Close()
 	room.Publish(n.Add(1))
 	assert.Contains(t, conn.Await("kid: "), "kid: 5",
-		"an embedded child's literal must follow its topic")
+		"a child's literal must follow its topic")
 }
 
 // litTrackSilent never renders State; only the literal's Listen can make the page live.

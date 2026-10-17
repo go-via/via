@@ -268,7 +268,7 @@ these:
 
 `PageMeta` clears all three, which is why it is a method on the root and not
 `ctx.Title(…)`: the document head is one shared slot, and the setter shape let
-any embedded child silently rename the page.
+any child silently rename the page.
 
 Measured against the same rule and deliberately left imperative:
 

@@ -66,7 +66,7 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	ctx.sessions = sessions
 	ctx.policy = pol
 	ctx.sessW = w
-	ctx.doInit = true // every embedded child's OnInit runs too, inside Child
+	ctx.doInit = true // every child's OnInit runs too, inside Child
 	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint
 	// its own id — two sibling children writing the session sent two Set-Cookie
@@ -222,7 +222,7 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
-// answerInitFailure gives an embedded child's failed OnInit the same answers
+// answerInitFailure gives a child's failed OnInit the same answers
 // the root's gets in runOnInit.
 func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome, sse bool) {
 	switch {
@@ -797,7 +797,7 @@ var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
 // also only warns.
 //
 // root says whether t is being mounted. Only the root's PageMeta is read, so a
-// correctly-shaped one on an embedded child is reported: it is a warning and
+// correctly-shaped one on a child is reported: it is a warning and
 // not a panic because the very same type may legitimately be a mounted page
 // elsewhere in the app, and panicking would outlaw that.
 func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
@@ -821,8 +821,8 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	if !root {
 		for _, hook := range hookSpecs {
 			if hook.rootOnly && hook.implements(pt) {
-				log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the MOUNTED page's %s names the document, "+
-					"and %s is embedded. Move it to the root composition, or fold the value into the "+
+				log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the mounted root's %s names the document, "+
+					"and %s is a child. Move it to the mounted root, or fold the value into the "+
 					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
 			}
 		}

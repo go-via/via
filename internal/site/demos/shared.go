@@ -39,7 +39,7 @@ func resetShared() {
 }
 
 // Shared follows the counter through the via.StateTrack literal NewShared
-// builds; the topic re-seeds it on every publish.
+// builds; every publish on the topic is applied to it.
 type Shared struct {
 	// Limiter: see shared_contract.go.
 	Lim    Limiter

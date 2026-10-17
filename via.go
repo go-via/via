@@ -23,8 +23,7 @@
 // away ("OnRelaod", "Oninit"). A leftover v0.7 OnConnect(*via.Ctx) error is
 // logged too, even next to an OnInit.
 //
-//	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any
-//	                         // embedded child
+//	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any child
 //	OnReload(*via.Ctx) error // after one of the unit's actions, before the
 //	                         // render that answers it
 //	PageMeta() via.Meta      // the mounted root's own document
@@ -536,7 +535,7 @@ type Ctx struct {
 	unitV       instance
 	declare     bool   // this render declares page-level data-signals
 	base        string // mount path prefix for action POSTs
-	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
+	doInit      bool   // request-scoped, so every child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
 	// passUnits is dispatchPlain's discovery-only record of each child key's
@@ -626,7 +625,7 @@ type unitPass struct {
 	actions   map[string]action          // content-addressed action table, keyed by handler identity
 	hydrators map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	dirty     map[string]any
-	children  []*Ctx      // embedded children, in positional order (parent binder only)
+	children  []*Ctx      // children, in positional order (parent binder only)
 	rendered  []byte      // inner HTML from the discovery render (for the 204 compare)
 	pusher    *unitPusher // live only: re-renders this unit and frames it on the stream
 	redirect  redirectTo

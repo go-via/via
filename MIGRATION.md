@@ -92,7 +92,7 @@ instead. The query string is empty on actions, so list state
 The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `OnInit(*Ctx) error` is the lifecycle hook,
-on a page and on every embedded child. There is no `Connector` and no `Live`
+on a page and on every child. There is no `Connector` and no `Live`
 interface: a composition is a live child when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
 `State[T]`/`List[E]`. `via.Stream(ctx, d, fn)` is `ctx.Tick(d, fn)` in
@@ -671,7 +671,7 @@ Four rules:
   is read after `OnInit`, so the data is loaded. A composition that already
   has a `PageMeta` *field* must rename the field — Go forbids a method and a
   field sharing a name.
-- Only the **mounted root's** counts. An embedded child's `PageMeta` is ignored;
+- Only the **mounted root's** counts. A child's `PageMeta` is ignored;
   `Child` logs one line when it sees one.
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
@@ -704,7 +704,7 @@ composition in an argless handler.
 ## A live root re-inits its plain children every frame
 
 A live root re-renders its whole tree on every pushed frame, and each plain
-embedded child is a fresh copy, so its `OnInit` runs once per frame. That is
+child is a fresh copy, so its `OnInit` runs once per frame. That is
 what keeps such a child from coming back zero-valued, but any side effect in
 that `OnInit` repeats at the frame rate. Keep it cheap and pure, or hold the
 data on the live root and pass it down the field.

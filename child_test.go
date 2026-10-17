@@ -86,7 +86,7 @@ func TestChild_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
-		"an embedded child's failed OnInit must abort the connect")
+		"a child's failed OnInit must abort the connect")
 	select {
 	case <-acquired:
 		require.Fail(t, "a sibling's OnConnect ran even though the connect never opened")
@@ -114,7 +114,7 @@ func TestChild_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
-		"an embedded child's panicking OnInit must abort the connect")
+		"a child's panicking OnInit must abort the connect")
 	select {
 	case <-acquired:
 		require.Fail(t, "a sibling's OnConnect ran even though the connect never opened")
@@ -218,7 +218,7 @@ func TestChild_newChildSeedsTheChild(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(greetPage{G: greeter{who: "alice"}})
 	_, body := do(t, serve(t, app), http.MethodGet, "/", "")
-	assert.Contains(t, body, "hi alice", "the parent literal must seed the embedded child")
+	assert.Contains(t, body, "hi alice", "the parent literal must seed the child")
 }
 
 // liveClicker is a live child with State + an action (dep-free, so a zero-value
@@ -885,7 +885,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 		"the fresh page's OnInit must see the session value the live action just Put")
 }
 
-// initChild loads a field in its own OnInit — the hook an embedded child never
+// initChild loads a field in its own OnInit — the hook a child never
 // used to get at all; only the root's ran.
 type childIniter struct {
 	label string
@@ -928,7 +928,7 @@ func TestChild_childOnInitNotFoundAnswers404(t *testing.T) {
 	resp, body := do(t, serve(t, via.Handler(notFoundHost{})), http.MethodGet, "/", "")
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-		"ErrNotFound from an embedded child's OnInit is a 404, exactly as it is from the root's")
+		"ErrNotFound from a child's OnInit is a 404, exactly as it is from the root's")
 	assert.NotContains(t, body, "never", "the page must not serve once a child's OnInit failed")
 }
 
@@ -977,7 +977,7 @@ func TestChild_childOnInitForbiddenAnswers403(t *testing.T) {
 	resp, body := do(t, serve(t, via.Handler(forbiddenHost{}, logTo(&out))), http.MethodGet, "/", "")
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"ErrForbidden from an embedded child's OnInit is a 403, exactly as it is from the root's")
+		"ErrForbidden from a child's OnInit is a 403, exactly as it is from the root's")
 	assert.NotContains(t, body, "never")
 	assert.NotContains(t, out.String(), "level=ERROR", "a refusal is an answer, not a server fault")
 }

@@ -142,7 +142,7 @@ type Preload struct {
 // literal you mounted, before any request, because the CSP is built there — one
 // string per mount, none per request. See [Meta].
 //
-// Only the root's counts. An embedded child's PageMeta is ignored — a nested
+// Only the root's counts. A child's PageMeta is ignored — a nested
 // unit may not rename the page it happens to sit in — and Child logs one line
 // naming the type when it sees one, because the method looks like it works.
 //
