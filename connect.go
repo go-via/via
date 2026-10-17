@@ -156,6 +156,9 @@ func (p *unitPusher) push() {
 	defer p.recoverFatal()
 	bind, body := livePush(p.lc, p)
 	bind.pusher = p
+	// Actions run on the latest bind, so it must carry the stream context
+	// Ctx.Context hands them.
+	bind.streamCtx = p.last.streamCtx
 	p.last = bind
 	p.lc.replace(bind)
 	if bytes.Equal(body, p.lastBody) {

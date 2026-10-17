@@ -1475,7 +1475,7 @@ type ctxKeeper struct {
 	got chan context.Context
 }
 
-func (p *ctxKeeper) Keep(ctx *via.Ctx) { p.got <- ctx.Context() }
+func (p *ctxKeeper) Keep(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1); p.got <- ctx.Context() }
 
 func (p *ctxKeeper) View() h.H { return h.Div(p.n.Display(), h.Button(on.Click(p.Keep))) }
 
@@ -1485,6 +1485,11 @@ func TestLive_anActionsContextIsTheStreamsNotThePOSTs(t *testing.T) {
 		app := vt.Serve(t, via.Handler(ctxKeeper{got: got}))
 		conn := app.Connect()
 		code, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		<-got
+		conn.Await(">1<")
+		// The second action runs on the unit the first one's push rebuilt.
+		code, _ = app.Action(0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		actx := <-got
 
