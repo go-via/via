@@ -19,6 +19,8 @@
 
 ### Fixed
 
+- `List.Append` always builds a new array. A list `Set` from a slice with spare capacity, such as a shared store snapshot, appended into that slice's array, so tabs holding the same snapshot overwrote each other.
+- `vt`: an action whose `Body` is `null` and carries a `Tab` posts the body as given instead of panicking.
 - `Mount` panics on a path that does not start with "/". A host-qualified pattern used to mount and render action URLs relative to the page, which missed.
 - A nil handler passed to an `on` event or to `on.Bind` panics where it is bound. It used to render a binding whose every click answered 500.
 - A live action's `Ctx.Context` is the tab's stream context, as documented. It was the POST's, so it ended with the request and `Router.Shutdown` never cancelled it.
@@ -35,8 +37,8 @@
   edits into others. Each tab copies the mounted literal, so all of them
   shared the seed's array, and `Remove` shifted it in place: after one tab
   removed and appended, a fresh GET rendered that tab's list. `Remove` now
-  builds a new array, a `ListOf` seed is clipped so the first `Append`
-  reallocates, and a tag seed is decoded afresh for each request.
+  and `Append` build a new array, and a tag seed is decoded afresh for each
+  request.
 - A `State` or `Signal` seeded by a `via:"init=…"` tag holding a map no longer
   shares that map across requests: a write into one request's map showed in
   every later one, and two tabs writing at once raced.

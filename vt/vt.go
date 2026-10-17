@@ -279,7 +279,7 @@ func (a *Action) signalBody() string {
 		return a.body
 	}
 	sig := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(a.body), &sig); err != nil {
+	if err := json.Unmarshal([]byte(a.body), &sig); err != nil || sig == nil {
 		return a.body
 	}
 	sig[tabSignal], _ = json.Marshal(a.tab)

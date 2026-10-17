@@ -116,6 +116,15 @@ func TestList_removeLeavesTheOldArrayUntouched(t *testing.T) {
 	assert.Equal(t, []string{"b"}, l.Get())
 }
 
+func TestList_appendLeavesASetSlicesSpareCapacityUntouched(t *testing.T) {
+	t.Parallel()
+	shared := make([]string, 1, 4)
+	var l via.List[string]
+	l.Set(shared)
+	l.Append("x")
+	assert.Empty(t, shared[:2][1], "another tab may have Set the same snapshot")
+}
+
 // listChild is the canonical case item 04 claimed was impossible: a live list
 // a user can delete a row from. Each row carries a stable id so the morph
 // matches by identity rather than by position.

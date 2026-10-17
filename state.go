@@ -181,17 +181,14 @@ type List[E any] struct{ State[[]E] }
 
 // ListOf seeds a List with the given elements — the [StateOf] of lists, and the
 // same choice against a zero List filled in OnInit.
-func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: slices.Clip(v), lit: true}} }
-
-// A seed's array is shared by every tab copied from the mounted literal, so it
-// is clipped: the first Append reallocates instead of writing into it.
+func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true}} }
 
 // Append adds v to the end of this connection's list and schedules the push,
-// like any Set. It re-slices in place when there is capacity, so appending in a
-// tick loop does not reallocate every frame — but the whole list re-renders on
-// each push, so a list that grows without bound grows the frame without bound
-// too. Cap it, or page it.
-func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
+// like any Set. It builds a new array, since the old one may be a seed or a
+// snapshot another tab holds. The whole list re-renders on each push, so a
+// list that grows without bound grows the frame without bound too. Cap it, or
+// page it.
+func (l *List[E]) Append(v E) { l.Set(append(slices.Clip(l.Get()), v)) }
 
 // Remove deletes the element at i, shifting the rest left, and panics if i is
 // out of range. It builds a new array rather than shifting in place, since the

@@ -180,3 +180,10 @@ func TestConnAwait_timeoutCountsTheFramesThisWaitRead(t *testing.T) {
 		assert.Contains(t, msg, "1 read by this wait")
 	})
 }
+
+func TestAction_aNullBodyWithATabIsPostedVerbatim(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tally{}))
+	code, _ := app.Action(0).Body("null").Tab("x").Fire()
+	assert.NotZero(t, code)
+}
