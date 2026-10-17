@@ -14,8 +14,8 @@
   without a word. `State.Track` from `OnReload` now names OnReload in its
   warning instead of "after OnInit returned".
 - Log wording: the "live push aborted" errors say the client reloads, not
-  reconnects, and the ignored-PageMeta warning on a child names the mounted
-  root.
+  reconnects, the ignored-PageMeta warning on a child names the mounted root,
+  and the topic backlog warning starts "topic:" instead of "via/topic:".
 
 ### Fixed
 
@@ -35,8 +35,9 @@
   builds a new array, and a seed is clipped so the first `Append` reallocates.
 - `expr` groups a composite operand: `expr.Raw("$a || $b").Not()` is
   `(!($a || $b))` and `.Eq(1)` is `(($a || $b) === 1)`. Both used to bind to
-  the last term only. A bare `$name`, a literal and an already parenthesized
-  expression are emitted as before.
+  the last term only. A bare `$name`, an unsigned number, a string literal and
+  an already parenthesized expression are emitted as before; a negative
+  number, an array, an object or an indexed ref gains parentheses.
 - `vt.Conn` reads a frame line up to 16 MiB. A live view over 64 KB used to
   end the reader, so `Await` reported the stream closed.
 

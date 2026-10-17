@@ -414,10 +414,10 @@ func (p *Profile) OnInit(ctx *via.Ctx) error {
 ```
 
 `OnInit` runs on every transport a mount answers but a live action over an
-already-open stream: a session revoked after connect still passes `OnInit`
-(it never runs again on that stream), so `Tick` and `Listen` keep pushing on
-it until the tab next acts, closes, or the router shuts down — that gap is
-unmitigated. A `Redirect` set inside `OnInit` answers the GET with a 303.
+already-open stream, so it does not see a session revoked after connect. The
+stream checks its session on every keepalive instead: once the session is
+rotated, deleted or expired, the stream ends within one beat and the tab's
+reload runs `OnInit` against whatever the cookie names now. A `Redirect` set inside `OnInit` answers the GET with a 303.
 
 ## Worked example: the counter, both ways
 
@@ -725,8 +725,9 @@ data on the live root and pass it down the field.
   server log names the handlers the render did bind, which is the fastest way
   to see it (the response body names only the id that was asked for: the bound
   list is your Go type and method names, and the client is not entitled to
-  them). Datastar resolves a non-2xx response silently; a streaming page
-  heals on the next push, a plain one stays dead until reload.
+  them). A page with a live unit reloads itself on a 410 ("Page is out of
+  date - reloading…"); Datastar resolves a non-2xx response silently, so a
+  plain page stays dead until the user reloads.
 - **Per-connection `State` does not survive a native form submit**: it is a
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared
