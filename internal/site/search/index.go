@@ -1,5 +1,5 @@
 // Package search is the site's full-text search: an index built from the
-// rendered pages at startup, and the sidebar box that queries it.
+// rendered pages at startup, and the top bar's search box that queries it.
 package search
 
 import (

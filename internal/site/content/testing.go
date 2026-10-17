@@ -7,7 +7,7 @@ import (
 )
 
 const testingAwaitFailure = `--- FAIL: TestBoard_pushesOverTheStream (2.00s)
-    board_test.go:27: vt.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
+    board_test.go:27: vt.Conn.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
           #1 datastar-patch-signals: signals {"viatab":"eVelnHi8QTPIgFoyF8h8lwM3keTgszM2nqGXa7d_ee4w"}
           #2 datastar-patch-elements: elements <div id="root"><div><p>msg: hello</p><button data-on:click="@post('/_via/a/r/n4Ip3BxF')">post</button></div></div>`
 

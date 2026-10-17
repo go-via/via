@@ -172,10 +172,11 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (the root is child "r"). The URL is read off the rendered root page at
-// Fire time, not constructed: the wire id is a hash of the handler's func
-// name and any ?a= row datum rides along with it, so a hand-built path would
-// be wrong. By default it carries Sec-Fetch-Site: same-origin,
+// order (the root is child "r"). The URL is read off the root page the App's
+// first Fire fetched, not constructed: the wire id is a hash of the handler's
+// func name and any ?a= row datum rides along with it, so a hand-built path
+// would be wrong. That page is cached, so an action that only appears after a
+// change needs Raw with a URL read off a fresh Get. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
 func (a *App) Action(n int) *Action { return a.ChildAction("r", n) }
@@ -447,7 +448,7 @@ func (a *App) ConnectAt(path, body string) *Conn {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.srv.URL+sse, strings.NewReader(body))
 	if err != nil {
 		cancel()
-		a.t.Fatalf("vt.Connect: build request: %v", err)
+		a.t.Fatalf("vt.App.Connect: build request: %v", err)
 	}
 	// The stream connect is a POST carrying the page signals as a body. A real
 	// same-origin browser fetch sends Sec-Fetch-Site; the origin floor requires
@@ -456,12 +457,12 @@ func (a *App) ConnectAt(path, body string) *Conn {
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {
 		cancel()
-		a.t.Fatalf("vt.Connect: %v", err)
+		a.t.Fatalf("vt.App.Connect: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		cancel()
 		resp.Body.Close()
-		a.t.Fatalf("vt.Connect: status %d", resp.StatusCode)
+		a.t.Fatalf("vt.App.Connect: status %d", resp.StatusCode)
 	}
 
 	frames := make(chan string, 256)
@@ -583,10 +584,10 @@ func (c *Conn) Await(needle string) string {
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatalf("vt.Await: timed out after %v waiting for %q. %s", awaitTimeout, needle, c.arrived(read))
+			c.t.Fatalf("vt.Conn.Await: timed out after %v waiting for %q. %s", awaitTimeout, needle, c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatalf("vt.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
+				c.t.Fatalf("vt.Conn.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
 			}
 			if strings.HasPrefix(line, "event:") {
 				read++
@@ -607,7 +608,7 @@ func (c *Conn) AwaitClose() error {
 	select {
 	case <-c.closed:
 	case <-time.After(awaitTimeout):
-		c.t.Fatalf("vt.AwaitClose: the stream was still open after %v", awaitTimeout)
+		c.t.Fatalf("vt.Conn.AwaitClose: the stream was still open after %v", awaitTimeout)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -624,10 +625,10 @@ func (c *Conn) awaitTab() string {
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatal("vt.Connect: no tab-id frame arrived. " + c.arrived(read))
+			c.t.Fatal("vt.App.Connect: no tab-id frame arrived. " + c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatal("vt.Connect: stream closed before the tab-id frame. " + c.arrived(read))
+				c.t.Fatal("vt.App.Connect: stream closed before the tab-id frame. " + c.arrived(read))
 			}
 			if strings.HasPrefix(line, "event:") {
 				read++
