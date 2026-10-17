@@ -90,13 +90,7 @@ func (c *Ctx) recoverListener() {
 // logs one warning. Valid only inside OnInit: ticks and subs are snapshotted
 // there, so a later call registers nothing and logs loudly.
 func (c *Ctx) Tick(d time.Duration, fn func(*Ctx)) {
-	if c.inReload {
-		// Liveness is the GET/connect verdict, so a reload may not raise it.
-		c.logger().Warn("via: Tick called from OnReload — ignored; Tick is valid only inside OnInit")
-		return
-	}
-	if !c.inInit {
-		c.logger().Warn("via: Tick called after OnInit returned — ignored; Tick is valid only inside OnInit")
+	if !c.initOnly("Tick") {
 		return
 	}
 	if d <= 0 {
@@ -131,12 +125,7 @@ func (c *Ctx) warnTickClamp() {
 // after every Listen subscribes, so it's where to re-read a store a Listen
 // mirrors — a publish before the subscribe else reaches no handler.
 func (c *Ctx) OnConnect(fn func()) {
-	if c.inReload {
-		c.logger().Warn("via: OnConnect called from OnReload — ignored; OnConnect is valid only inside OnInit")
-		return
-	}
-	if !c.inInit {
-		c.logger().Warn("via: OnConnect called after OnInit returned — ignored; OnConnect is valid only inside OnInit")
+	if !c.initOnly("OnConnect") {
 		return
 	}
 	c.onConnect = append(c.onConnect, fn)
@@ -149,12 +138,7 @@ func (c *Ctx) OnConnect(fn func()) {
 // renders State opens no connection to tear down. Like Tick, a call from
 // OnReload or after OnInit returned registers nothing and logs.
 func (c *Ctx) OnDispose(fn func()) {
-	if c.inReload {
-		c.logger().Warn("via: OnDispose called from OnReload — ignored; OnDispose is valid only inside OnInit")
-		return
-	}
-	if !c.inInit {
-		c.logger().Warn("via: OnDispose called after OnInit returned — ignored; OnDispose is valid only inside OnInit")
+	if !c.initOnly("OnDispose") {
 		return
 	}
 	c.disposers = append(c.disposers, fn)
@@ -189,12 +173,7 @@ func (c *Ctx) OnDispose(fn func()) {
 // OnInit, and mint the session in OnInit if every tab must be addressable by
 // session from its first frame.
 func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
-	if c.inReload {
-		c.logger().Warn("via: Listen called from OnReload — ignored; Listen is valid only inside OnInit")
-		return
-	}
-	if !c.inInit {
-		c.logger().Warn("via: Listen called after OnInit returned — ignored; Listen is valid only inside OnInit")
+	if !c.initOnly("Listen") {
 		return
 	}
 	c.live = true
@@ -218,4 +197,19 @@ func runTicker(reqCtx context.Context, unit *Ctx, t tickReg, pushq chan<- pushIt
 			}
 		}
 	}
+}
+
+// initOnly reports whether a registration named name may run: only inside
+// OnInit, and never from OnReload, since liveness is the GET/connect verdict
+// and a reload may not raise it. A refused call is logged.
+func (c *Ctx) initOnly(name string) bool {
+	switch {
+	case c.inReload:
+		c.logger().Warn("via: " + name + " called from OnReload — ignored; " + name + " is valid only inside OnInit")
+		return false
+	case !c.inInit:
+		c.logger().Warn("via: " + name + " called after OnInit returned — ignored; " + name + " is valid only inside OnInit")
+		return false
+	}
+	return true
 }
