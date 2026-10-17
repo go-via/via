@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"runtime/debug"
 	"sort"
@@ -344,8 +345,7 @@ func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMod
 	max := m.cfg.maxBody
 	if mode == modeNative {
 		// A native submit is multipart, so the cap rises to the upload cap;
-		// only maxBody of it stays in RAM, the rest spills to a temp file the
-		// caller removes.
+		// file parts past maxBody spill to a temp file the caller removes.
 		max = m.cfg.maxUpload
 	}
 	req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, max)
@@ -356,7 +356,9 @@ func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMod
 func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
 		if err := req.ParseMultipartForm(m.cfg.maxBody); err != nil {
-			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			// multipart's own limits (text fields past maxBody+10 MiB, too
+			// many parts) are a size verdict too, not a malformed form.
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok || errors.Is(err, multipart.ErrMessageTooLarge) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return nil, false
 			}

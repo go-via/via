@@ -389,7 +389,8 @@ func (o pinnedDeadlineOption) apply(c *config) {
 }
 
 // WithMaxBody caps an action POST body in bytes, and how much of a native form
-// submit stays in RAM before the rest spills to a temp file (default 1 MiB).
+// submit's file parts stays in RAM before the rest spills to a temp file
+// (default 1 MiB). A submit's text fields stay in RAM, up to this plus 10 MiB.
 // Over the cap the request answers 413. It panics on a value of 0 or less.
 func WithMaxBody(bytes int64) Option {
 	return maxBodyOption{bytes}

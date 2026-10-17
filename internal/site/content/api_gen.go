@@ -92,7 +92,7 @@ var apiSymbols = []apiSymbol{
 	{"via", "WithErrorPage", "func", "func WithErrorPage(fn func(*Ctx, PageError) h.H) Option", "WithErrorPage renders via's failures as HTML documents instead of plain text.", ""},
 	{"via", "WithHead", "func", "func WithHead(head Head) Option", "WithHead sets the router-wide document shell: lang, raw head markup, the <html> and <body> attributes, and the assets every page carries.", ""},
 	{"via", "WithLogger", "func", "func WithLogger(l *slog.Logger) Option", "WithLogger routes via's own diagnostics to l.", ""},
-	{"via", "WithMaxBody", "func", "func WithMaxBody(bytes int64) Option", "WithMaxBody caps an action POST body in bytes, and how much of a native form submit stays in RAM before the rest spills to a temp file (default 1 MiB).", ""},
+	{"via", "WithMaxBody", "func", "func WithMaxBody(bytes int64) Option", "WithMaxBody caps an action POST body in bytes, and how much of a native form submit's file parts stays in RAM before the rest spills to a temp file (default 1 MiB).", ""},
 	{"via", "WithMaxSSEConn", "func", "func WithMaxSSEConn(n int) Option", "WithMaxSSEConn caps how many live SSE streams this Router serves at once (default 10000); past the cap a connect is refused 503.", ""},
 	{"via", "WithMaxUpload", "func", "func WithMaxUpload(bytes int64) Option", "WithMaxUpload caps a native PostForm submit's whole multipart body in bytes (default 8 MiB).", ""},
 	{"via", "WithPageCompression", "func", "func WithPageCompression(encs ...Encoder) Option", "WithPageCompression compresses every response except the SSE stream — pages, action patches, error pages and the Datastar client — with the first of encs the request's Accept-Encoding allows, in the order given.", ""},

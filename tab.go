@@ -364,7 +364,8 @@ type tombstone struct {
 }
 
 // parkedCap bounds the router's parked actions whatever WithMaxSSEConn says:
-// each holds its decoded body, so the worst case is parkedCap × WithMaxBody.
+// each holds its decoded body, so the worst case is parkedCap × WithMaxBody,
+// or parkedCap × (WithMaxBody + 10 MiB) for native form submits.
 const parkedCap = 1024
 
 // maxTombstones bounds the ids remembered as server-ended. Past it the oldest

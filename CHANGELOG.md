@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A native form submit whose text fields or part count exceed multipart's limits answers 413, not 400 "malformed form".
 - A live child's warnings after its first push go to `WithLogger`. They went to `slog.Default`.
 - `List.Append` always builds a new array. A list `Set` from a slice with spare capacity, such as a shared store snapshot, appended into that slice's array, so tabs holding the same snapshot overwrote each other.
 - `vt`: an action whose `Body` is `null` and carries a `Tab` posts the body as given instead of panicking.

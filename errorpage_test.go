@@ -593,3 +593,21 @@ func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.ErrorIs(t, got.Err, via.ErrNotFound, "an action's Param miss must report what OnInit's does")
 }
+
+type errClick struct{}
+
+func (errClick) Go(*via.Ctx) {}
+func (p errClick) View() h.H { return h.Div(h.Button(on.Click(p.Go))) }
+
+func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithMaxUpload(20<<20), via.WithMaxBody(1<<20))
+	via.Mount(r, "/", errClick{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	page := jarGet(t, srv.Client(), srv.URL+"/")
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), map[string]string{"f": strings.Repeat("x", 12<<20)})
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
