@@ -120,10 +120,10 @@ type actionResult struct {
 	panicked  bool
 	badArg    error       // ?a= failed to decode (badActionArg) — 400, not 500
 	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
-	gone      string      // live only: the unit/action lookup came up invalid; the reason is the response body
+	gone      string      // the unit/action lookup came up invalid; the reason is the response body
 	initErr   error       // live only: the post-action OnInit re-run failed (see reloadUnit)
 	forbidden string      // live only: the session-bound check rejected the request
-	paramMiss bool        // live only: a Param segment did not decode — 404, as on the plain path
+	paramMiss bool        // a Param segment did not decode — 404
 	// unavailable is a 503: the request was well-formed and the tab is live,
 	// but a dependency (the session store) could not answer. Distinct from
 	// forbidden so a store blip stops being reported as a security rejection.

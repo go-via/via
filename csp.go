@@ -87,7 +87,7 @@ func buildCSP(global, page Assets, unsafeEval bool) cspPolicy {
 	font, img := &srcSet{}, &srcSet{}
 	font.add("'self'")
 	img.add("'self'")
-	base := [4]int{len(script.src), len(style.src), len(font.src), len(img.src)}
+	fontBase, imgBase := len(font.src), len(img.src)
 
 	for _, a := range [2]Assets{global, page} {
 		for _, s := range a.Scripts {
@@ -120,10 +120,10 @@ func buildCSP(global, page Assets, unsafeEval bool) cspPolicy {
 	}
 
 	tail := " " + script.join() + "; style-src " + style.join() + "; "
-	if len(font.src) > base[2] {
+	if len(font.src) > fontBase {
 		tail += "font-src " + font.join() + "; "
 	}
-	if len(img.src) > base[3] {
+	if len(img.src) > imgBase {
 		tail += "img-src " + img.join() + "; "
 	}
 	tail += "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"

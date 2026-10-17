@@ -528,7 +528,7 @@ type Ctx struct {
 	req         *http.Request
 	sessions    *sessionManager
 	policy      *routerPolicy
-	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I2)
+	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
 	session     *Session
 	isChild     bool
 	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")

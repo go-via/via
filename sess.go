@@ -475,9 +475,6 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error
 // rather than at each m.store call, so a save's CAS retry loop is bounded as a
 // whole instead of restarting its clock on every attempt.
 func (m *sessionManager) bounded(ctx context.Context) (context.Context, context.CancelFunc) {
-	if m.storeTimeout <= 0 {
-		return context.WithCancel(ctx)
-	}
 	return context.WithTimeout(ctx, m.storeTimeout)
 }
 
@@ -522,7 +519,7 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 		b.Vals = map[string]json.RawMessage{}
 	}
 	d := &sessionData{sid: b.SID, vals: b.Vals, exp: exp, dirty: map[string]json.RawMessage{}}
-	if m.ttl > 0 && time.Until(exp) < m.ttl/2 {
+	if time.Until(exp) < m.ttl/2 {
 		// sliding idle window, at one write per half-TTL rather than per request
 		d.slid = m.save(ctx, id, d, false)
 	}

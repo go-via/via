@@ -258,9 +258,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		timeout: sseWriteTimeout,
 		cancel:  cancel,
 	}
-	if m.routerCtx != nil {
-		defer context.AfterFunc(m.routerCtx, stream.end)()
-	}
+	defer context.AfterFunc(m.routerCtx, stream.end)()
 
 	// The credential dispatch requires a match against, so that a leaked tab id
 	// is not on its own a bearer token good from any origin with no session at
@@ -366,7 +364,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// The connect response is flushed now. A Tick/Listen handler runs against
 	// this same unit Ctx for the life of the connection, so leaving sessW set
 	// would let its Session().Put SetCookie on a dead response: no error, no
-	// cookie, a session minted and orphaned until TTL (I2). Clearing it makes
+	// cookie, a session minted and orphaned until TTL (I4). Clearing it makes
 	// Session.ensure's "no cookie can be set" warning fire, as documented.
 	detachResponse(units)
 
@@ -465,10 +463,7 @@ func (m *mount) discover(w http.ResponseWriter, req *http.Request, pv instance, 
 
 // admission is one stream counted against the mount's capacity and, under a
 // Router, against the drain Close waits for.
-type admission struct {
-	m       *mount
-	drained bool
-}
+type admission struct{ m *mount }
 
 // admit counts a stream in, or answers 503 when the mount is at capacity or
 // the router is shutting down.
@@ -485,9 +480,6 @@ func (m *mount) admit(w http.ResponseWriter) (admission, bool) {
 	// gets one deterministic answer. connect's AfterFunc is what makes the race
 	// with a Close landing just after this check harmless: it fires immediately
 	// on an already-cancelled router context.
-	if m.routerCtx == nil {
-		return admission{m: m}, true
-	}
 	// Under liveMu so the check and the Add are one step against Close: an
 	// Add landing while Close is already parked in Wait is a WaitGroup
 	// misuse throw, not a recoverable panic.
@@ -502,13 +494,11 @@ func (m *mount) admit(w http.ResponseWriter) (admission, bool) {
 	}
 	m.live.Add(1)
 	m.liveMu.RUnlock()
-	return admission{m: m, drained: true}, true
+	return admission{m: m}, true
 }
 
 func (a admission) release() {
-	if a.drained {
-		a.m.live.Done()
-	}
+	a.m.live.Done()
 	a.m.liveCount.Add(-1)
 }
 
