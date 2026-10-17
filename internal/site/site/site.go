@@ -4,7 +4,6 @@
 package site
 
 import (
-	"crypto/rand"
 	"html"
 	"log"
 	"log/slog"
@@ -122,11 +121,7 @@ func notFound(s *shell.Site, idx *search.Index, r *http.Request) h.H {
 		} else {
 			items := []h.H{h.Class("search-hits")}
 			for _, hit := range hits {
-				label := hit.Title
-				if hit.Heading != "" {
-					label += " › " + hit.Heading
-				}
-				items = append(items, h.Li(h.A(h.Href(hit.Href), h.Str(label)), h.Small(h.Str(hit.Snippet))))
+				items = append(items, h.Li(h.A(h.Href(hit.Href), h.Str(hit.Label())), h.Small(h.Str(hit.Snippet))))
 			}
 			body = append(body, h.Ul(items...))
 		}
@@ -318,11 +313,9 @@ var counterAct = regexp.MustCompile(`@post\('[^']*/_via/a/[^/']+/([^/']+)'\)`)
 
 // An action id hashes the handler and its receiver's path within its own unit,
 // so a mount of the counter alone yields the ids it has as the front page's
-// child. The session key is throwaway: NewRouter requires one.
+// child.
 func counterActs() map[string]bool {
-	key := make([]byte, 32)
-	rand.Read(key)
-	r := via.NewRouter(via.WithSessionKey(key), via.WithLogger(slog.New(slog.DiscardHandler)))
+	r := via.NewRouter(via.WithLogger(slog.New(slog.DiscardHandler)))
 	defer r.Close()
 	via.Mount(r, "/", demos.NewLandingCounter())
 	rec := httptest.NewRecorder()

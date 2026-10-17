@@ -7,6 +7,7 @@ import (
 	"github.com/go-via/via/h"
 	"go-via.dev/site/demo"
 	"go-via.dev/site/shell"
+	"go-via.dev/site/snippet"
 )
 
 // counterV07 is exact v0.7.0 API, the v0.7 twin of demos/counter.go. It is
@@ -156,7 +157,7 @@ func (p *Migrate) View() h.H {
 
 		d.H3("The counter, both ways"),
 		h.P(h.Str("v0.7, with per-tab state and the numeric shape:")),
-		demo.Code(counterV07),
+		snippet.Highlight(counterV07),
 		h.P(inline("v0.8, the same counter as a `State[int]`, the source of the Counter card on Actions:")...),
 		demo.Source("counter.go"),
 		h.P(inline("Serve it with `http.ListenAndServe(\":3000\", via.Handler(Counter{}))`.")...),

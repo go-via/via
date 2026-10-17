@@ -22,7 +22,8 @@ const (
 )
 
 // Highlight is an unlabelled Go block of src. Hand-typed Go is not
-// compile-checked: it exists for callers not yet moved to Show and Region.
+// compile-checked: it is for Go this module cannot compile, such as the v0.7
+// API /migrate shows.
 func Highlight(src string) h.H { return frame("", goPre(src, nil, false)) }
 
 // Text is a plain block for shell commands and config files, labelled like a

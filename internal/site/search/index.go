@@ -33,6 +33,14 @@ type Hit struct {
 	Snippet string
 }
 
+// Label is the page title, then the section heading when there is one.
+func (x Hit) Label() string {
+	if x.Heading == "" {
+		return x.Title
+	}
+	return x.Title + " › " + x.Heading
+}
+
 // Index is filled before the site serves and only read after, so it takes no
 // lock.
 type Index struct {

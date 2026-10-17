@@ -1,7 +1,6 @@
 package content
 
 import (
-	"crypto/rand"
 	"io/fs"
 	"log/slog"
 	"net/http/httptest"
@@ -72,11 +71,9 @@ func islandsJS(open, end string) string {
 
 // gaugeCSP is the header via serves for islands.Gauge on a router with no
 // WithHead assets. buildCSP is unexported, so it is read off a real mount
-// instead of retyped. The key only exists because a router needs one.
+// instead of retyped.
 func gaugeCSP() string {
-	key := make([]byte, 32)
-	rand.Read(key)
-	r := via.NewRouter(via.WithSessionKey(key), via.WithLogger(slog.New(slog.DiscardHandler)))
+	r := via.NewRouter(via.WithLogger(slog.New(slog.DiscardHandler)))
 	defer r.Close()
 	via.Mount(r, "/", islands.Gauge{})
 	rec := httptest.NewRecorder()

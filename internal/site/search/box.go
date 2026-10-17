@@ -119,17 +119,13 @@ func (b *Box) results() h.H {
 	items = append(items, h.ID(listID), h.Class("search-hits"), h.Role("listbox"),
 		h.Aria("label", "Results"), h.DataShow(expr.All(b.shown(), b.Count.Ref().Gt(0))))
 	for i, hit := range b.hits {
-		label := hit.Title
-		if hit.Heading != "" {
-			label += " › " + hit.Heading
-		}
 		is := b.Active.Ref().Eq(i)
 		items = append(items, h.Li(h.ID(optionID+strconv.Itoa(i)), h.Role("option"),
 			h.Aria("selected", "false"), h.DataAttr("aria-selected", expr.Rawf("String(%s)", is)),
 			h.DataClass("active", is),
 			// The option, not the link, is what the arrows move to; a tab
 			// stop per hit would put eight between the input and the page.
-			h.A(h.Href(hit.Href), h.TabIndex(-1), h.Str(label)), h.Small(h.Str(hit.Snippet))))
+			h.A(h.Href(hit.Href), h.TabIndex(-1), h.Str(hit.Label())), h.Small(h.Str(hit.Snippet))))
 	}
 	return h.Ul(items...)
 }
