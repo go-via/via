@@ -961,9 +961,11 @@ func (s *Session) Ensure() string {
 
 // Rotate issues a fresh session id, carries the existing data to it, and
 // re-sets the cookie — call it after every auth-state change (login, privilege
-// elevation) so a fixed pre-auth id is invalidated. Returns the new id, or ""
-// when no response is open to carry the cookie; rotate from a plain action or
-// OnInit.
+// elevation) so a fixed pre-auth id is invalidated. Returns the new cookie id,
+// which the signed cookie carries and which is not [Session.ID]. Returns ""
+// when no response is open to carry the cookie (rotate from a plain action or
+// OnInit), and, with a warning, when the store could not be read or another
+// request already rotated this id away.
 //
 // Every other open tab on the session reloads: its stream ends, since what it
 // rendered was decided under the old auth state. The tab a live action

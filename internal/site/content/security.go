@@ -139,7 +139,7 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.Session.Put"), h.Str("Stores the value, replacing the last one. Does not rotate.")},
 			[]h.H{API("via.Session.Get"), h.Str("Reads the value as T; false if none or if it no longer decodes.")},
 			[]h.H{API("via.Session.Delete"), h.Str("Clears the value. The id and the cookie stay.")},
-			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new id. Every other open tab on the session reloads under the new cookie.")},
+			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new cookie id, not Session.ID. Every other open tab on the session reloads under the new cookie.")},
 			[]h.H{API("via.Session.Ensure"), h.Str("Issues the cookie with no value, to key per-user state before there is any.")},
 			[]h.H{API("via.Session.ID"), h.Str("A stable id that survives Rotate. Key your own data by it; it grants nothing.")},
 		),

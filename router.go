@@ -390,7 +390,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // normally, so the response terminates cleanly rather than truncating, and
 // each unit's OnDispose runs. An action POST in flight against a closing tab
 // resolves either as its normal response or as 410 Gone, the same answer it
-// gets against a tab that has just disconnected — never silently dropped.
+// gets against a tab that has just disconnected — never silently dropped. One
+// still waiting for its tab's stream to connect answers 503.
 //
 // A goroutine cannot be stopped from outside, so a stream whose Tick, Listen
 // or action handler is blocked ends only when that handler returns. If ctx
@@ -471,7 +472,8 @@ func (r *Router) Close() {
 // A page serves its own path only, never a subtree: "/" serves "/", and
 // "/docs/" serves "/docs/" but not "/docs/intro", and ServeMux redirects a GET
 // of "/docs" to it. "/docs" and "/docs/" share one action route, so only one
-// of the two can be mounted. {name} wildcards are allowed; {name...} and {$}
+// of the two can be mounted; mounting both panics with ServeMux's route
+// conflict. {name} wildcards are allowed; {name...} and {$}
 // are not, since the page's action and stream routes live under its path, and
 // {child} and {act} are reserved for the action route. Mount panics on either.
 //
