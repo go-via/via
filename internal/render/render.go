@@ -127,8 +127,8 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 			// datastar-patch-elements frame mid-payload. Neutralise it.
 			buf.WriteString("&#13;")
 		case '\x00':
-			// HTML5 parsing replaces a literal NUL with U+FFFD; doing it
-			// here keeps the escaped bytes and the parsed DOM identical.
+			// A raw NUL never reaches the wire: body text would drop it
+			// silently, so it renders as a visible U+FFFD instead.
 			buf.WriteString("&#65533;")
 		default:
 			buf.WriteByte(s[i])

@@ -494,7 +494,7 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	}))
 	s := vtbrowser.Open(t, app)
 	s.WaitEvalTrue(styledIsRed, "the declared off-origin stylesheet loaded and applied under the derived CSP")
-	s.RequireCleanConsole() // a CSP-blocked sheet surfaces as a console error
+	s.RequireCleanConsole()
 }
 
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
@@ -924,7 +924,7 @@ func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
 	s.WaitEvalTrue(`window.__external === true`, "the declared off-origin script executed")
 	s.WaitEvalTrue(`window.__inline === true`, "the declared inline script was admitted by its hash")
 	s.WaitEvalTrue(styledIsRed, "the declared inline style was admitted by its hash")
-	s.RequireCleanConsole() // a CSP-blocked script surfaces as a console error
+	s.RequireCleanConsole()
 }
 
 // bSeedChild's Signal is never Bind()ed or Display()ed: the seed declaration
