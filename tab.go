@@ -310,7 +310,7 @@ func (c *tabStream) warnPinned(once *atomic.Bool) {
 			"session check, so every action on this tab answers 503 until it answers (see "+
 			"WithSessionStoreTimeout).", attrs...)
 	default:
-		log.Warn("via: tab pinned — its stream goroutine is inside a Tick, Listen, OnConnect or action "+
+		log.Warn("via: tab pinned — its stream goroutine is inside a Tick, Listen or action "+
 			"handler, so its keepalives have stopped too and every action on this tab answers 503 until it "+
 			"returns. Move blocking work off the handler.", attrs...)
 	}

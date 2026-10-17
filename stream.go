@@ -113,7 +113,7 @@ func (s *stream) blockedOn() string {
 	case busyStore:
 		return "waiting on the session store"
 	}
-	return "inside a Tick, Listen, OnConnect, OnDispose or action handler"
+	return "inside a Tick, Listen, OnDispose or action handler"
 }
 
 // patch frames an element-patch: the whole page when id is empty, else the

@@ -53,7 +53,7 @@ const tsUnavailable = `503 stream capacity reached
 level=WARN msg="via: refusing an SSE connect with 503: the router is at its live-stream cap. There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it." open=10000 cap=10000
 
 503 stream busy
-level=WARN msg="via: tab pinned — its stream goroutine is inside a Tick, Listen, OnConnect or action handler, so its keepalives have stopped too and every action on this tab answers 503 until it returns. Move blocking work off the handler."
+level=WARN msg="via: tab pinned — its stream goroutine is inside a Tick, Listen or action handler, so its keepalives have stopped too and every action on this tab answers 503 until it returns. Move blocking work off the handler."
 
 503 server shutting down
 
