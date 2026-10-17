@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -50,6 +51,30 @@ func TestChild_eachLiveChildPushesItsOwnContainer(t *testing.T) {
 		conn.Await(`selector #via-i0`) // child 0 pushed its container
 		conn.Await(`selector #via-i1`) // child 1 pushed its container, independently
 	})
+}
+
+func TestChild_aPushIsAnInnerPatchOfItsContainerInOneSSEEvent(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(duo{}))
+	t.Cleanup(srv.Close)
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+
+	prev, pushed := "", false
+	for line := range lines {
+		if strings.HasPrefix(line, "event:") {
+			require.Empty(t, prev, "an event must open after a blank line")
+			if pushed {
+				return
+			}
+		}
+		if prev == "data: selector #via-i0" {
+			require.Equal(t, "data: mode inner", line, "a child's push must patch inside its container")
+			pushed = true
+		}
+		prev = line
+	}
+	require.Fail(t, "no event followed child 0's push")
 }
 
 // liveProbe is an embedded live child (State alone makes it live) that
