@@ -240,11 +240,22 @@ func isAttrName(s string) bool {
 	return true
 }
 
+// attrIndex is the index of the attribute named name, compared as HTML does,
+// or -1.
+func attrIndex(attrs []Attr, name string) int {
+	for i, a := range attrs {
+		if strings.EqualFold(a.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
 // mergeAttrs lays a page's attributes over the router's: see [Meta].
 func mergeAttrs(router, page []Attr) []Attr {
 	out := slices.Clone(router)
 	for _, p := range page {
-		i := slices.IndexFunc(out, func(a Attr) bool { return strings.EqualFold(a.Name, p.Name) })
+		i := attrIndex(out, p.Name)
 		switch {
 		case i < 0:
 			out = append(out, p)

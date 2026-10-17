@@ -171,31 +171,31 @@ var trampolineVerified sync.Once
 // change turns every pointer-receiver handler into a "no receiver address"
 // panic, so both are proved once per process before any action id is minted.
 // Every Mount in the test suite calls this, so no dedicated test is needed.
-func verifyMethodTrampoline() {
-	trampolineVerified.Do(func() {
-		c := &trampolineCanary{}
-		fn := c.probe
-		meta := funcName(reflect.ValueOf(fn).Pointer())
-		self := funcSelf(fn)
-		recv := methodRecv(self)
-		if !meta.ptr || meta.recvType != "trampolineCanary" || recv != unsafe.Pointer(c) {
-			panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
-				"receiver %p, want a \"pkg.(*trampolineCanary).probe-fm\" name and receiver %p. via's "+
-				"action identity depends on a method value's name and runtime layout; a Go toolchain "+
-				"change broke that assumption. File a bug.",
-				runtime.Version(), meta.name, recv, c))
-		}
-		v := valueCanary{a: 0x5a5a, b: 0xa5a5}
-		vfn := v.probe
-		vmeta := funcName(reflect.ValueOf(vfn).Pointer())
-		held := (*valueCanary)(unsafe.Add(funcSelf(vfn), unsafe.Sizeof(uintptr(0))))
-		if !vmeta.method || vmeta.ptr || vmeta.recvType != "valueCanary" || *held != v {
-			panic(fmt.Sprintf("via: value-receiver method-value canary failed on %s — got name %q; "+
-				"via's action identity depends on a value receiver's copy sitting right after the "+
-				"code pointer. A Go toolchain change broke that assumption. File a bug.",
-				runtime.Version(), vmeta.name))
-		}
-	})
+func verifyMethodTrampoline() { trampolineVerified.Do(checkMethodTrampoline) }
+
+func checkMethodTrampoline() {
+	c := &trampolineCanary{}
+	fn := c.probe
+	meta := funcName(reflect.ValueOf(fn).Pointer())
+	self := funcSelf(fn)
+	recv := methodRecv(self)
+	if !meta.ptr || meta.recvType != "trampolineCanary" || recv != unsafe.Pointer(c) {
+		panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
+			"receiver %p, want a \"pkg.(*trampolineCanary).probe-fm\" name and receiver %p. via's "+
+			"action identity depends on a method value's name and runtime layout; a Go toolchain "+
+			"change broke that assumption. File a bug.",
+			runtime.Version(), meta.name, recv, c))
+	}
+	v := valueCanary{a: 0x5a5a, b: 0xa5a5}
+	vfn := v.probe
+	vmeta := funcName(reflect.ValueOf(vfn).Pointer())
+	held := (*valueCanary)(unsafe.Add(funcSelf(vfn), unsafe.Sizeof(uintptr(0))))
+	if !vmeta.method || vmeta.ptr || vmeta.recvType != "valueCanary" || *held != v {
+		panic(fmt.Sprintf("via: value-receiver method-value canary failed on %s — got name %q; "+
+			"via's action identity depends on a value receiver's copy sitting right after the "+
+			"code pointer. A Go toolchain change broke that assumption. File a bug.",
+			runtime.Version(), vmeta.name))
+	}
 }
 
 // actionID content-addresses a handler by its Go name ("main.(*Poll).Vote-fm")

@@ -39,16 +39,23 @@ func Gzip(level int) Encoder {
 	}
 	// A gzip writer allocates its window up front, so a page response would
 	// otherwise pay for one per request.
-	pool := &sync.Pool{}
-	return Encoder{Token: "gzip", NewWriter: func(w io.Writer) Compressor {
-		zw, _ := pool.Get().(*gzip.Writer)
-		if zw == nil {
-			zw, _ = gzip.NewWriterLevel(w, level)
-		} else {
-			zw.Reset(w)
-		}
-		return pooledGzip{zw, pool}
-	}}
+	g := gzipPool{level: level, pool: &sync.Pool{}}
+	return Encoder{Token: "gzip", NewWriter: g.newWriter}
+}
+
+type gzipPool struct {
+	level int
+	pool  *sync.Pool
+}
+
+func (g gzipPool) newWriter(w io.Writer) Compressor {
+	zw, _ := g.pool.Get().(*gzip.Writer)
+	if zw == nil {
+		zw, _ = gzip.NewWriterLevel(w, g.level)
+	} else {
+		zw.Reset(w)
+	}
+	return pooledGzip{zw, g.pool}
 }
 
 type pooledGzip struct {
