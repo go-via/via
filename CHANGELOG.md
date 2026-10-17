@@ -13,6 +13,9 @@
   — ignored", as Tick, Listen and OnConnect already did. It used to be ignored
   without a word. `State.Track` from `OnReload` now names OnReload in its
   warning instead of "after OnInit returned".
+- Log wording: the "live push aborted" errors say the client reloads, not
+  reconnects, and the ignored-PageMeta warning on a child names the mounted
+  root.
 
 ### Documented (behaviour unchanged)
 
