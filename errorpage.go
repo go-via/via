@@ -299,14 +299,7 @@ func (r *Router) writeErrorPage(w http.ResponseWriter, req *http.Request, pe Pag
 // panics while answering a 500 is the worst outcome this feature could have, so
 // it degrades to the plain text via would have sent and says so once.
 func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, ok bool) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			r.errPageWarn.Do(func() {
-				r.cfg.log.Error("via: the WithErrorPage handler panicked — falling back to via's plain-text errors", "err", rec)
-			})
-			body, ok = nil, false
-		}
-	}()
+	defer r.recoverErrorPage(&body, &ok)
 	ctx := newRootCtx(false, "", nil)
 	ctx.errPage = true
 	ctx.req = req
@@ -314,13 +307,22 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 	ctx.policy = r.policy
 	node := r.cfg.errorPage(ctx, pe)
 	if node == nil {
-		r.errPageWarn.Do(func() {
+		if r.errPageWarned.CompareAndSwap(false, true) {
 			r.cfg.log.Warn("via: the WithErrorPage handler returned nil — falling back to via's plain-text errors",
 				"status", pe.Status, "reason", pe.Reason)
-		})
+		}
 		return nil, false
 	}
 	rr := render.NewRenderer(binderCtx{ctx})
 	rr.Render(node)
 	return rr.Bytes(), true
+}
+
+func (r *Router) recoverErrorPage(body *[]byte, ok *bool) {
+	if rec := recover(); rec != nil {
+		if r.errPageWarned.CompareAndSwap(false, true) {
+			r.cfg.log.Error("via: the WithErrorPage handler panicked — falling back to via's plain-text errors", "err", rec)
+		}
+		*body, *ok = nil, false
+	}
 }

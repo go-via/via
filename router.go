@@ -85,31 +85,10 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	// page that doesn't exist. Any other panic keeps propagating. One defer with
 	// the redirect below, so a Redirect queued before the miss is never written
 	// ahead of the 404.
-	defer func() {
-		if rec := recover(); rec != nil {
-			if _, isMiss := rec.(paramMiss); !isMiss {
-				panic(rec)
-			}
-			http.Error(w, "not found", http.StatusNotFound)
-			err = ErrNotFound
-			return
-		}
-		if err == nil && ctx.redirect.url != "" {
-			switch refused := ctx.redirect.refusal(); {
-			case sse:
-				http.Error(w, "forbidden", http.StatusForbidden)
-			case refused != "":
-				ctx.logger().Warn("via: OnInit redirect dropped", "redirect", ctx.redirect, "reason", refused)
-				http.Error(w, "init failed", http.StatusInternalServerError)
-			default:
-				http.Redirect(w, req, ctx.redirect.url, http.StatusSeeOther)
-			}
-			err = errRedirected
-		}
-	}()
+	defer answerInit(w, req, ctx, sse, &err)
 	// Deferred rather than cleared after the call so a paramMiss panic unwinds
 	// it too: ticks/subs are snapshotted when OnInit returns — see Tick/Listen.
-	defer func() { ctx.inInit = false }()
+	defer ctx.endInit()
 	ctx.inInit = true
 	oerr := ic.OnInit(ctx)
 	if oerr != nil {
@@ -128,6 +107,32 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	return nil
 }
 
+// answerInit is runOnInit's deferred answer: a recovered paramMiss becomes a
+// 404, and a Redirect queued by a successful OnInit is written for the
+// transport.
+func answerInit(w http.ResponseWriter, req *http.Request, ctx *Ctx, sse bool, err *error) {
+	if rec := recover(); rec != nil {
+		if _, isMiss := rec.(paramMiss); !isMiss {
+			panic(rec)
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+		*err = ErrNotFound
+		return
+	}
+	if *err == nil && ctx.redirect.url != "" {
+		switch refused := ctx.redirect.refusal(); {
+		case sse:
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case refused != "":
+			ctx.logger().Warn("via: OnInit redirect dropped", "redirect", ctx.redirect, "reason", refused)
+			http.Error(w, "init failed", http.StatusInternalServerError)
+		default:
+			http.Redirect(w, req, ctx.redirect.url, http.StatusSeeOther)
+		}
+		*err = errRedirected
+	}
+}
+
 // reloadUnit runs v's OnReload after an action, on a Ctx that registers nothing
 // (I5 — liveness is the GET/connect verdict and a reload may not raise it).
 //
@@ -142,15 +147,19 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 	ctx.reinit = true
 	// A paramMiss means the URL segment no longer decodes — the same 404 the
 	// first OnInit would have answered.
-	defer func() {
-		if rec := recover(); rec != nil {
-			if _, isMiss := rec.(paramMiss); !isMiss {
-				panic(rec)
-			}
-			err = ErrNotFound
-		}
-	}()
+	defer recoverParamMiss(&err)
 	return ic.OnReload(ctx)
+}
+
+// recoverParamMiss turns a recovered paramMiss into ErrNotFound and lets any
+// other panic keep propagating.
+func recoverParamMiss(err *error) {
+	if rec := recover(); rec != nil {
+		if _, isMiss := rec.(paramMiss); !isMiss {
+			panic(rec)
+		}
+		*err = ErrNotFound
+	}
 }
 
 // answerReloadFailure answers a failed OnReload the way runOnInit answers a
@@ -260,6 +269,7 @@ func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Reques
 // http.ServeMux; reach for [NewRouter] whenever you have options to pass.
 type Router struct {
 	once      sync.Once
+	opts      []Option // NewRouter's, held until build reads them
 	mux       *http.ServeMux
 	cfg       *config
 	sessions  *sessionManager
@@ -293,8 +303,8 @@ type Router struct {
 	hookWarned sync.Map
 	// errCSP is the router-wide floor an error page renders under; see
 	// WithErrorPage for why it is never a mount's own, wider policy.
-	errCSP      string
-	errPageWarn sync.Once
+	errCSP        string
+	errPageWarned atomic.Bool
 	// datastarEnc caches the Datastar client per Content-Encoding token.
 	datastarEnc sync.Map
 }
@@ -311,18 +321,24 @@ func NewRouter(opts ...Option) *Router {
 // init builds the router's state exactly once, so `new(Router)` works like the
 // zero http.ServeMux instead of nil-dereferencing at the first Mount.
 func (r *Router) init(opts []Option) {
-	r.once.Do(func() {
-		r.cfg = newConfig(opts)
-		r.sessions = newSessionManager(r.cfg)
-		r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
-		r.mux = http.NewServeMux()
-		r.reg = newRegistry(r.cfg.maxSSEConn)
-		r.liveCount = &atomic.Int64{}
-		r.maxLive = r.cfg.maxSSEConn
-		r.ctx, r.cancel = context.WithCancel(context.Background())
-		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
-		r.mux.HandleFunc("GET /_via/datastar.js", r.serveDatastar)
-	})
+	if opts != nil {
+		r.opts = opts // NewRouter only, before the Router is shared
+	}
+	r.once.Do(r.build)
+}
+
+func (r *Router) build() {
+	r.cfg = newConfig(r.opts)
+	r.opts = nil
+	r.sessions = newSessionManager(r.cfg)
+	r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
+	r.mux = http.NewServeMux()
+	r.reg = newRegistry(r.cfg.maxSSEConn)
+	r.liveCount = &atomic.Int64{}
+	r.maxLive = r.cfg.maxSSEConn
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+	r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
+	r.mux.HandleFunc("GET /_via/datastar.js", r.serveDatastar)
 }
 
 func (r *Router) serveDatastar(w http.ResponseWriter, req *http.Request) {
@@ -424,13 +440,7 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	r.liveMu.Lock()
 	//lint:ignore SA2001 see above
 	r.liveMu.Unlock()
-	r.drainOnce.Do(func() {
-		r.drained = make(chan struct{})
-		go func() {
-			r.live.Wait()
-			close(r.drained)
-		}()
-	})
+	r.drainOnce.Do(r.startDrain)
 	// select picks at random when both are ready; a drained router with a
 	// done ctx must still answer nil.
 	select {
@@ -447,19 +457,30 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	}
 }
 
+// startDrain closes r.drained once every stream has ended.
+func (r *Router) startDrain() {
+	r.drained = make(chan struct{})
+	go r.awaitDrain()
+}
+
+func (r *Router) awaitDrain() {
+	r.live.Wait()
+	close(r.drained)
+}
+
 // maxUndrainedNamed caps the per-tab lines a Shutdown that timed out writes;
 // ten thousand stuck tabs are one bug, not ten thousand.
 const maxUndrainedNamed = 20
 
 func (r *Router) logUndrained() {
 	named := 0
-	r.reg.each(func(c *tabStream) {
+	for _, c := range r.reg.streams() {
 		named++
 		if named <= maxUndrainedNamed {
 			r.cfg.log.Error("via: Router.Shutdown deadline passed with this tab's stream still running",
 				"tab", c.id, "unit", c.unitType(), "blocked", c.wire.blockedOn())
 		}
-	})
+	}
 	r.cfg.log.Error("via: Router.Shutdown returned before every stream ended; each ends when its handler returns",
 		"open", r.liveCount.Load(), "named", min(named, maxUndrainedNamed))
 }
@@ -506,15 +527,8 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	checkViewReceiver(rootType)
 	checkHooks(r.cfg.log, rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
-	// newInst gives every non-generic internal a fresh, correctly-typed root
-	// without carrying T/PT past this function.
-	newInst := func() instance {
-		inst := root
-		return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst),
-			typ: rootType, sig: signalsOf(rootType)}
-	}
 	m := &mount{
-		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, newInst: newInst,
+		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, root: rootOf[T, PT]{root: root, typ: rootType},
 		patternBase: patternBase, names: names,
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, unknownActs: &r.unknownActs, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
@@ -535,7 +549,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	// would otherwise boot fine and 500 every request.
 	probe := root
 	perturbZeroFields(reflect.ValueOf(&probe).Elem(), rootType.PkgPath(), 0)
-	fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets })
+	fp, read := probeAssets(PT(&probe))
 	switch {
 	case !read:
 		r.cfg.log.Warn(fmt.Sprintf("via: %s.PageMeta() panicked on synthetic data, so the boot check that "+
@@ -552,22 +566,11 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 			"router-wide with WithHead, or hold it in a package-level var.")
 	}
 
-	if msg := bootRender(newInst()); msg != "" {
+	if msg := bootRender(m.newInst()); msg != "" {
 		panic("via: found at Mount, rendering " + reflect.PointerTo(rootType).String() + " as mounted: " + msg)
 	}
 
-	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				recoverToHTTP(r.cfg.log, w, req, rec, "render", false)
-			}
-		}()
-		// concreteBase, not patternBase: a page at /job/{id} must advertise
-		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
-		// leaving every live child under a parametrised mount dead.
-		base := concreteBase(patternBase, req, names)
-		m.writePage(w, req, newInst(), base, nil)
-	})
+	r.mux.HandleFunc("GET "+getPattern, m.serveGet)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
 	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
 }
@@ -908,13 +911,15 @@ func withoutReceiver(mt reflect.Type) string {
 // probeAssets reads the probe copy's assets, reporting read=false if PageMeta
 // refuses the synthetic data. The probe fills fields with values no author
 // promised to accept, so a panic there is the probe's fault, not the page's.
-func probeAssets(read func() Assets) (fp string, ok bool) {
-	defer func() {
-		if recover() != nil {
-			fp, ok = "", false
-		}
-	}()
-	return read().fingerprint(), true
+func probeAssets(probe any) (fp string, ok bool) {
+	defer recoverProbe(&fp, &ok)
+	return pageMetaOf(probe).Assets.fingerprint(), true
+}
+
+func recoverProbe(fp *string, ok *bool) {
+	if recover() != nil {
+		*fp, *ok = "", false
+	}
 }
 
 // perturbZeroFields fills v's zero scalar fields with non-zero values in place,
@@ -985,4 +990,17 @@ func foreignStruct(t reflect.Type, pkg string) bool {
 	// An anonymous struct (PkgPath "") is written in the page's own source, so
 	// it is the author's to perturb.
 	return t.PkgPath() != ""
+}
+
+// rootOf gives every non-generic internal a fresh, correctly-typed root
+// without carrying T/PT past Mount.
+type rootOf[T any, PT ptrViewer[T]] struct {
+	root T
+	typ  reflect.Type
+}
+
+func (f rootOf[T, PT]) newInst() instance {
+	inst := f.root
+	return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst),
+		typ: f.typ, sig: signalsOf(f.typ)}
 }

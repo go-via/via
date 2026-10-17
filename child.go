@@ -294,7 +294,7 @@ func initChild(child *Ctx, v any) {
 	if !ok {
 		return
 	}
-	defer func() { child.inInit = false }() // see runOnInit
+	defer child.endInit() // see runOnInit
 	child.inInit = true
 	err := ic.OnInit(child)
 	if err != nil {

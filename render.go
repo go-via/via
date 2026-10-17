@@ -170,18 +170,20 @@ var bootPolicy = &routerPolicy{log: slog.New(slog.DiscardHandler)}
 // side effects. It returns the message of a Miswired panic and swallows every
 // other: a View that dereferences data OnInit would have loaded is not a bug.
 func bootRender(inst instance) (miswired string) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			if m, ok := rec.(render.Miswired); ok {
-				miswired = string(m)
-			}
-		}
-	}()
+	defer recoverMiswired(&miswired)
 	ctx := newRootCtx(false, "", nil)
 	ctx.unitV = inst
 	ctx.policy = bootPolicy
 	renderRootWith(ctx, inst.v)
 	return ""
+}
+
+func recoverMiswired(msg *string) {
+	if rec := recover(); rec != nil {
+		if m, ok := rec.(render.Miswired); ok {
+			*msg = string(m)
+		}
+	}
 }
 
 // liveNestingViolation is checkLiveUnderLive's panic value. Unlike a render

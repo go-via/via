@@ -291,6 +291,10 @@ func (c *tabStream) unitType() string {
 // line is the only signal. It fires from an action that could not be picked
 // up, and from the stream when one item outlives the deadline, so a tab no one
 // clicks on is reported too.
+// warnPinTimer is the pin timer's report, deduped separately from an
+// action's.
+func (c *tabStream) warnPinTimer() { c.warnPinned(&c.pinTimerLogged) }
+
 func (c *tabStream) warnPinned(once *atomic.Bool) {
 	if once.Swap(true) {
 		return
@@ -434,18 +438,16 @@ func (r *registry) put(id string, c *tabStream) {
 	s.signalHead()
 }
 
-func (r *registry) each(fn func(*tabStream)) {
+func (r *registry) streams() []*tabStream {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	all := make([]*tabStream, 0, len(r.m))
 	for _, s := range r.m {
 		if s.lc != nil {
 			all = append(all, s.lc)
 		}
 	}
-	r.mu.Unlock()
-	for _, c := range all {
-		fn(c)
-	}
+	return all
 }
 
 // del releases id. After a client hang-up or a failed write (tomb 0) parked

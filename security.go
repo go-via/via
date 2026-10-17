@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-via/via/internal/render"
 )
@@ -66,7 +67,7 @@ type routerPolicy struct {
 	trustedOrigins map[string]bool
 	log            *slog.Logger
 	hookWarned     *sync.Map
-	tickWarn       sync.Once
+	tickWarned     atomic.Bool
 }
 
 // redirectTo is a queued Redirect. Its verdict is taken when it is queued,

@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -259,18 +260,18 @@ type sessionBlob struct {
 // sessionManager holds the per-Router session config and store. Sessions are
 // always available; the cookie is issued lazily on the first write.
 type sessionManager struct {
-	store        SessionStore
-	key          []byte
-	cookie       string
-	ttl          time.Duration
-	forceSecure  bool // WithSecureCookies: set Secure even when neither TLS nor a proxy header says https
-	randomKey    bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
-	memoryStore  bool // no WithSessionStore: sessions die with the process
-	storeTimeout time.Duration
-	log          *slog.Logger // the Router's logger
-	keyWarnOnce  sync.Once    // warn about the random key at the first session mint, not at boot
-	storeWarn    sync.Once    // warn about the process-local store at the first session mint
-	mismatchOnce sync.Once    // warn once about signature-mismatch cookies (the two-apps clobber)
+	store          SessionStore
+	key            []byte
+	cookie         string
+	ttl            time.Duration
+	forceSecure    bool // WithSecureCookies: set Secure even when neither TLS nor a proxy header says https
+	randomKey      bool // key was minted at boot (no WithSessionKey, no VIA_SESSION_KEY)
+	memoryStore    bool // no WithSessionStore: sessions die with the process
+	storeTimeout   time.Duration
+	log            *slog.Logger // the Router's logger
+	keyWarned      atomic.Bool  // warn about the random key at the first session mint, not at boot
+	storeWarned    atomic.Bool  // warn about the process-local store at the first session mint
+	mismatchWarned atomic.Bool  // warn once about signature-mismatch cookies (the two-apps clobber)
 
 	// streams indexes every open stream by the sid its handlers act as, so a
 	// write or a Rotate through one request reaches every other tab of that
@@ -456,11 +457,11 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error
 		// Almost always another app on the same host signing the same cookie
 		// name with a different key (two dev servers on localhost ports).
 		// Silence here reads as "my session randomly resets".
-		m.mismatchOnce.Do(func() {
+		if m.mismatchWarned.CompareAndSwap(false, true) {
 			m.logger().Warn("via: session cookie failed its signature check — likely another app on this host " +
 				"uses the same cookie name with a different key; issuing a fresh session " +
 				"(set WithSessionCookieName or share VIA_SESSION_KEY to stop the clobber)")
-		})
+		}
 		return "", nil, nil
 	}
 	d, err := m.get(sessionCtx(req), id)
@@ -892,17 +893,17 @@ func (s *Session) ensure() *sessionData {
 		return nil
 	}
 	if s.mgr.randomKey {
-		s.mgr.keyWarnOnce.Do(func() {
+		if s.mgr.keyWarned.CompareAndSwap(false, true) {
 			s.mgr.logger().Warn("via: session minted under a random per-process key — sessions will not survive a " +
 				"restart or span pods; set WithSessionKey or the VIA_SESSION_KEY env for a stable key")
-		})
+		}
 	}
 	if s.mgr.memoryStore {
-		s.mgr.storeWarn.Do(func() {
+		if s.mgr.storeWarned.CompareAndSwap(false, true) {
 			s.mgr.logger().Warn("via: sessions are held in this process's memory — every restart or deploy logs " +
 				"every user out, and a second pod sees none of them; pass WithSessionStore for a " +
 				"shared store")
-		})
+		}
 	}
 	id, d := s.mgr.create(s.storeCtx())
 	s.id, s.data = id, d

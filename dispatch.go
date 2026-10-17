@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"runtime/debug"
@@ -138,7 +139,7 @@ type mount struct {
 	sessions    *sessionManager
 	policy      *routerPolicy
 	reg         *registry
-	newInst     func() instance
+	root        interface{ newInst() instance }
 	patternBase string
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
@@ -241,16 +242,31 @@ func unitAddr(c *Ctx) string {
 	return rootAddr
 }
 
+func (m *mount) newInst() instance { return m.root.newInst() }
+
+// serveGet renders the page.
+func (m *mount) serveGet(w http.ResponseWriter, req *http.Request) {
+	defer recoverRequest(m.cfg.log, w, req, "render")
+	// concreteBase, not patternBase: a page at /job/{id} must advertise
+	// /job/7/_via/sse. The pattern would be POSTed literally and 404,
+	// leaving every live child under a parametrised mount dead.
+	base := concreteBase(m.patternBase, req, m.names)
+	m.writePage(w, req, m.newInst(), base, nil)
+}
+
+// recoverRequest answers a panic on a plain request transport.
+func recoverRequest(log *slog.Logger, w http.ResponseWriter, req *http.Request, what string) {
+	if rec := recover(); rec != nil {
+		recoverToHTTP(log, w, req, rec, what, false)
+	}
+}
+
 // dispatch is the single entry point for every action POST on a mount, at
 // {base}/_via/a/{child}/{act}. One origin floor, one OnInit, one body decode:
 // the six transports this replaced each re-implemented them and drifted (OnInit
 // never ran on a child action; a live/child action dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			recoverToHTTP(m.cfg.log, w, req, rec, "action", false)
-		}
-	}()
+	defer recoverRequest(m.cfg.log, w, req, "action")
 	if !originAllowed(req, m.cfg) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -541,28 +557,7 @@ func (a *liveAction) apply() actionResult {
 // doing the enqueue used to race other actions' goroutines and reorder their
 // pushes; returning it as data keeps everything on the one goroutine, in order.
 func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			if bad, ok := rec.(badActionArg); ok {
-				res = actionResult{badArg: bad.err}
-				return
-			}
-			if un, ok := rec.(unrenderedArg); ok {
-				res = actionResult{gone: un.body(lc.mount.cfg.log)}
-				return
-			}
-			// Same sentinel, same answer as recoverToHTTP gives the plain path:
-			// the URL names something that does not exist, which is a 404, not
-			// a server fault worth a stack dump.
-			if _, ok := rec.(paramMiss); ok {
-				res = actionResult{paramMiss: true, pushWork: unit.pusher}
-				return
-			}
-			lc.mount.cfg.log.Error("via: live action panic", "tab", lc.id,
-				"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-			res = actionResult{panicked: true, pushWork: unit.pusher}
-		}
-	}()
+	defer lc.recoverAction(unit, act, &res)
 	// Registered before the hydrate loop so every exit unwinds it, not just the
 	// one that reaches a push: a malformed arg, an unrendered arg, a paramMiss,
 	// a handler panic or a reloadUnit error all return without pushWork, and
@@ -639,6 +634,32 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	return actionResult{
 		redirect: rc.redirect,
 		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
+	}
+}
+
+// recoverAction turns a panic in liveRunAction into its actionResult: via's
+// sentinels get the answer the plain path gives them, anything else is logged
+// as a handler fault.
+func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
+	if rec := recover(); rec != nil {
+		if bad, ok := rec.(badActionArg); ok {
+			*res = actionResult{badArg: bad.err}
+			return
+		}
+		if un, ok := rec.(unrenderedArg); ok {
+			*res = actionResult{gone: un.body(c.mount.cfg.log)}
+			return
+		}
+		// Same sentinel, same answer as recoverToHTTP gives the plain path:
+		// the URL names something that does not exist, which is a 404, not
+		// a server fault worth a stack dump.
+		if _, ok := rec.(paramMiss); ok {
+			*res = actionResult{paramMiss: true, pushWork: unit.pusher}
+			return
+		}
+		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
+			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
+		*res = actionResult{panicked: true, pushWork: unit.pusher}
 	}
 }
 

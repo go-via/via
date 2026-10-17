@@ -115,7 +115,9 @@ func (c *Ctx) warnTickClamp() {
 		c.logger().Warn(msg)
 		return
 	}
-	c.policy.tickWarn.Do(func() { c.policy.log.Warn(msg) })
+	if c.policy.tickWarned.CompareAndSwap(false, true) {
+		c.policy.log.Warn(msg)
+	}
 }
 
 // OnConnect registers fn to run once when this unit's stream opens — the

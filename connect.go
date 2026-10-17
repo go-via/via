@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sync/atomic"
 )
@@ -265,17 +266,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		defer m.live.Done()
 	}
 	headersSent := false
-	defer func() {
-		if rec := recover(); rec != nil {
-			// A panic before the headers went out would otherwise fall through
-			// to Go's default — 200 with an empty body, telling the client the
-			// connect succeeded. Once headers are sent this can't help, so a
-			// mid-stream panic is caught per push item (runPushItem) instead.
-			if !headersSent {
-				recoverToHTTP(m.cfg.log, w, req, rec, "stream", true)
-			}
-		}
-	}()
+	defer m.recoverConnect(w, req, &headersSent)
 	pv := m.newInst()
 	// A half-open peer never cancels req.Context(); a failed frame write is the
 	// only signal it's gone, so the stream needs a context it can cancel.
@@ -317,11 +308,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// waits for this stream instead of timing out behind it.
 	id := m.claimTab(connectSig, sessID)
 	registered := false
-	defer func() {
-		if !registered {
-			m.reg.del(id, m.tombFor(stream))
-		}
-	}()
+	defer m.releaseUnregistered(id, stream, &registered)
 
 	// OnInit runs on the very Ctx the discovery render then binds, so a
 	// Tick/Listen it registers is what makes the root a live unit.
@@ -386,16 +373,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// here and handed over at the call, and deferred after the recover above so
 	// it runs first.
 	streaming := false
-	defer func() {
-		if streaming {
-			return
-		}
-		for _, u := range units {
-			for _, d := range u.disposers {
-				runRecovered(m.cfg.log, guard, d)
-			}
-		}
-	}()
+	defer disposeUnstreamed(m.cfg.log, guard, units, &streaming)
 
 	// Subscriptions are started before any OnConnect runs, and their queued
 	// values are drained by runStream below. A unit whose OnConnect publishes
@@ -446,7 +424,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	m.reg.put(id, lc) // a live action POST routes to this connection by tab id
 	registered = true
-	defer func() { m.reg.del(id, m.tombFor(stream)) }()
+	defer m.unregister(id, stream)
 
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
@@ -468,7 +446,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// Whatever an OnConnect published is drained first, so the connect's own
 	// frame carries it rather than a pre-handler render the next sweep would
 	// immediately correct.
-	guard.watchPin(m.cfg.pinnedDeadline, func() { lc.warnPinned(&lc.pinTimerLogged) })
+	guard.watchPin(m.cfg.pinnedDeadline, lc.warnPinTimer)
 	sweepListeners(m.cfg.log, guard, listeners)
 
 	// A Set inside an OnConnect fn has no push to ride — runStream does no
@@ -482,4 +460,35 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	streaming = true
 	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc, sseHeartbeat)
+}
+
+// recoverConnect answers a panic before the stream's headers went out, which
+// would otherwise fall through to Go's default — 200 with an empty body,
+// telling the client the connect succeeded. Once headers are sent this can't
+// help, so a mid-stream panic is caught per push item (runPushItem) instead.
+func (m *mount) recoverConnect(w http.ResponseWriter, req *http.Request, headersSent *bool) {
+	if rec := recover(); rec != nil && !*headersSent {
+		recoverToHTTP(m.cfg.log, w, req, rec, "stream", true)
+	}
+}
+
+func (m *mount) unregister(id string, s *stream) { m.reg.del(id, m.tombFor(s)) }
+
+func (m *mount) releaseUnregistered(id string, s *stream, registered *bool) {
+	if !*registered {
+		m.unregister(id, s)
+	}
+}
+
+// disposeUnstreamed runs the disposers runStream would have, for a connect
+// that failed before handing them over.
+func disposeUnstreamed(log *slog.Logger, g *pushGuard, units []*Ctx, streaming *bool) {
+	if *streaming {
+		return
+	}
+	for _, u := range units {
+		for _, d := range u.disposers {
+			runRecovered(log, g, d)
+		}
+	}
 }

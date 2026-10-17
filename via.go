@@ -453,6 +453,8 @@ func startTracks(c *Ctx, inst instance) {
 
 func (c *Ctx) restoreInInit(was bool) { c.inInit = was }
 
+func (c *Ctx) endInit() { c.inInit = false }
+
 // childPrefixKey memoizes the parent-type -> child-type field-name lookup.
 type childPrefixKey struct{ parent, child reflect.Type }
 
