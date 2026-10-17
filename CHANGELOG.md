@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- `expr.CopyToClipboard` does nothing outside a secure context, where `navigator.clipboard` is undefined; it threw a TypeError there.
 - The reconnect banner stops probing after 20 failed probes, as documented; it ran a 21st.
 - A live unit's native form submit answers with a page whose OnInit sees the session its action wrote; it read the request's pre-action cookie, so a login there rendered logged out.
 - A plain grandchild that a live child's push reveals runs its `OnInit`, as it does under a live root. A live grandchild revealed under a unit that is live through a `Tick` or `Listen` alone now aborts the push, as it does when the unit renders `State`.

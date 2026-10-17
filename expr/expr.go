@@ -176,9 +176,10 @@ func Call(name string, args ...Expr) Expr {
 // CopyToClipboard writes text to the clipboard. Browsers allow that only in a
 // secure context and from a user gesture, so bind it to a click. A refused
 // write is swallowed rather than logged as an uncaught rejection: the handler
-// has no way to report it.
+// has no way to report it. Outside a secure context navigator.clipboard is
+// undefined, so the call is optional-chained to do nothing there too.
 func CopyToClipboard(text Expr) Expr {
-	return Call("navigator.clipboard.writeText", text) + ".catch(() => {})"
+	return Rawf("navigator.clipboard?.writeText(%s).catch(() => {})", text)
 }
 
 // CopyTextOf copies the text of the first element matching sel inside the
