@@ -1248,6 +1248,24 @@ func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
 }
 
+type liveReloadRedirector struct{ n via.State[int] }
+
+func (p *liveReloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
+
+func (p *liveReloadRedirector) Go(ctx *via.Ctx) {}
+
+func (p *liveReloadRedirector) View() h.H { return h.Div(p.n.Display(), h.Button(on.Click(p.Go))) }
+
+func TestReload_redirectFromALiveUnitsReloadNavigatesTheTab(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveReloadRedirector{}))
+		code, body := app.Action(0).Over(app.Connect()).Fire()
+
+		assert.Equal(t, http.StatusOK, code)
+		assert.Contains(t, body, "location.assign", "a Redirect from the reload after a live action must still navigate")
+	})
+}
+
 // tickingReload registers a Tick from OnReload on a page served plain. Honouring
 // it would turn the unit live on a page with no stream (I5) and trip the
 // render-invariant panic; OnReload must register nothing.
