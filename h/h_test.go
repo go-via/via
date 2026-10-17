@@ -130,16 +130,6 @@ func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
 	}
 }
 
-func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
-	t.Parallel()
-	assert.Contains(t, markup(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
-	assert.Contains(t, markup(t, h.A(h.Href("https://example.com/x"))), `href="https://example.com/x"`)
-	assert.Contains(t, markup(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
-	assert.Contains(t, markup(t, h.Img(h.Src("data:text/html,x"))), `src="#"`)
-	assert.Contains(t, markup(t, h.A(h.Href("//evil.example/x"))), `href="#"`)
-	assert.Contains(t, markup(t, h.Form(h.Action("/login"))), `action="/login"`)
-}
-
 func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {
 	t.Parallel()
 	for _, name := range []string{

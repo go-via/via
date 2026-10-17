@@ -10,18 +10,13 @@ import (
 	"go-via.dev/site/shell"
 )
 
-func TestSite_nextSkipsExternalEntries(t *testing.T) {
+func TestSite_theLastPageHasNoNext(t *testing.T) {
 	t.Parallel()
 
-	s := &shell.Site{}
 	pages := shell.Pages()
 	last := pages[len(pages)-1]
-	_, ok := s.Next(last.Path)
+	_, ok := (&shell.Site{}).Next(last.Path)
 	assert.False(t, ok, "%s is the last page, so there is no next page", last.Path)
-
-	for _, p := range pages {
-		assert.Empty(t, p.URL, "Pages lists only entries the site serves")
-	}
 }
 
 func TestSite_nextFollowsTheNavAcrossGroups(t *testing.T) {

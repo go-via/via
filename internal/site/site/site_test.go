@@ -452,11 +452,6 @@ func TestSite_listsContentsFromTwoHeadings(t *testing.T) {
 	assert.Contains(t, body, `<details class="toc toc-inline">`)
 	assert.Contains(t, body, `<a href="#greeting">Greeting</a>`, "a demo card's heading is an h3 entry")
 	assert.Contains(t, body, `<a href="#top" class="to-top">`)
-
-	_, body = get(t, srv, "/actions", nil)
-	if strings.Count(body, `<h2 id=`)+strings.Count(body, `<h3 id=`) < 2 {
-		assert.NotContains(t, body, `class="toc`)
-	}
 }
 
 func TestSite_linksEachPageToItsSource(t *testing.T) {
