@@ -520,16 +520,8 @@ type ptrViewer[T any] = interface {
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
 type Ctx struct {
-	order       []string                   // slots in assignment order
-	initial     map[string]any             // per-slot value seen at render time
-	actions     map[string]action          // content-addressed action table, keyed by handler identity
-	hydrators   map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
-	ticks       []tickReg
-	subs        []subscription
-	onConnect   []func() // run once when the stream opens
-	disposers   []func() // run on disconnect
-	live        bool     // OnInit registered a Tick/Listen, or the View rendered server State
-	dirty       map[string]any
+	unitPass
+	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
 	declareOnly map[string]any  // when non-nil, declare only these slots
 	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
 	req         *http.Request
@@ -537,15 +529,11 @@ type Ctx struct {
 	policy      *routerPolicy
 	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I2)
 	session     *Session
-	children    []*Ctx // embedded children, in positional order (parent binder only)
 	isChild     bool
 	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
 	unitV       instance
-	rendered    []byte      // inner HTML from the discovery render (for the 204 compare)
-	pusher      *unitPusher // live only: re-renders this unit and frames it on the stream
-	declare     bool        // this render declares page-level data-signals
-	base        string      // mount path prefix for action POSTs
-	redirect    redirectTo
+	declare     bool   // this render declares page-level data-signals
+	base        string // mount path prefix for action POSTs
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
 	actedInst   instance
@@ -624,8 +612,30 @@ func (c *Ctx) logger() *slog.Logger {
 	return c.policy.log
 }
 
-func newCtx() *Ctx {
-	return &Ctx{
+func newCtx() *Ctx { return &Ctx{unitPass: newUnitPass()} }
+
+// unitPass is what one render pass of a unit records: its signal slots, the
+// actions and hydrators it bound, its children, and what OnInit registered.
+// rebindFrom copies a Ctx with a fresh unitPass, so a field added here is
+// per-pass without a reset list to keep in step.
+type unitPass struct {
+	order     []string                   // slots in assignment order
+	initial   map[string]any             // per-slot value seen at render time
+	actions   map[string]action          // content-addressed action table, keyed by handler identity
+	hydrators map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
+	dirty     map[string]any
+	children  []*Ctx      // embedded children, in positional order (parent binder only)
+	rendered  []byte      // inner HTML from the discovery render (for the 204 compare)
+	pusher    *unitPusher // live only: re-renders this unit and frames it on the stream
+	redirect  redirectTo
+	ticks     []tickReg
+	subs      []subscription
+	onConnect []func() // run once when the stream opens
+	disposers []func() // run on disconnect
+}
+
+func newUnitPass() unitPass {
+	return unitPass{
 		initial:   map[string]any{},
 		actions:   map[string]action{},
 		dirty:     map[string]any{},

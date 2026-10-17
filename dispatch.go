@@ -17,8 +17,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/go-via/via/internal/render"
 )
 
 // actionMode is decided by the request, not the route: the bundled Datastar
@@ -955,14 +953,13 @@ func actedViewer(inst instance, u *Ctx) any {
 // render with only the per-render tables reset. Three separate defect rounds
 // were one field set on auth and forgotten here (req/sessions/sessW/doInit,
 // then session, then live), each patched by hand-copying one more
-// field — so the default is inverted: a new Ctx field rides along unless it is
-// reset below, and forgetting one can no longer silently drop a request scope.
+// field — so the default is inverted: a new Ctx field rides along unless it
+// belongs to unitPass, and forgetting one can no longer silently drop a request
+// scope.
 //
-// Reset are exactly the things a render produces and the next render must
-// produce again (slot order/initials, the action and hydrator tables, the
-// child tree, the rendered bytes and pusher, this dispatch's dirty set
-// and redirect), plus the root's OnInit registrations — OnInit does not re-run
-// here and nothing on the plain path consumes them. `live` is not reset: it is
+// unitPass holds exactly what a render produces and the next render must
+// produce again, plus the root's OnInit registrations — OnInit does not re-run
+// here and nothing on the plain path consumes them. `live` stays on Ctx: it is
 // auth's verdict, and a later pass may only widen it (I5).
 //
 // The invariants this loop must preserve:
@@ -977,14 +974,7 @@ func actedViewer(inst instance, u *Ctx) any {
 //	   re-render cannot raise it.
 func rebindFrom(auth *Ctx) *Ctx {
 	c := *auth
-	c.order, c.initial = nil, map[string]any{}
-	c.actions = map[string]action{}
-	c.hydrators = map[string]render.Hydrator{}
-	c.dirty = map[string]any{}
-	c.children = nil
-	c.rendered, c.pusher = nil, nil
-	c.redirect = redirectTo{}
-	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
+	c.unitPass = newUnitPass()
 	return &c
 }
 
