@@ -385,7 +385,7 @@ it.
 
 ```go
 // ✅ Adds information the name doesn't
-// ErrNotFound from OnInit or OnReload answers 404; any other error answers 500.
+// ErrNotFound from OnInit or OnReload answers 404 rather than a 500.
 var ErrNotFound = errors.New("via: not found")
 
 // ✅ States a non-obvious contract
@@ -563,9 +563,8 @@ the compiler checks.
 
 Rule: Use `internal/` for code that must not be imported by consumers and
 either is shared across packages within the module, or is split out of root
-to hide one decision. A package split out of root never imports `via` and
-imports a sibling only where a lint allows it. Do not use `internal/` as a
-dumping ground — the same responsibility rules apply.
+to hide one decision. A package split out of root never imports `via`. Do
+not use `internal/` as a dumping ground — the same responsibility rules apply.
 
 - ✅ `internal/render` holds the binder plumbing that root, `h` and `on`
   share.

@@ -66,7 +66,8 @@ This is the load-bearing constraint of the rewrite: **anything your view
 needs must be a field on the composition before `View` is called.** The hook
 for that is `OnInit(*Ctx) error`, which runs per-request before `View`. v0.7
 logged an `OnInit` error and rendered the page anyway; v0.8 stops: return
-`via.ErrNotFound` for a 404, anything else for a 500.
+`via.ErrNotFound` for a 404, `via.ErrForbidden` for a 403, anything else for a
+500.
 
 ```go
 // v0.7: a path:"id" tag filled the field before OnInit
@@ -390,7 +391,8 @@ a click is `via.On("click", p.Inc)`.
   write deadline (10s) are fixed, where v0.7 had `WithSSEHeartbeat` and
   `WithSSEWriteTimeout`. The connection cap (`WithMaxSSEConn`, default 10,000)
   and the pinned deadline (`WithPinnedDeadline`, default 5s) are the two SSE
-  options. Open an issue if a deployment needs another one tunable.
+  limits; `WithSSECompression` (v0.9.1) picks the stream's encoders. Open an issue if a
+  deployment needs another one tunable.
 
 ## Worked example: protecting a page
 
@@ -651,8 +653,9 @@ an upgrade in code that compiled fine before.
 ## The page's metadata is a method on the root
 
 v0.7 named the document with the router-wide `WithTitle`, `WithDescription`
-and `WithLang` options. In v0.8 `via.WithHead` is router-wide and carries only
-`Lang`, raw head markup and shared assets; a mounted page declares its own
+and `WithLang` options. In v0.8 `via.WithHead` is router-wide and carries
+`Lang`, raw head markup, shared assets and (v0.9.1) the `<html>` and
+`<body>` attributes; a mounted page declares its own
 document with `PageMeta`:
 
 ```go
@@ -676,8 +679,8 @@ Four rules:
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
 - `Assets` is the one field that is **not** inert: it decides the mount's CSP,
-  is read once at `Mount` off the literal you mounted, and must be a constant of
-  the type. Making it depend on request data panics at `Mount`, or on the
+  is read at `Mount` off the literal you mounted and a probe copy, then again
+  on every document render, so it must be a constant of the type. Making it depend on request data panics at `Mount`, or on the
   first GET if `PageMeta` panicked on Mount's probe copy and the check was
   skipped, which `Mount` logs.
 
