@@ -841,7 +841,10 @@ func (p *bigFrames) View() h.H {
 func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T) {
 	t.Parallel()
 	var out lockedBuf
-	r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(300*time.Millisecond))
+	// Well above a 256KiB tick's render under -race and a loaded package run
+	// (up to ~1s): a render past the deadline is reported as a blocked handler,
+	// which is right, but is not the stall this test is about.
+	r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
 	via.Mount(r, "/", bigFrames{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -865,13 +868,13 @@ func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T)
 	}
 	// From here nothing reads: the stream fills the socket and blocks in a write.
 
-	require.Eventually(t, func() bool { return strings.Contains(out.String(), "tab pinned") }, 5*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "not reading") }, 10*time.Second, 20*time.Millisecond,
+		"the warning must say the stream is stuck writing to its client")
 	resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
 		"Sec-Fetch-Site": "same-origin", "Datastar-Request": "true",
 	})
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	assert.Contains(t, out.String(), "not reading", "the warning must say the stream is stuck writing to its client")
 	assert.NotContains(t, out.String(), "inside a Tick", "a stalled write is not a blocked handler")
 }
 
