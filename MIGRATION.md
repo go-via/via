@@ -94,7 +94,7 @@ The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `OnInit(*Ctx) error` is the lifecycle hook,
 on a page and on every child. There is no `Connector` and no `Live`
-interface: a composition is a live child when it *acts* like one, meaning its
+interface: a composition is a live unit when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
 `State[T]`/`List[E]`. `via.Stream(ctx, d, fn)` is `ctx.Tick(d, fn)` in
 `OnInit`. `OnDispose(ctx)` becomes `ctx.OnDispose(fn)`, registered in `OnInit`;
@@ -580,7 +580,7 @@ across the upgrade posts the old name to the old URL and fails as above.
 ## Wire break: signal slot names
 
 A `Signal[T]`'s wire name is its Go field path, first rune lowercased —
-`count`, `chat__draft` for a signal inside an embedded `Chat`,
+`count`, `chat__draft` for a signal inside a `Chat` child,
 `outer__mid__kid__step` for a deeper path. v0.7 used the lower-cased field
 name too, but a `via:"name"` tag could override it; v0.8 has no override. The
 field offset is the internal key, and the name is resolved once per
