@@ -70,8 +70,8 @@ func (p *Security) View() h.H {
 				"origin check below is the only CSRF defence.")),
 		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, form submit and stream "+
 			"connect, in this order: an "),
-			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header must be "),
-			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; otherwise the "), Code("Origin"),
+			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header, when present, alone decides and must be "),
+			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; without one, the "), Code("Origin"),
 			h.Str(" host must equal the request's "), Code("Host"),
 			h.Str(", and be https when the request arrived over TLS or the proxy says "), Code("X-Forwarded-Proto: https"),
 			h.Str(" or "), Code("Forwarded: proto=https"), h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
@@ -173,6 +173,8 @@ func (p *Security) View() h.H {
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("base-uri 'self'")), h.Str("Fixed.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("form-action 'self'")), h.Str("Fixed.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("frame-ancestors 'self'")), h.Str("Fixed.")},
+			[]h.H{h.Code(h.Class("csp-absent"), h.Str("font-src")), h.Span(h.Str("Added only when a preload names a font on another origin, or "),
+				API("via.Assets"), h.Str("."), Code("FontOrigins"), h.Str(" lists one: a remote stylesheet's @font-face origin is inside a file via never sees."))},
 			[]h.H{h.Code(h.Class("csp-absent"), h.Str("img-src")), h.Str("Added only when a preload names an image on another origin.")},
 		),
 		h.P(h.Str("The policy is built once per mount from the router's "), API("via.WithHead"), h.Str(" assets plus the page's "),
