@@ -106,7 +106,7 @@ func (m *mixedChild) View() h.H {
 	)
 }
 
-func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) {
+func TestLive_tickAndSubscribeShareOneStreamGoroutineAndTearDownCleanly(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})
@@ -118,12 +118,7 @@ func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) 
 		awaitLine(t, lines, "last: from-topic") // a sub frame flows alongside ticks
 
 		cancel() // disconnect while the ticker is running
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "OnDispose did not run when a ticking, subscribed child disconnected")
-		}
+		<-done   // OnDispose never running fails the bubble as a deadlock
 	})
 }
 
@@ -175,24 +170,17 @@ func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
-	done := make(chan struct{})
 	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{}) // made in the bubble, so a wait on it is durable
 		srv := liveServer(t, via.Handler(disposeProbe{disposed: done}))
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
-		synctest.Wait()
+		// Blocking, not a check after synctest.Wait: the client transport may
+		// hold the connection through its post-close drain window first. A
+		// disposer that never runs fails the bubble as a deadlock.
+		<-done
 	})
-
-	// The stream goroutine runs on a real httptest listener, outside the
-	// bubble: synctest.Wait() only settles bubble goroutines, so the
-	// OS delivering the close can still be in flight after it returns. This
-	// wait runs after the bubble, in real wall-clock time.
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "OnDispose did not run on disconnect")
-	}
 }
 
 // panicThenDisposeProbe registers two disposers — the first always panics —
@@ -219,13 +207,7 @@ func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
-		synctest.Wait()
-
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "the disposer after the panicking one did not run")
-		}
+		<-done   // a disposer that never runs fails the bubble as a deadlock; see above
 	})
 }
 
