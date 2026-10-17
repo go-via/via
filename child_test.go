@@ -1746,3 +1746,26 @@ func TestChild_aGrandchildDeclaresItsSignalsOnTheGET(t *testing.T) {
 	_, page := app.Get("/")
 	assert.Contains(t, page, `"m__in__n":5`)
 }
+
+type openerOuter struct {
+	open bool
+	In   noteKid
+}
+
+func (o *openerOuter) Open(*via.Ctx) { o.open = true }
+func (o *openerOuter) in() h.H       { return via.Child(o.In) }
+func (o *openerOuter) View() h.H {
+	return h.Div(h.Button(on.Click(o.Open)), via.When(o.open, o.in))
+}
+
+type plainOpenerRoot struct{ O openerOuter }
+
+func (p *plainOpenerRoot) View() h.H { return h.Div(via.Child(p.O)) }
+
+func TestChild_aPlainChildsPatchDeclaresAGrandchildItOpened(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(plainOpenerRoot{}))
+	code, body := app.ChildAction("0", 0).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, `"o__in__note":""`)
+}

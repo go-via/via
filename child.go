@@ -333,8 +333,11 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // proven plain, or it could never have become live), and whatever the
 // discovery render found for a plain action's re-render, since that unit may
 // legitimately sit beneath an already-live root (see checkLiveUnderLive).
-func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool) (*Ctx, []byte) {
+// only and seen are renderRootBase's: non-nil only makes this a declaring
+// render, so the child's own children seed their slots; a push passes nil.
+func renderChildBind(key string, inst instance, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool) (*Ctx, []byte) {
 	c := newCtx()
+	c.declare, c.declareOnly, c.declareSeen = only != nil, only, seen
 	c.rev = rev
 	c.badDecodeLogged = badDecodeLogged
 	c.isChild = true
