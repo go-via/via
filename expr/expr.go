@@ -83,8 +83,9 @@ func operand(v any) string {
 	if err != nil {
 		panic(fmt.Sprintf("expr: %T does not encode as a JSON literal", v))
 	}
-	// Datastar rewrites @name( into an action call even inside a string
-	// literal. JSON puts @ only inside strings, where \u0040 reads back as @.
+	// Datastar rewrites @name( into an action call. v1.0.4 skips string
+	// literals; escaping keeps that true whatever its compiler does. JSON puts
+	// @ only inside strings, where \u0040 reads back as @.
 	return strings.ReplaceAll(string(b), "@", `\u0040`)
 }
 

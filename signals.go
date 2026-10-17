@@ -25,8 +25,9 @@ import (
 // hands Datastar the same decoded value either way.
 //
 // Datastar compiles the attribute as an expression, not JSON.parse, and
-// rewrites @name( into an action call even inside a string literal, so every @
-// goes out as \u0040; JSON puts @ only inside strings, where it reads back as @.
+// rewrites @name( into an action call. v1.0.4 skips string literals, but every @
+// still goes out as \u0040 so a compiler that did not would find none; JSON
+// puts @ only inside strings, where it reads back as @.
 //
 // only nil declares every slot (the GET first paint). Non-nil declares only the
 // slots named, so a plain action patch ships what it wrote without clobbering a
