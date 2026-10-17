@@ -46,7 +46,7 @@ func (p *Landing) View() h.H {
 
 		d.H2("Three kinds of field"),
 		table([]string{"Field type", "Value lives in", "Server code"},
-			[]h.H{APIText("via.Signal", "Signal"), h.Str("the browser; sent with every action POST"), h.Str("reads it with Get, changes it with Set")},
+			[]h.H{APIText("via.Signal", "Signal"), h.Str("the browser; sent with every action POST"), h.Str("reads a bound one with Get, changes it with Set")},
 			[]h.H{APIText("via.SignalCS", "SignalCS"), h.Str("the browser only; dropped from every POST"), h.Str("cannot read or write it: the type has no Get or Set")},
 			[]h.H{APIText("via.State", "State"), h.Str("the server, per tab"), h.Str("owns it; rendering it with Display makes the unit live, and a Set is pushed")},
 		),

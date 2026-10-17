@@ -30,7 +30,7 @@ var overrides = map[string]string{
 	"via.PostForm":        "A native multipart form whose submit is a real navigation, read back with ctx.Request().FormValue.",
 	"via.State":           "Server-authoritative per-tab state, rendered as text and morphed when it changes. Rendering one makes its unit live.",
 	"via.List":            "A State over a slice, with Append, Remove and Each.",
-	"via.Signal":          "Client-resident state that round-trips per request.",
+	"via.Signal":          "Client-resident state, posted with every action. Get returns the posted value only for a Bind()ed signal.",
 	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never sees it.",
 	"via.StateOf":         "Seeds a State from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.ListOf":          "Seeds a List from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",

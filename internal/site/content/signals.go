@@ -98,7 +98,7 @@ func (p *Signals) View() h.H {
 		demo.Card(d.H3("Server seed"),
 			h.P(API("via.Signal.Set"), h.Str(" writes the value and declares the signal, so the View need not render it. "+
 				"A Set in OnInit puts the server clock in the first paint, and the action sets it again. "+
-				"The action's response carries only the signals it wrote, so an input the user is editing is not overwritten.")),
+				"The action's response carries the signals it wrote and any the new render added, never one it left alone, so an input the user is editing is not overwritten.")),
 			via.Child(p.Seed), "seed.go",
 			demo.Try(h.Str("Click read the clock and open the Wire pane: one POST, and a patch carrying the new signal value."))),
 		h.P(h.Str("A JavaScript island gets data from Go the same way: Set a signal the island reads, and no element has to spell the value out. "+

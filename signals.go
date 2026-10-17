@@ -144,8 +144,10 @@ func (r *revertSet) restore() {
 	clear(r.undo)
 }
 
-// Signal is a client-resident value that round-trips per request and renders as
-// a Datastar text-bound span. T must be JSON-round-trippable.
+// Signal is a client-resident value: the browser holds it and posts it with
+// every action, and the server takes the posted value only for a Bind()ed
+// signal. It renders as a Datastar text-bound span. T must be
+// JSON-round-trippable.
 //
 // It starts at T's zero value, or at the JSON in a `via:"init=<json>"` field
 // tag, read once when via walks the composition type at Mount; a tagged signal
@@ -219,9 +221,10 @@ func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and declares the slot, which is what carries the change
 // to the client: a live action pushes a patch-signals frame, a plain action's
-// element patch carries a data-signals restricted to the slots it wrote. Only
-// the signals an action actually wrote are declared, so a signal the user is
-// mid-edit is never overwritten behind them.
+// element patch carries a data-signals restricted to the slots it wrote, plus
+// any slot the pre-action render did not carry. A signal the action left
+// alone is not declared, so one the user is mid-edit is never overwritten
+// behind them.
 //
 // The View need not render the signal: Set declares it, so a Set in OnInit
 // seeds an island the View never binds or displays. Declaring is not

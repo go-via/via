@@ -148,7 +148,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Session stores", "/security#session-stores"}, {"Sessions that survive a restart", "/deploy#sessions-that-survive-a-restart"}},
 			[]h.H{API("via.SessionStore"), API("via.WithSessionStore")}},
 		{"Signal",
-			[]h.H{API("via.Signal"), s(", a field whose value lives in the browser as a Datastar signal named after the field. It is sent with every action and the server can read and Set it; T must round-trip through JSON. "),
+			[]h.H{API("via.Signal"), s(", a field whose value lives in the browser as a Datastar signal named after the field. It is sent with every action; the server takes the posted value only for one bound to an input with Bind, and can Set any; T must round-trip through JSON. "),
 				API("via.Signal.Bind"), s(" ties it to an input and "), API("via.Signal.Display"), s(" renders it as text.")},
 			[]seeLink{{"Where state lives", "/signals#where-state-lives"}, {"Binding and display", "/signals#binding-and-display"}},
 			[]h.H{API("via.Signal")}},
