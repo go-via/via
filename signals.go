@@ -242,9 +242,13 @@ func (s *Signal[T]) Get() T { return s.val }
 // seeds an island the View never binds or displays. Declaring is not
 // hydrating; only Bind makes a slot client-writable.
 //
-// A nil slice or map marshals as JSON null, which a client-side forEach or
-// index faults on. Start such a signal at an empty one with a field tag:
-// `via:"init=[]"`.
+// A map or struct value reaches the client as a JSON merge patch (RFC 7386):
+// keys the new value omits keep their old client value, and a null deletes.
+// To drop a key, Set a slice instead, or a value that marks the entry gone.
+//
+// A nil slice or map marshals as JSON null, which deletes the signal on the
+// client, and a client-side forEach or index then faults. Start such a signal
+// at an empty one with a field tag: `via:"init=[]"`.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound == nil || s.slot == "" {
