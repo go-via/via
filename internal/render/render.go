@@ -310,10 +310,14 @@ func validDataSuffix(s string) bool {
 // programming-time construction and an injectable one defeats the safe-HTML
 // guarantee.
 func RawAttr(name, val string) Attr {
+	mustAttrName(name)
+	return rawAttr{name: name, val: val}
+}
+
+func mustAttrName(name string) {
 	if !validAttrName(name) {
 		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
 	}
-	return rawAttr{name: name, val: val}
 }
 
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. The
@@ -337,9 +341,7 @@ func (noAttr) isAttr()          {}
 // BoolAttr builds a bare HTML boolean attribute — `disabled` when on, nothing
 // at all when off. The name is held to the same allowlist as RawAttr.
 func BoolAttr(name string, on bool) Attr {
-	if !validAttrName(name) {
-		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
-	}
+	mustAttrName(name)
 	if !on {
 		return noAttr{}
 	}

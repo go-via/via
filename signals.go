@@ -204,9 +204,11 @@ func jsonSeed[T any](raw string) (any, error) {
 // signal with no name (one behind an interface, or a local variable) — the
 // same verdict rendering it gives, moved to the call that would otherwise have
 // produced a bare "$" and a silently dead Datastar expression.
-func (s *Signal[T]) Ref() expr.Expr {
+func (s *Signal[T]) Ref() expr.Expr { return s.ref("Signal") }
+
+func (s slotID) ref(kind string) expr.Expr {
 	if s.slot == "" {
-		panic(render.Miswired("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
+		panic(render.Miswired("via: " + kind + ".Ref on a signal with no wire name — a " + kind + " must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
@@ -379,14 +381,7 @@ func (*SignalCS[T]) seedApplier(any) seedApplier { return nil }
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
 // array or map field, which has no field name to be named by.
-func (s *SignalCS[T]) Ref() expr.Expr {
-	if s.slot == "" {
-		panic(render.Miswired("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
-			"composition (through plain nested structs if you like), not one reached through a pointer, " +
-			"slice, array or map field; \"$\" alone is not a Datastar expression"))
-	}
-	return expr.Expr("$" + s.slot)
-}
+func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 
 // bind declares the slot at its seed value and returns the seed, so Display
 // can render it without a second, stale zero value of its own.
