@@ -81,7 +81,7 @@ var changes = []change{
 	{"`h.Title(s)`, the `<title>` element", "`PageMeta()` returning `via.Meta{Title: s}`; `h.Title` is now the `title` attribute", bySilent},
 	{"`sess.Put(ctx, v)`, `sess.Get[T](ctx)`, `sess.Clear[T](ctx)`, `sess.Rotate(ctx)`", "`ctx.Session().Put(v)`, `.Get[T]()`, `.Delete()`, `.Rotate()`", byCompiler},
 	{"one session value per type", "one value per session: a second `Put` replaces the first, so put one struct", bySilent},
-	{"`StateSess[T]`", "a topic per `ctx.Session().ID()`, followed with `State.Track` in `OnInit`", byCompiler},
+	{"`StateSess[T]`", "a topic per `ctx.Session().Ensure()`, followed with `State.Track` in `OnInit`", byCompiler},
 	{"`StateApp[T]`", "your own store, injected; a `topic.Topic[T]` and `via.StateTrack` to push its changes", byCompiler},
 	{"`app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal`", "`topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit`", byCompiler},
 	{"`OnConnect(ctx) error`", "`ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open", byWarn},

@@ -124,7 +124,7 @@ type actionResult struct {
 	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
 	session   *Session    // live only: the action's handle, so a native answer's OnInit sees what the action wrote
 	gone      string      // the unit/action lookup came up invalid; the reason is the response body
-	initErr   error       // live only: the post-action OnInit re-run failed (see reloadUnit)
+	reloadErr error       // live only: the post-action OnReload failed (see reloadUnit)
 	forbidden string      // live only: the session-bound check rejected the request
 	paramMiss bool        // a Param segment did not decode — 404
 	// unavailable is a 503: the request was well-formed and the tab is live,
@@ -436,8 +436,8 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, res.forbidden, http.StatusForbidden)
 		return
 	}
-	if res.initErr != nil {
-		answerHookError(m.cfg.log, w, res.initErr, "via: OnReload after an action failed")
+	if res.reloadErr != nil {
+		answerHookError(m.cfg.log, w, res.reloadErr, "via: OnReload after an action failed")
 		return
 	}
 	if answerSentinel(w, res) {
@@ -609,7 +609,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	if rc.redirect.url == "" {
 		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{initErr: err, pushWork: unit.pusher}
+			return actionResult{reloadErr: err, pushWork: unit.pusher}
 		}
 		rc.redirect = rl.redirect
 	}

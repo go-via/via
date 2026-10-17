@@ -110,7 +110,7 @@ func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "a freed slot must admit a new connection")
 }
 
-func TestSSE_capIsPerRegister(t *testing.T) {
+func TestSSE_capIsPerRouter(t *testing.T) {
 	t.Parallel()
 	a := serve(t, via.Handler(quietChild{}, via.WithMaxSSEConn(1)))
 	b := serve(t, via.Handler(quietChild{}, via.WithMaxSSEConn(1)))
