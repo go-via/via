@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"maps"
 	"net/http"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -323,7 +324,9 @@ func (c *tabStream) run(reqCtx context.Context, deadline time.Time, t *parkTicke
 // unitType names the mount's root type, for a log line that has to point at
 // the handler to go read. Not the root unit's: a plain root with a live child
 // registers no root unit.
-func (c *tabStream) unitType() string { return c.mount.newInst().typ.String() }
+func (c *tabStream) unitType() string {
+	return reflect.PointerTo(c.mount.newInst().typ).String() // %T of the unit, as the other unit= lines print it
+}
 
 // warnPinTimer is the pin timer's report, deduped separately from an
 // action's.

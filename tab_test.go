@@ -1436,3 +1436,24 @@ func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(
 		close(p.release)
 	})
 }
+
+type plainBlockedHost struct{ B blockedTick }
+
+func (p *plainBlockedHost) View() h.H { return h.Div(via.Child(p.B)) }
+
+func TestLive_aPinnedTabUnderAPlainRootIsLoggedWithTheRootType(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := plainBlockedHost{B: newBlockedTick()}
+		r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		app.Connect()
+		<-p.B.entered
+
+		time.Sleep(3 * time.Second)
+
+		assert.Contains(t, out.String(), "unit=*via_test.plainBlockedHost")
+		close(p.B.release)
+	})
+}
