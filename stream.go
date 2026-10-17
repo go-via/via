@@ -116,22 +116,54 @@ func (s *stream) blockedOn() string {
 	return "inside a Tick, Listen, OnConnect, OnDispose or action handler"
 }
 
-// frame emits one SSE event and flushes it, cancelling the stream on any
-// error. Once failed it is a no-op, so a write racing a just-torn-down stream
-// can't re-trigger teardown.
-func (s *stream) frame(write func(io.Writer)) {
-	if s.failed {
+// patch frames an element-patch: the whole page when id is empty, else the
+// children of #id.
+func (s *stream) patch(id string, body []byte) {
+	ew := s.begin()
+	if ew == nil {
 		return
 	}
+	if id == "" {
+		writePatchFrame(ew, body)
+	} else {
+		writeInnerPatchFrame(ew, id, body)
+	}
+	s.finish(ew)
+}
+
+// signals frames a patch-signals event carrying the JSON object j.
+func (s *stream) signals(j string) {
+	if ew := s.begin(); ew != nil {
+		writeSignalsFrame(ew, j)
+		s.finish(ew)
+	}
+}
+
+func (s *stream) keepalive() {
+	if ew := s.begin(); ew != nil {
+		writeKeepaliveFrame(ew)
+		s.finish(ew)
+	}
+}
+
+// begin opens one SSE event, or returns nil once the stream has failed, so a
+// write racing a just-torn-down stream can't re-trigger teardown.
+func (s *stream) begin() *errWriter {
+	if s.failed {
+		return nil
+	}
 	s.busy.Store(busyWrite)
-	defer s.busy.Store(busyNone)
 	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
-	ew := &errWriter{w: s.w}
-	write(ew)
+	return &errWriter{w: s.w}
+}
+
+// finish flushes the event begin opened, cancelling the stream on any error.
+func (s *stream) finish(ew *errWriter) {
 	err := ew.err
 	if err == nil {
 		err = s.rc.Flush()
 	}
+	s.busy.Store(busyNone)
 	if err != nil {
 		s.failed = true
 		s.cancel()
@@ -303,7 +335,7 @@ func (g *pushGuard) close(log *slog.Logger) {
 }
 
 // panicSite is the file:line the recovered panic started at. A deferred
-// recover that re-panics (unitPush's) sits between, so it is the frame past
+// recover that re-panics (unitPusher.recoverFatal) sits between, so it is the frame past
 // the deepest runtime.gopanic, not the nearest.
 func panicSite() string {
 	pcs := make([]uintptr, 64)

@@ -117,12 +117,12 @@ func (m *mount) warnParkedFull() {
 type actionResult struct {
 	redirect  redirectTo
 	panicked  bool
-	badArg    error  // ?a= failed to decode (badActionArg) — 400, not 500
-	pushWork  func() // live only: the dirty-signals + element push, run by tabStream.run right after acking
-	gone      string // live only: the unit/action lookup came up invalid; the reason is the response body
-	initErr   error  // live only: the post-action OnInit re-run failed (see reloadUnit)
-	forbidden string // live only: the session-bound check rejected the request
-	paramMiss bool   // live only: a Param segment did not decode — 404, as on the plain path
+	badArg    error       // ?a= failed to decode (badActionArg) — 400, not 500
+	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
+	gone      string      // live only: the unit/action lookup came up invalid; the reason is the response body
+	initErr   error       // live only: the post-action OnInit re-run failed (see reloadUnit)
+	forbidden string      // live only: the session-bound check rejected the request
+	paramMiss bool        // live only: a Param segment did not decode — 404, as on the plain path
 	// unavailable is a 503: the request was well-formed and the tab is live,
 	// but a dependency (the session store) could not answer. Distinct from
 	// forbidden so a store blip stops being reported as a security rejection.
@@ -517,12 +517,12 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 			// the URL names something that does not exist, which is a 404, not
 			// a server fault worth a stack dump.
 			if _, ok := rec.(paramMiss); ok {
-				res = actionResult{paramMiss: true, pushWork: unit.push}
+				res = actionResult{paramMiss: true, pushWork: unit.pusher}
 				return
 			}
 			lc.mount.cfg.log.Error("via: live action panic", "tab", lc.id,
 				"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-			res = actionResult{panicked: true, pushWork: unit.push}
+			res = actionResult{panicked: true, pushWork: unit.pusher}
 		}
 	}()
 	// Registered before the hydrate loop so every exit unwinds it, not just the
@@ -582,7 +582,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	if rc.redirect.url == "" {
 		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{initErr: err, pushWork: unit.push}
+			return actionResult{initErr: err, pushWork: unit.pusher}
 		}
 		rc.redirect = rl.redirect
 	}
@@ -598,10 +598,9 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// The dirty set this action wrote is shipped by the push itself
 	// (tabStream.flushDirty), on the one path every server-driven signal change
 	// takes — a Tick/Listen handler's Set included.
-	push := unit.push
 	return actionResult{
 		redirect: rc.redirect,
-		pushWork: push, // patch-signals, then re-render this unit and frame the element-patch
+		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
 	}
 }
 
@@ -907,7 +906,7 @@ func rebindFrom(auth *Ctx) *Ctx {
 	c.hydrators = map[string]func(json.RawMessage) bool{}
 	c.dirty = map[string]any{}
 	c.children = nil
-	c.rendered, c.push = nil, nil
+	c.rendered, c.pusher = nil, nil
 	c.redirect = redirectTo{}
 	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
 	return &c

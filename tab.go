@@ -18,14 +18,13 @@ import (
 // action routes onto its single goroutine. units is replaced after every push
 // with that render's bind Ctx — always the render the client's DOM reflects.
 type tabStream struct {
-	mount       *mount            // a tab id is valid only on its mount, never another sharing the router-wide registry
-	pushq       chan func()       // serialization channel, shared by all this connection's units
-	done        <-chan struct{}   // closed on disconnect
-	pushSignals func(json string) // emit a patch-signals frame on this stream
-	mu          sync.Mutex        // replace runs on the child goroutine, unit is read from the dispatching request's
-	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
-	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
-	handlers    []*Ctx            // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
+	mount    *mount          // a tab id is valid only on its mount, never another sharing the router-wide registry
+	pushq    chan func()     // serialization channel, shared by all this connection's units
+	done     <-chan struct{} // closed on disconnect
+	mu       sync.Mutex      // replace runs on the child goroutine, unit is read from the dispatching request's
+	units    map[string]*Ctx // dispatch address → current unit Ctx, at any embedding depth
+	sess     string          // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
+	handlers []*Ctx          // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
@@ -195,7 +194,7 @@ func (c *tabStream) flushDirty(u *Ctx) {
 	// the element push omits data-signals, so a morph never clobbers what the
 	// user is typing.
 	if raw, err := json.Marshal(all); err == nil {
-		c.pushSignals(string(raw))
+		c.wire.signals(string(raw))
 	}
 	clearDirty(u)
 }
@@ -265,7 +264,7 @@ func (c *tabStream) run(reqCtx context.Context, deadline time.Time, picked func(
 			}
 			result <- res
 			if res.pushWork != nil {
-				res.pushWork()
+				res.pushWork.push()
 			}
 		}()
 		res = fn()

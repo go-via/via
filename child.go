@@ -240,7 +240,7 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 
 	// Only a request-scoped render inits. A live root's push inherits the
 	// connect's scope, so a plain child's OnInit runs on every pushed frame;
-	// rootPush says why.
+	// unitPusher.from says why.
 	if parent.doInit {
 		child.doInit = true
 		if !acted && prior == nil {

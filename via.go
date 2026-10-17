@@ -529,10 +529,10 @@ type Ctx struct {
 	isChild     bool
 	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
 	unitV       instance
-	rendered    []byte // inner HTML from the discovery render (for the 204 compare)
-	push        func() // re-render this child and frame it on the stream
-	declare     bool   // this render declares page-level data-signals
-	base        string // mount path prefix for action POSTs
+	rendered    []byte      // inner HTML from the discovery render (for the 204 compare)
+	pusher      *unitPusher // live only: re-renders this unit and frames it on the stream
+	declare     bool        // this render declares page-level data-signals
+	base        string      // mount path prefix for action POSTs
 	redirect    redirectTo
 	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
 	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field

@@ -159,7 +159,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 				for _, v := range batch {
 					callListener(c, handler, v)
 				}
-				c.push()
+				c.pusher.push()
 			}
 		}}
 	})
@@ -193,7 +193,7 @@ func startTicker(reqCtx context.Context, child *Ctx, t tickReg, pushq chan<- fun
 				// Push only this child's container, so a tick never re-renders
 				// a sibling.
 				select {
-				case pushq <- func() { t.fn(child); child.push() }:
+				case pushq <- func() { t.fn(child); child.pusher.push() }:
 				case <-reqCtx.Done():
 					return
 				}

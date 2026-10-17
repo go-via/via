@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"sync/atomic"
 )
@@ -31,19 +30,20 @@ func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
 	}
 }
 
-// connectUnit wires unit's push closure to stream (whole-page at #root for the
-// root, its own #via-i{key} container for a child) and registers it on lc. The
-// returned baseline renders the unit as the push would and records the bytes
-// without framing them, so a later push ships only what actually changed.
-func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) (baseline func()) {
+// connectUnit wires unit's push to stream (whole-page at #root for the root,
+// its own #via-i{key} container for a child) and registers it on lc. The
+// returned pusher's baseline renders the unit as the push would and records the
+// bytes without framing them, so a later push ships only what actually changed.
+func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPusher {
 	lc.replace(unit)
 	unit.guard = lc.guard
+	p := &unitPusher{lc: lc, stream: stream, inst: unit.unitV, base: base, from: unit, last: unit}
 	if unit.isChild {
-		unit.push, baseline = childPush(unit.childKey, unit.unitV, base, stream, lc, unit)
-	} else {
-		unit.push, baseline = rootPush(unit.unitV, base, stream, lc, unit)
+		p.childKey = unit.childKey
+		p.frameID = "via-i" + unit.childKey
 	}
-	return baseline
+	unit.pusher = p
+	return p
 }
 
 // livePush renders one live unit under the same two-phase rule dispatchPlain
@@ -69,7 +69,7 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) (baselin
 // connect body is the whole signal store, so lc.client holds every bindable
 // slot from the first connect on. Each extra render re-runs every plain child's
 // OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
-func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []byte) {
+func livePush(lc *tabStream, p *unitPusher) (*Ctx, []byte) {
 	// One set for the life of the connection, never replaced: a hydrator closure
 	// notes its undo into the rev of the Ctx that bound the signal, so a second
 	// live unit's push swapping lc.rev would leave that unit pointing at a set
@@ -86,12 +86,12 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	// the client sees is unaffected. The leading restore stays: it covers the
 	// window before this defer is registered, and the initOutcome recover path.
 	defer rev.restore()
-	auth, body := render(rev)
+	auth, body := p.render(rev)
 	bind := auth
 	done := map[string]bool{}
 	n := 0
 	for ; n < maxHydratePasses && hydrateTree(bind, lc.client, done); n++ {
-		bind, body = render(rev)
+		bind, body = p.render(rev)
 	}
 	if n == maxHydratePasses {
 		lc.mount.cfg.log.Warn("via: live push hit its hydration-pass cap; some posted signals may be unapplied",
@@ -103,116 +103,116 @@ func livePush(lc *tabStream, render func(*revertSet) (*Ctx, []byte)) (*Ctx, []by
 	return bind, body
 }
 
-// rootPush renders inst fresh and pushes the whole-page element-patch. The
-// fresh bind Ctx replaces lc's entry, so a live action needs no render of its
-// own — the previous push already built its actions/hydrators table.
-//
-// from is what makes a live root's plain children survive a push: Child re-copies
-// each child from the root's field every render, so a child whose fields OnInit
-// filled comes back zero-valued unless that OnInit runs again. Cost: a plain
-// child of a live root runs its OnInit once per pushed frame — keep it cheap,
-// or hold the data on the live root. A live child may not Child at all
-// (checkLiveNesting), so childPush needs none of this.
-//
-// A plain child's failed OnInit panics initOutcome from inside this render, on
-// every frame, and a push has no response to turn that into a 500/303/404.
-// Dropping the frame loops forever with no client-visible signal at all, and
-// rendering the child empty serves a page that is quietly wrong — so the stream
-// is torn down instead: the client's reconnect re-requests the page and gets the
-// real answer on a path that can give one.
-func rootPush(inst instance, base string, stream *stream, lc *tabStream, from *Ctx) (push, baseline func()) {
-	render := func(rev *revertSet) (*Ctx, []byte) {
-		return renderRootBase(inst, false, base, nil, nil, from, rev, lc.badDecodeLogged) // push omits data-signals
-	}
-	fatal := func(rec any) ([]any, bool) {
-		ci, ok := rec.(initOutcome)
-		return []any{"err", ci.err, "redirect", ci.redirect}, ok
-	}
-	return unitPush(lc, stream, from, render, writePatchFrame,
-		"via: live push aborted — an embedded child's OnInit failed; tearing the "+
-			"stream down so the client reconnects and gets the real answer", fatal)
+// unitPusher re-renders one live unit and frames it on the stream: the whole
+// page at #root for the root, its #via-i{key} container for a child. The fresh
+// bind Ctx replaces lc's entry, so a live action needs no render of its own —
+// the previous push already built its actions/hydrators table.
+type unitPusher struct {
+	lc     *tabStream
+	stream *stream
+	inst   instance
+	base   string
+	// from is what makes a live root's plain children survive a push: Child
+	// re-copies each child from the root's field every render, so a child whose
+	// fields OnInit filled comes back zero-valued unless that OnInit runs again.
+	// Cost: a plain child of a live root runs its OnInit once per pushed frame —
+	// keep it cheap, or hold the data on the live root. A live child may not
+	// Child at all (checkLiveNesting), so a child's push ignores it.
+	from        *Ctx
+	last        *Ctx   // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
+	childKey    string // empty for the root
+	frameID     string // the child's container id; empty for the root
+	lastBody    []byte // nil until the first frame, so the first push always ships
+	fatalLogged bool
 }
 
-// childPush is rootPush for a live child: it re-renders at key in Datastar
-// inner mode, so the container's own data-ignore-morph never blocks the push.
-//
-// A live grandchild grown under this child re-panics identically every push
-// (the tree shape, not the data, is what's wrong), so it is fatal the same way
-// rootPush's failing OnInit is.
-func childPush(key string, inst instance, base string, stream *stream, lc *tabStream, from *Ctx) (push, baseline func()) {
-	render := func(rev *revertSet) (*Ctx, []byte) {
-		// false: this unit's own ancestor chain is plain by construction — a
-		// live unit could never have connected otherwise (checkLiveNesting
-		// already proved it at connect). Its own children are under a live
-		// ancestor regardless, since checkLiveUnderLive folds in c.live itself.
-		return renderChildBind(key, inst, base, nil, rev, lc.badDecodeLogged, false)
+func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
+	if p.frameID == "" {
+		return renderRootBase(p.inst, false, p.base, nil, nil, p.from, rev, p.lc.badDecodeLogged) // push omits data-signals
 	}
-	id := "via-i" + key
-	frame := func(w io.Writer, body []byte) { writeInnerPatchFrame(w, id, body) }
-	fatal := func(rec any) ([]any, bool) {
-		nv, ok := rec.(liveNestingViolation)
-		return []any{"err", nv.msg}, ok
-	}
-	return unitPush(lc, stream, from, render, frame,
-		"via: live push aborted — this child grew a live descendant of its "+
-			"own, which via.Child cannot host; tearing the stream down so the client reconnects and "+
-			"gets the real answer", fatal)
+	// false: this unit's own ancestor chain is plain by construction — a live
+	// unit could never have connected otherwise (checkLiveNesting already proved
+	// it at connect). Its own children are under a live ancestor regardless,
+	// since checkLiveUnderLive folds in c.live itself.
+	return renderChildBind(p.childKey, p.inst, p.base, nil, rev, p.lc.badDecodeLogged, false)
 }
 
-// unitPush builds the push and baseline closures rootPush and childPush share.
-// A panic fatal recognises repeats on every frame, so it is logged once and the
-// stream torn down; any other panic propagates to runPushItem's per-item
-// recover, which logs it and keeps the stream up.
-//
-// Unchanged frames are dropped (the canonical statement; the tests refer here
-// as "skipUnchanged"). A Tick that changes nothing rendered would otherwise
-// ship a byte-identical element-patch every beat, which is the CPU and
-// bandwidth floor of an idle connection at scale (an idle page on a 2s tick
-// sent ~160 identical frames in five minutes). The plain action path has always
-// answered 204 on an unchanged render; this is the live path's version of that.
+// push renders and frames the unit. Unchanged frames are dropped (the
+// canonical statement; the tests refer here as "skipUnchanged"). A Tick that
+// changes nothing rendered would otherwise ship a byte-identical element-patch
+// every beat, which is the CPU and bandwidth floor of an idle connection at
+// scale (an idle page on a 2s tick sent ~160 identical frames in five
+// minutes). The plain action path has always answered 204 on an unchanged
+// render; this is the live path's version of that.
 //
 // It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its
 // patch-signals frame, and a DOM change with no signal change still ships its
 // element patch. The connect handshake's signals frame and the keepalive are
 // likewise untouched, so a half-open peer is still detected on the beat.
-func unitPush(lc *tabStream, stream *stream, from *Ctx, render func(*revertSet) (*Ctx, []byte),
-	writeFrame func(io.Writer, []byte), fatalMsg string, fatal func(rec any) ([]any, bool),
-) (push, baseline func()) {
-	var fatalLogged bool
-	var lastBody []byte // nil until the first frame, so the first push always ships
-	last := from        // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
-	push = func() {
-		lc.flushDirty(last)
-		defer func() {
-			rec := recover()
-			if rec == nil {
-				return
-			}
-			attrs, ok := fatal(rec)
-			if !ok {
-				panic(rec)
-			}
-			if !fatalLogged {
-				fatalLogged = true
-				lc.mount.cfg.log.Error(fatalMsg, attrs...)
-			}
-			stream.abort()
-		}()
-		bind, body := livePush(lc, render)
-		bind.push = push
-		last = bind
-		lc.replace(bind)
-		if bytes.Equal(body, lastBody) {
-			return
+func (p *unitPusher) push() {
+	p.lc.flushDirty(p.last)
+	defer p.recoverFatal()
+	bind, body := livePush(p.lc, p)
+	bind.pusher = p
+	p.last = bind
+	p.lc.replace(bind)
+	if bytes.Equal(body, p.lastBody) {
+		return
+	}
+	p.lastBody = append(p.lastBody[:0], body...)
+	p.stream.patch(p.frameID, body)
+}
+
+// baseline records the unit's current render as the last framed body without
+// framing it.
+func (p *unitPusher) baseline() {
+	_, body := livePush(p.lc, p)
+	p.lastBody = append(p.lastBody[:0], body...)
+}
+
+// recoverFatal tears the stream down on a panic that repeats on every frame,
+// logging it once; any other panic propagates to runPushItem's per-item
+// recover, which logs it and keeps the stream up.
+//
+// For the root it is a plain child's failed OnInit: initOutcome panics from
+// inside the render on every frame, and a push has no response to turn that
+// into a 500/303/404. Dropping the frame loops forever with no client-visible
+// signal at all, and rendering the child empty serves a page that is quietly
+// wrong. For a child it is a live grandchild grown under it: the tree shape,
+// not the data, is what's wrong. Either way the client's reconnect re-requests
+// the page and gets the real answer on a path that can give one.
+func (p *unitPusher) recoverFatal() {
+	rec := recover()
+	if rec == nil {
+		return
+	}
+	var msg string
+	var attrs []any
+	switch v := rec.(type) {
+	case initOutcome:
+		if p.frameID != "" {
+			panic(rec)
 		}
-		lastBody = append(lastBody[:0], body...)
-		stream.frame(func(w io.Writer) { writeFrame(w, body) })
+		msg = "via: live push aborted — an embedded child's OnInit failed; tearing the " +
+			"stream down so the client reconnects and gets the real answer"
+		attrs = []any{"err", v.err, "redirect", v.redirect}
+	case liveNestingViolation:
+		if p.frameID == "" {
+			panic(rec)
+		}
+		msg = "via: live push aborted — this child grew a live descendant of its " +
+			"own, which via.Child cannot host; tearing the stream down so the client reconnects and " +
+			"gets the real answer"
+		attrs = []any{"err", v.msg}
+	default:
+		panic(rec)
 	}
-	return push, func() {
-		_, body := livePush(lc, render)
-		lastBody = append(lastBody[:0], body...)
+	if !p.fatalLogged {
+		p.fatalLogged = true
+		p.lc.mount.cfg.log.Error(msg, attrs...)
 	}
+	p.stream.abort()
 }
 
 // connect is the SSE stream's entry point at {base}/_via/sse. Every mount gets
@@ -294,7 +294,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	if m.routerCtx != nil {
 		defer context.AfterFunc(m.routerCtx, stream.end)()
 	}
-	keepalive := func() { stream.frame(writeKeepaliveFrame) }
 	pushq := make(chan func())
 
 	// The credential dispatch requires a match against, so that a leaked tab id
@@ -371,7 +370,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		mount:           m,
 		pushq:           pushq,
 		done:            streamCtx.Done(),
-		pushSignals:     func(j string) { stream.frame(func(w io.Writer) { writeSignalsFrame(w, j) }) },
 		units:           map[string]*Ctx{},
 		sess:            connSID,
 		handlers:        units,
@@ -423,12 +421,12 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	}
 
 	for _, u := range units {
-		baseline := connectUnit(u, stream, base, lc)
+		p := connectUnit(u, stream, base, lc)
 		// The post-connect push below compares against the unit's last framed
 		// body; without this it would be empty and that push would ship a full
 		// frame even for an OnConnect fn that changed nothing.
 		if len(u.onConnect) > 0 {
-			baseline()
+			p.baseline()
 		}
 		for _, fn := range u.onConnect {
 			fn()
@@ -453,7 +451,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	headersSent = true
-	stream.frame(func(w io.Writer) { writeSignalsFrame(w, `{"`+tabSignal+`":"`+id+`"}`) })
+	stream.signals(`{"` + tabSignal + `":"` + id + `"}`)
 
 	// The connect response is flushed now. A Tick/Listen handler runs against
 	// this same unit Ctx for the life of the connection, so leaving sessW set
@@ -478,13 +476,13 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// only if the render moved off the baseline taken before the fns ran.
 	for _, u := range units {
 		if len(u.onConnect) > 0 {
-			runPushItem(m.cfg.log, guard, u.push)
+			runPushItem(m.cfg.log, guard, u.pusher.push)
 		}
 	}
 
 	streaming = true
 	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, pushq, func() {
-		keepalive()
+		stream.keepalive()
 		lc.revalidate()
 	}, sseHeartbeat)
 }
