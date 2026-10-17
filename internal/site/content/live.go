@@ -55,7 +55,8 @@ func (p *Live) View() h.H {
 		h.P(h.Str("Without a trigger, a page is a request and a response. With one, via opens one SSE connection "+
 			"for the tab and pushes element patches down it. One stream per tab, not per unit: every "),
 			d.Link("/glossary#live-unit", "live unit"), h.Str(" on the page shares one connection. "+
-				"A tab is that one connection, so \"per tab\" in these docs means per connection: a reload is a new tab.")),
+				"A tab is one page load: a dropped connection reconnects under the same tab id, and a reload is a new tab. "+
+				"Each connection runs OnInit afresh, so state these docs call per tab lasts one connection.")),
 		h.P(h.Str("Actions do not change transport. A click still POSTs; an action on a live unit answers "+
 			"as a frame on the stream instead of in the POST's own body.")),
 		h.P(h.Str("Liveness is decided once, by the render that served the page. An action cannot turn a plain "+

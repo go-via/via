@@ -144,7 +144,7 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 	if !ok {
 		return nil
 	}
-	ctx.reinit = true
+	ctx.inReload = true
 	// A paramMiss means the URL segment no longer decodes — the same 404 the
 	// first OnInit would have answered.
 	defer recoverParamMiss(&err)

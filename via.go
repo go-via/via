@@ -545,7 +545,7 @@ type Ctx struct {
 	// child's hydrated values survive into the next pass the way a root's do.
 	passUnits map[string]*Ctx
 	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
-	reinit    bool            // this Ctx is OnReload's: load again, register nothing
+	inReload  bool            // this Ctx is OnReload's: load again, register nothing
 	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
 	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)

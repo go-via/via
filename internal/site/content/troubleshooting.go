@@ -148,7 +148,7 @@ func (p *Troubleshooting) View() h.H {
 			Code("data-via-connection"), h.Str(" alone; Datastar fires a "), Code("datastar-fetch"),
 			h.Str(" error event on the element that made the request, for a message of your own.")),
 		h.P(h.Str("A banner right after every deploy is expected; state that lives only in a "), API("via.State"),
-			h.Str(" starts over, since a reconnect is a new connection. A Disconnected banner that stays on first load is a stream "+
+			h.Str(" starts over, since the page reloads into a new tab. A Disconnected banner that stays on first load is a stream "+
 				"connect answering 403, or a 5xx on every reload: read the Network tab for the status and find it on this page. The reload count clears 5 seconds after a "+
 				"load, so a server that fails straight after every reload stops at two.")),
 		tsSee(d, "/live#connection-lifecycle", "Live state: Connection lifecycle"),

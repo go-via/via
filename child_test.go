@@ -37,12 +37,12 @@ func (b *beater) View() h.H {
 }
 
 // duo children two live beaters; it is itself plain (no State, Tick or Listen)
-// — a multiplex parent whose live children share one SSE stream.
+// — a parent whose live children share the tab's one SSE stream.
 type duo struct{ A, B beater }
 
 func (d *duo) View() h.H { return h.Div(via.Child(d.A), via.Child(d.B)) }
 
-func TestMux_eachLiveChildPushesItsOwnContainer(t *testing.T) {
+func TestChild_eachLiveChildPushesItsOwnContainer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(duo{}))
 		conn := app.Connect()
@@ -79,7 +79,7 @@ type failPair struct {
 
 func (p *failPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+func TestChild_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
 	resp, _ := do(t, serve(t, via.Handler(failPair{A: liveProbe{acquired: acquired}})),
@@ -107,7 +107,7 @@ type panicPair struct {
 
 func (p *panicPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+func TestChild_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
 	resp, _ := do(t, serve(t, via.Handler(panicPair{A: liveProbe{acquired: acquired}})),
@@ -185,7 +185,7 @@ type solo struct{ X liveNamer }
 
 func (s *solo) View() h.H { return h.Div(via.Child(s.X)) }
 
-func TestMux_liveChildSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
+func TestChild_liveChildSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
 	srv := via.Handler(solo{})
 
@@ -235,21 +235,21 @@ type panel struct{ A, B liveClicker }
 
 func (p *panel) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
+func TestChild_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect()
 
 		// URL id 1 addresses this child; Live routes it to this connection's tab.
 		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
-		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
+		assert.Equal(t, http.StatusNoContent, status, "a live child action acks 204; the result rides the SSE")
 
 		conn.Await("selector #via-i0") // the action's push must target its own child container
 		conn.Await("c=1")
 	})
 }
 
-func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
+func TestChild_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
@@ -259,7 +259,7 @@ func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 	})
 }
 
-func TestMux_liveChildActionBindingCarriesChildID(t *testing.T) {
+func TestChild_liveChildActionBindingCarriesChildID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body,
@@ -301,7 +301,7 @@ func TestChild_plainRootPatchLeavesLiveChildRegionAlone(t *testing.T) {
 	})
 }
 
-func TestMux_parentWithLiveChildsEmitsTheBootstrap(t *testing.T) {
+func TestChild_parentWithLiveChildrenEmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(duo{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,

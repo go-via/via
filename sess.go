@@ -326,7 +326,7 @@ func (m *sessionManager) fanout(src *sessionData, vals map[string]json.RawMessag
 
 // rotated ends every stream still holding oldID: what it rendered was decided
 // under the auth state the Rotate marks as over, and the id it holds no longer
-// resolves. The reconnect reloads the page under the new cookie. keep, when
+// resolves. The client reloads the page under the new cookie. keep, when
 // set, is the stream whose own live action rotated: that tab is the one the
 // user is acting in, and its handlers move to newID instead. keep's goroutine
 // is the one running this call, so it may touch its handler Ctxs.

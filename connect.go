@@ -181,8 +181,8 @@ func (p *unitPusher) baseline() {
 // into a 500/303/404. Dropping the frame loops forever with no client-visible
 // signal at all, and rendering the child empty serves a page that is quietly
 // wrong. For a child it is a live grandchild grown under it: the tree shape,
-// not the data, is what's wrong. Either way the client's reconnect re-requests
-// the page and gets the real answer on a path that can give one.
+// not the data, is what's wrong. Either way the client reloads the page after
+// the stream ends and gets the real answer on a path that can give one.
 func (p *unitPusher) recoverFatal() {
 	rec := recover()
 	if rec == nil {
@@ -196,14 +196,14 @@ func (p *unitPusher) recoverFatal() {
 			panic(rec)
 		}
 		msg = "via: live push aborted — an embedded child's OnInit failed; tearing the " +
-			"stream down so the client reconnects and gets the real answer"
+			"stream down so the client reloads and gets the real answer"
 		attrs = []any{"err", v.err, "redirect", v.redirect}
 	case liveNestingViolation:
 		if p.frameID == "" {
 			panic(rec)
 		}
 		msg = "via: live push aborted — this child grew a live descendant of its " +
-			"own, which via.Child cannot host; tearing the stream down so the client reconnects and " +
+			"own, which via.Child cannot host; tearing the stream down so the client reloads and " +
 			"gets the real answer"
 		attrs = []any{"err", v.msg}
 	default:

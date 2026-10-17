@@ -32,7 +32,7 @@ type tabStream struct {
 	rev             *revertSet                 // how to undo that application before the next authority render
 	badDecodeLogged *atomic.Bool               // dedupes the hydrator's decode-failure warning for this connection's life
 
-	id           string      // the per-connection tab id, for correlating a log line with a tab
+	id           string      // the tab id, for correlating a log line with a tab
 	pinnedLogged atomic.Bool // warnPinned is once per connection, not once per click
 	// pinTimerLogged is the stream timer's own once-flag: a Tick that ran long
 	// once must not silence the action that later finds the tab truly pinned.
@@ -92,8 +92,8 @@ func (c *tabStream) moveSession(oldID, newID string) {
 
 // revalidate runs on the keepalive beat. The in-process index cannot hear a
 // Rotate, a logout or an expiry on another process sharing the store, so the
-// stream reads its session back and closes if it is gone; the reconnect then
-// resolves whatever the cookie names now. A store error is an outage, not a
+// stream reads its session back and closes if it is gone; the page reload
+// that follows resolves whatever the cookie names now. A store error is an outage, not a
 // revocation: the stream stays up and the next beat asks again.
 func (c *tabStream) revalidate() {
 	select {

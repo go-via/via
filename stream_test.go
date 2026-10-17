@@ -462,7 +462,7 @@ func awaitLine(t *testing.T, lines <-chan string, want string) {
 var tabRe = regexp.MustCompile(`"viatab":"([^"]+)"`)
 
 // awaitTabID reads the SSE stream until the connect-time signals frame that
-// carries the per-connection tab id, and returns it.
+// carries the tab id, and returns it.
 func awaitTabID(t *testing.T, lines <-chan string) string {
 	t.Helper()
 	deadline := time.After(2 * time.Second)

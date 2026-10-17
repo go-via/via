@@ -336,7 +336,7 @@ func (a *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Conn is an open SSE stream to a live page, carrying its per-connection tab id.
+// Conn is an open SSE stream to a live page, carrying its tab id.
 type Conn struct {
 	t        testing.TB
 	app      *App
@@ -417,7 +417,7 @@ func (c *Conn) arrived(read int) string {
 	return b.String()
 }
 
-// tabSignal mirrors via's own wire name for the per-connection tab id.
+// tabSignal mirrors via's own wire name for the tab id.
 const tabSignal = "viatab"
 
 var tabRE = regexp.MustCompile(`"` + tabSignal + `":"([^"]+)"`)

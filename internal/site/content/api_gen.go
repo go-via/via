@@ -371,7 +371,7 @@ var apiSymbols = []apiSymbol{
 	{"vt", "App.ConnectWith", "method", "func (a *App) ConnectWith(body string) *Conn", "ConnectWith is Connect with a hand-written connect body — the page signals a real client ships with its @post('/_via/sse').", ""},
 	{"vt", "App.Get", "method", "func (a *App) Get(path string) (int, string)", "Get fetches path and returns the status code and body.", ""},
 	{"vt", "App.URL", "method", "func (a *App) URL() string", "URL is the server's base URL — the origin a test hand-rolls a request against when the builder methods above don't fit.", ""},
-	{"vt", "Conn", "type", "type Conn struct{ … }", "Conn is an open SSE stream to a live page, carrying its per-connection tab id.", ""},
+	{"vt", "Conn", "type", "type Conn struct{ … }", "Conn is an open SSE stream to a live page, carrying its tab id.", ""},
 	{"vt", "Conn.ActionURL", "method", "func (c *Conn) ActionURL(child string, n int) string", "ActionURL returns the currently-rendered URL of child's n-th action, in document order — read off the latest datastar-patch-elements frame that carries one, the same markup a browser's DOM would hold at this point, not a separate plain GET's render.", ""},
 	{"vt", "Conn.Await", "method", "func (c *Conn) Await(needle string) string", "Await blocks until a frame line containing needle arrives and returns that line, failing the test after 2s otherwise.", ""},
 	{"vt", "Conn.AwaitClose", "method", "func (c *Conn) AwaitClose() error", "AwaitClose blocks until the server ends the stream and returns the error that ended it — nil when the response terminated cleanly, which is what a graceful shutdown owes the client; a non-nil error means the client saw a truncated stream.", ""},
