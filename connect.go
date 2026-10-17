@@ -154,13 +154,7 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 func (p *unitPusher) push() {
 	p.lc.flushDirty(p.last)
 	defer p.recoverFatal()
-	bind, body := livePush(p.lc, p)
-	bind.pusher = p
-	// Actions run on the latest bind, so it must carry the stream context
-	// Ctx.Context hands them.
-	bind.streamCtx = p.last.streamCtx
-	p.last = bind
-	p.lc.replace(bind)
+	body := p.rebind()
 	if bytes.Equal(body, p.lastBody) {
 		return
 	}
@@ -171,8 +165,22 @@ func (p *unitPusher) push() {
 // baseline records the unit's current render as the last framed body without
 // framing it.
 func (p *unitPusher) baseline() {
-	_, body := livePush(p.lc, p)
+	body := p.rebind()
 	p.lastBody = append(p.lastBody[:0], body...)
+}
+
+// rebind renders the unit and makes that render's bind the one later Sets and
+// actions land on: the render re-bound every handle to it, so a Signal.Set
+// made after it dirties it and nothing else.
+func (p *unitPusher) rebind() []byte {
+	bind, body := livePush(p.lc, p)
+	bind.pusher = p
+	// Actions run on the latest bind, so it must carry the stream context
+	// Ctx.Context hands them.
+	bind.streamCtx = p.last.streamCtx
+	p.last = bind
+	p.lc.replace(bind)
+	return body
 }
 
 // recoverFatal tears the stream down on a panic that repeats on every frame,

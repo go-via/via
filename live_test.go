@@ -1499,3 +1499,22 @@ func TestLive_anActionsContextIsTheStreamsNotThePOSTs(t *testing.T) {
 		assert.Error(t, actx.Err(), "and end with the tab's stream")
 	})
 }
+
+type connectSetsSignal struct {
+	S via.Signal[int]
+	n via.State[int]
+}
+
+func (p *connectSetsSignal) OnInit(ctx *via.Ctx) error {
+	ctx.OnConnect(func() { p.S.Set(7) })
+	return nil
+}
+
+func (p *connectSetsSignal) View() h.H { return h.Div(h.Input(p.S.Bind()), p.n.Display()) }
+
+func TestLive_aSignalSetInOnConnectReachesTheClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(connectSetsSignal{}))
+		app.Connect().Await(`"s":7`)
+	})
+}
