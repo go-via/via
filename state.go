@@ -83,14 +83,14 @@ func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 // seedApplier writes through the handle pointer the type walk found by offset.
 // List[E] embeds State[[]E] first, so that pointer is the embedded State's
 // address too and a List seeds through this same applier.
-func (*State[T]) seedApplier(v any) seedApplier { return stateSeed[T]{v.(T)} }
+func (*State[T]) seedApplier(raw string) seedApplier { return stateSeed[T]{raw} }
 
-type stateSeed[T any] struct{ seed T }
+type stateSeed[T any] struct{ raw string }
 
 func (a stateSeed[T]) apply(handle unsafe.Pointer) any {
 	s := (*State[T])(handle)
 	if !s.lit {
-		s.lit, s.val = true, a.seed
+		s.lit, s.val = true, mustSeed[T](a.raw)
 	}
 	return s.val
 }
@@ -185,7 +185,6 @@ func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: slices.Clip(
 
 // A seed's array is shared by every tab copied from the mounted literal, so it
 // is clipped: the first Append reallocates instead of writing into it.
-func (*List[E]) seedApplier(v any) seedApplier { return stateSeed[[]E]{slices.Clip(v.([]E))} }
 
 // Append adds v to the end of this connection's list and schedules the push,
 // like any Set. It re-slices in place when there is capacity, so appending in a

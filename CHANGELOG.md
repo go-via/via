@@ -34,7 +34,11 @@
   edits into others. Each tab copies the mounted literal, so all of them
   shared the seed's array, and `Remove` shifted it in place: after one tab
   removed and appended, a fresh GET rendered that tab's list. `Remove` now
-  builds a new array, and a seed is clipped so the first `Append` reallocates.
+  builds a new array, a `ListOf` seed is clipped so the first `Append`
+  reallocates, and a tag seed is decoded afresh for each request.
+- A `State` or `Signal` seeded by a `via:"init=…"` tag holding a map no longer
+  shares that map across requests: a write into one request's map showed in
+  every later one, and two tabs writing at once raced.
 - `expr` groups a composite operand: `expr.Raw("$a || $b").Not()` is
   `(!($a || $b))` and `.Eq(1)` is `(($a || $b) === 1)`. Both used to bind to
   the last term only. A bare `$name`, an unsigned number, a string literal and

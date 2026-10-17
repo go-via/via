@@ -167,14 +167,14 @@ type Signal[T any] struct {
 
 func (*Signal[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
-func (*Signal[T]) seedApplier(v any) seedApplier { return signalSeed[T]{v.(T)} }
+func (*Signal[T]) seedApplier(raw string) seedApplier { return signalSeed[T]{raw} }
 
-type signalSeed[T any] struct{ seed T }
+type signalSeed[T any] struct{ raw string }
 
 func (a signalSeed[T]) apply(handle unsafe.Pointer) any {
 	s := (*Signal[T])(handle)
 	if !s.settled {
-		s.settled, s.val = true, a.seed
+		s.settled, s.val = true, mustSeed[T](a.raw)
 	}
 	return s.val
 }
@@ -188,6 +188,15 @@ func jsonSeed[T any](raw string) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// mustSeed decodes a tag decodeSeedTag already accepted at Mount.
+func mustSeed[T any](raw string) T {
+	var v T
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		panic("via: a seed that decoded at Mount failed to decode: " + err.Error())
+	}
+	return v
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
@@ -376,7 +385,7 @@ func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw
 // seedApplier has nothing to write: a SignalCS holds no value, so its seed
 // lives in the type table and reaches the client through the declaration
 // prebindSignals makes. The nil keeps that fact in one place.
-func (*SignalCS[T]) seedApplier(any) seedApplier { return nil }
+func (*SignalCS[T]) seedApplier(string) seedApplier { return nil }
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,

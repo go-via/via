@@ -677,3 +677,23 @@ func TestList_aTabsRemoveAndAppendLeaveTheSeedOtherTabsGet(t *testing.T) {
 	assert.Contains(t, page, "lit=a,b,c,<")
 	assert.Contains(t, page, "tagged=x,y,z,<")
 }
+
+type mapSeed struct {
+	Tags via.State[map[string]int] `via:"init={\"a\":1}"`
+}
+
+func (p *mapSeed) Mark(*via.Ctx) { p.Tags.Get()["leak"] = 1 }
+
+func (p *mapSeed) View() h.H {
+	return h.Div(h.Str(len(p.Tags.Get())), h.Button(on.Click(p.Mark)))
+}
+
+func TestState_aTaggedMapSeedIsEachRequestsOwn(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mapSeed{}))
+	code, _ := app.Action(0).Fire()
+	require.Less(t, code, 300)
+
+	_, body := app.Get("/")
+	assert.Contains(t, body, "<div>1<", "a write into one request's seeded map must not reach the next")
+}

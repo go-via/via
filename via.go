@@ -167,9 +167,9 @@ type clientSignal interface {
 // seeded is the one mechanism behind via:"init=<json>", implemented by
 // *Signal[T], *SignalCS[T] and *State[T] — and by *List[E] through the State it
 // embeds first, so the pointer the applier receives is the embedded State's
-// address too. decodeSeed carries T out of the generic type, and seedApplier
-// builds the typed write once, on the Mount walk, so a seed costs an interface
-// call per unit and no reflection.
+// address too. decodeSeed carries T out of the generic type and checks the tag
+// at Mount; seedApplier builds the typed write, which decodes the tag afresh
+// for each unit so no two requests share a seeded map, slice or pointer.
 //
 // The applier writes only into a handle whose start value is not decided yet —
 // a StateOf literal wins over the tag, and a later pass over the same instance
@@ -177,11 +177,11 @@ type clientSignal interface {
 // is what a Signal's slot is declared at.
 type seeded interface {
 	decodeSeed(raw string) (any, error)
-	seedApplier(v any) seedApplier
+	seedApplier(raw string) seedApplier
 }
 
-// seedApplier writes a decoded seed into the handle at its pointer and
-// returns the value the handle then holds.
+// seedApplier writes a seed into the handle at its pointer and returns the
+// value the handle then holds.
 type seedApplier interface {
 	apply(handle unsafe.Pointer) any
 }
@@ -269,9 +269,11 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 				sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
 			}
 			if tagged {
-				sf.seed, sf.declares = decodeSeedTag(t, f, handle.(seeded), tag), true
+				var raw string
+				sf.seed, raw = decodeSeedTag(t, f, handle.(seeded), tag)
+				sf.declares = true
 				if !sf.cs {
-					sf.applier = handle.(seeded).seedApplier(sf.seed)
+					sf.applier = handle.(seeded).seedApplier(raw)
 				}
 			}
 			slot := sf.wire("")
@@ -285,8 +287,8 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 			handle := reflect.New(f.Type).Interface()
 			if tagged {
 				h := handle.(seeded)
-				v := decodeSeedTag(t, f, h, tag)
-				ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(v)})
+				_, raw := decodeSeedTag(t, f, h, tag)
+				ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(raw)})
 			}
 			// Every State lands here, tracked or not: whether this instance
 			// carries a StateTrack literal is a per-instance fact the type
@@ -315,13 +317,14 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 // decodeSeedTag resolves a handle field's declared start value from its tag.
 // A tag that fails to decode is a typo caught here, at Mount, rather than
 // surfacing as a handle quietly holding a value nobody wrote.
-func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) any {
-	v, err := h.decodeSeed(parseSeedTag(owner, f, tag))
+func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) (v any, raw string) {
+	raw = parseSeedTag(owner, f, tag)
+	v, err := h.decodeSeed(raw)
 	if err != nil {
 		panic("via: " + owner.String() + "." + f.Name + " has a via:\"init=…\" value that is not JSON " +
 			"for its " + f.Type.String() + " type: " + err.Error())
 	}
-	return v
+	return v, raw
 }
 
 // parseSeedTag splits the one key via knows off the tag. The value runs to the
