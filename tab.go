@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -207,13 +208,14 @@ func (c *tabStream) declareOpened(prev, cur *Ctx) {
 		return
 	}
 	had := map[string]bool{}
-	declaredSlots(prev, had)
+	prev.collectSlots(had)
 	opened := map[string]any{}
 	openedSlots(cur, had, opened)
 	if len(opened) == 0 {
 		return
 	}
-	if raw, err := json.Marshal(opened); err == nil {
+	want := slices.Sorted(maps.Keys(opened))
+	if raw, n := encodeSlots(c.mount.cfg.log, want, opened); n > 0 {
 		c.wire.signals(string(raw))
 	}
 }
@@ -230,15 +232,6 @@ func sameSlots(a, b *Ctx) bool {
 		}
 	}
 	return true
-}
-
-func declaredSlots(c *Ctx, into map[string]bool) {
-	for _, slot := range c.order {
-		into[slot] = true
-	}
-	for _, isl := range c.children {
-		declaredSlots(isl, into)
-	}
 }
 
 func openedSlots(c *Ctx, had map[string]bool, into map[string]any) {

@@ -149,7 +149,8 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 // It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its
 // patch-signals frame, and a DOM change with no signal change still ships its
-// element patch. The connect handshake's signals frame and the keepalive are
+// element patch. declareOpened's seed frame for newly declared slots likewise
+// ships ahead of this check. The connect handshake's signals frame and the keepalive are
 // likewise untouched, so a half-open peer is still detected on the beat.
 func (p *unitPusher) push() {
 	p.lc.flushDirty(p.last)

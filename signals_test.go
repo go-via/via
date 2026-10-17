@@ -956,3 +956,30 @@ func TestSignal_aLivePushDeclaresASlotItsBranchJustOpened(t *testing.T) {
 		conn.Await(`"email":""`) // the client store has no value for it, so a Display would read undefined
 	})
 }
+
+type noteKid struct{ Note via.Signal[string] }
+
+func (k *noteKid) View() h.H { return h.Div(k.Note.Display()) }
+
+// kidOpener is live through its State and opens a child holding a signal.
+type kidOpener struct {
+	open via.State[bool]
+	Kid  noteKid
+}
+
+func (p *kidOpener) Open(*via.Ctx) { p.open.Set(true) }
+func (p *kidOpener) kid() h.H      { return via.Child(p.Kid) }
+func (p *kidOpener) View() h.H {
+	return h.Div(p.open.Display(), h.Button(on.Click(p.Open)), via.When(p.open.Get(), p.kid))
+}
+
+func TestSignal_aLivePushDeclaresASlotInAChildItJustOpened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(kidOpener{}))
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.Action(0).Over(conn).Fire()
+		conn.Await(`"kid__note":""`)
+	})
+}
