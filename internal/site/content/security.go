@@ -38,6 +38,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://evil.example' \
 const signInTranscript = `$ curl -si -H 'Origin: https://example.com' \
     -F name=ada -F _viatab= https://example.com/security/_via/a/1/<id>
 HTTP/1.1 303 See Other
+Cache-Control: private, no-store
 Location: /security
 Set-Cookie: via_session=<signed id>; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax
 Date: Fri, 25 Sep 2026 16:10:27 GMT
