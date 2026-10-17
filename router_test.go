@@ -1658,7 +1658,7 @@ func (c *closePage) View() h.H     { return h.Div(c.n.Display()) }
 func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 	t.Parallel()
 	admitted := 0
-	for range 50 {
+	for i := range 50 {
 		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
 		r := via.NewRouter()
 		via.Mount(r, "/", closePage{opened: opened, disposed: disposed})
@@ -1677,11 +1677,12 @@ func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 			resp.Body.Close()
 			status <- resp.StatusCode
 		}()
-		// Long enough for the connect to clear the shutting-down check, short
-		// enough that it is still setting the stream up. The window between
-		// that check and the WaitGroup join is internal, so a sleep is the
-		// only way to aim at it from outside.
-		time.Sleep(300 * time.Microsecond)
+		// The window between the shutting-down check and the WaitGroup join is
+		// internal, so a sleep is the only way to aim at it from outside. The
+		// delay sweeps 0 to ~10ms, densest at the short end: the early tries
+		// land in the window on a fast machine, the late ones admit a stream
+		// on a loaded one, so the run is never vacuous.
+		time.Sleep(time.Duration(i*i) * 4 * time.Microsecond)
 		r.Close()
 		// The connect joins the WaitGroup before it runs OnInit, so an admitted
 		// stream Close did not drain shows up here as an opened stream with no
