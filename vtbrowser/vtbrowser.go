@@ -146,10 +146,12 @@ const streamWatch = `document.addEventListener('datastar-fetch',function(e){var 
 
 func (s *Session) watchStream() {
 	s.t.Helper()
-	s.run("install the stream watch", chromedp.ActionFunc(func(ctx context.Context) error {
-		_, err := page.AddScriptToEvaluateOnNewDocument(streamWatch).Do(ctx)
-		return err
-	}))
+	s.run("install the stream watch", chromedp.ActionFunc(installStreamWatch))
+}
+
+func installStreamWatch(ctx context.Context) error {
+	_, err := page.AddScriptToEvaluateOnNewDocument(streamWatch).Do(ctx)
+	return err
 }
 
 func (s *Session) navigate() {
@@ -192,7 +194,7 @@ func (s *Session) Restart(gap time.Duration, handler http.Handler) {
 	srv.Listener.Close()
 	srv.Listener = ln
 	srv.Start()
-	s.t.Cleanup(func() { srv.CloseClientConnections(); srv.Close() })
+	s.t.Cleanup(serverCloser{srv}.close)
 	s.srv = srv
 }
 
@@ -230,8 +232,18 @@ func (s *Session) Value(selector string) string {
 // containing want, absorbing SSE patch latency without a fixed sleep.
 func (s *Session) WaitTextContains(selector, want string) {
 	s.t.Helper()
-	s.WaitFor(selector, func(text string) bool { return strings.Contains(text, want) },
-		fmt.Sprintf("text to contain %q", want))
+	s.WaitFor(selector, containsText(want).match, fmt.Sprintf("text to contain %q", want))
+}
+
+type containsText string
+
+func (want containsText) match(text string) bool { return strings.Contains(text, string(want)) }
+
+type serverCloser struct{ srv *httptest.Server }
+
+func (c serverCloser) close() {
+	c.srv.CloseClientConnections()
+	c.srv.Close()
 }
 
 // WaitValue polls until the first input matching selector has value want. A

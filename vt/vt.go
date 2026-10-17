@@ -110,14 +110,14 @@ func Logger(t testing.TB) *slog.Logger {
 	t.Cleanup(w.end)
 	// The time is dropped: under synctest it is the fake clock's, and go test
 	// already orders the lines under their test.
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
-		},
-	}))
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{ReplaceAttr: dropTime}))
+}
+
+func dropTime(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey {
+		return slog.Attr{}
+	}
+	return a
 }
 
 type testLog struct {
@@ -460,56 +460,62 @@ func (a *App) ConnectAt(path, body string) *Conn {
 
 	frames := make(chan string, 256)
 	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel, closed: make(chan struct{})}
-	go func() {
-		defer close(frames)
-		defer resp.Body.Close()
-		sc := bufio.NewScanner(resp.Body)
-		// Recorded before close(closed), so AwaitClose never observes the
-		// channel shut with the error not yet stored.
-		defer func() {
-			c.mu.Lock()
-			c.readErr = sc.Err()
-			c.endEvent()
-			c.mu.Unlock()
-			close(c.closed)
-		}()
-		inElements := false
-		for sc.Scan() {
-			line := sc.Text()
-			c.mu.Lock()
-			if line == "" {
-				c.endEvent()
-			} else {
-				c.pending = append(c.pending, strings.TrimPrefix(strings.TrimPrefix(line, "event: "), "data: "))
-			}
-			c.mu.Unlock()
-			switch {
-			case strings.HasPrefix(line, "event:"):
-				inElements = strings.Contains(line, "datastar-patch-elements")
-				if inElements {
-					c.mu.Lock()
-					c.elements = append(c.elements, nil)
-					c.mu.Unlock()
-				}
-			case line == "":
-				inElements = false
-			case inElements:
-				c.mu.Lock()
-				i := len(c.elements) - 1
-				c.elements[i] = append(append(c.elements[i], line...), '\n')
-				c.mu.Unlock()
-			}
-			select {
-			case frames <- line:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	go c.read(ctx, resp, frames)
 
 	a.t.Cleanup(c.Close)
 	c.tabID = c.awaitTab()
 	return c
+}
+
+// read scans the stream into c's events and element patches, and forwards
+// each line on frames until ctx ends.
+func (c *Conn) read(ctx context.Context, resp *http.Response, frames chan<- string) {
+	defer close(frames)
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	defer c.endRead(sc)
+	inElements := false
+	for sc.Scan() {
+		line := sc.Text()
+		c.mu.Lock()
+		if line == "" {
+			c.endEvent()
+		} else {
+			c.pending = append(c.pending, strings.TrimPrefix(strings.TrimPrefix(line, "event: "), "data: "))
+		}
+		c.mu.Unlock()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			inElements = strings.Contains(line, "datastar-patch-elements")
+			if inElements {
+				c.mu.Lock()
+				c.elements = append(c.elements, nil)
+				c.mu.Unlock()
+			}
+		case line == "":
+			inElements = false
+		case inElements:
+			c.mu.Lock()
+			i := len(c.elements) - 1
+			c.elements[i] = append(append(c.elements[i], line...), '\n')
+			c.mu.Unlock()
+		}
+		select {
+		case frames <- line:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// endRead records the scan error before close(closed), so AwaitClose never
+// observes the channel shut with the error not yet stored.
+func (c *Conn) endRead(sc *bufio.Scanner) {
+	c.mu.Lock()
+	c.readErr = sc.Err()
+	c.endEvent()
+	c.mu.Unlock()
+	close(c.closed)
 }
 
 // TabID is the credential a live action must carry to route to this
