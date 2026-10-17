@@ -238,7 +238,9 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	}
 	child.unitV = inst
 	child.base = parent.base // the mount prefix, so the child's own action URLs carry it too
-	child.declareSeen = parent.declareSeen
+	// A child is the parent of its own children, so it passes the declaration
+	// down or a grandchild's slots never reach the client store.
+	child.declare, child.declareOnly, child.declareSeen = parent.declare, parent.declareOnly, parent.declareSeen
 	child.req = parent.req
 	child.sessions = parent.sessions
 	child.policy = parent.policy

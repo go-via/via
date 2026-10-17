@@ -1725,3 +1725,24 @@ func TestChild_aPlainChildsNativeSubmitAnswersALivePageForALiveRoot(t *testing.T
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "data-init", "the answering page must reconnect its live root")
 }
+
+type declInner struct {
+	N via.Signal[int] `via:"init=5"`
+}
+
+func (i *declInner) View() h.H { return h.Div(i.N.Display()) }
+
+type declMiddle struct{ In declInner }
+
+func (m *declMiddle) View() h.H { return h.Div(via.Child(m.In)) }
+
+type declOuter struct{ M declMiddle }
+
+func (o *declOuter) View() h.H { return h.Div(via.Child(o.M)) }
+
+func TestChild_aGrandchildDeclaresItsSignalsOnTheGET(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(declOuter{}))
+	_, page := app.Get("/")
+	assert.Contains(t, page, `"m__in__n":5`)
+}
