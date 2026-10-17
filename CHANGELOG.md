@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- `Session.Rotate` on a request with no session logs the random-key and in-memory-store warnings, as any other first write does.
 - `expr.CopyToClipboard` does nothing outside a secure context, where `navigator.clipboard` is undefined; it threw a TypeError there.
 - The reconnect banner stops probing after 20 failed probes, as documented; it ran a 21st.
 - A live unit's native form submit answers with a page whose OnInit sees the session its action wrote; it read the request's pre-action cookie, so a login there rendered logged out.

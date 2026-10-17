@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -2039,4 +2040,20 @@ func TestSession_aLiveNativeSubmitsPageSeesTheSessionItsActionWrote(t *testing.T
 	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "who=alice")
+}
+
+type rotateOnInit struct{}
+
+func (rotateOnInit) OnInit(ctx *via.Ctx) error { ctx.Session().Rotate(); return nil }
+func (rotateOnInit) View() h.H                 { return h.Div() }
+
+func TestSession_anAnonymousRotateWarnsLikeAnyMint(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	srv := httptest.NewServer(via.Handler(rotateOnInit{}, via.WithSessionTTL(time.Hour), logTo(&logs)))
+	t.Cleanup(srv.Close)
+
+	resp, _ := do(t, srv, http.MethodGet, "/", "")
+	require.NotEmpty(t, resp.Cookies(), "Rotate on a cookieless request mints a session")
+	assert.Contains(t, logs.String(), "random per-process key")
 }

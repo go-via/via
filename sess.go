@@ -980,12 +980,9 @@ func (s *Session) Rotate() string {
 		return ""
 	}
 	if s.data == nil {
-		id, d := s.mgr.create(s.storeCtx())
-		if d.mintFailed {
+		if s.ensure().mintFailed {
 			panic("via: Session.Rotate could not write the new session; no cookie was issued")
 		}
-		s.id, s.data = id, d
-		s.mgr.setCookie(s.w, s.id, s.secure)
 		return s.id
 	}
 	s.data.mu.Lock()
