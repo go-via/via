@@ -1,6 +1,7 @@
 package via_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -1613,4 +1614,34 @@ func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossALivePushAndAReconnect(t
 	_, page := app.Get("/")
 	status, _ = app.ChildAction("0", 0).Raw(actionURL(t, page, "0", 0)).Tab(again.TabID()).Fire()
 	assert.Less(t, status, 300, "a reconnect re-runs OnInit without re-framing; the page's URL must still dispatch")
+}
+
+type loggedChild struct {
+	N via.Signal[int]
+	n via.State[int]
+}
+
+func (c *loggedChild) Bump(*via.Ctx) { c.n.Set(c.n.Get() + 1) }
+
+func (c *loggedChild) View() h.H {
+	return h.Div(h.Input(c.N.Bind()), c.n.Display(), h.Button(on.Click(c.Bump)))
+}
+
+type loggedParent struct{ C loggedChild }
+
+func (p *loggedParent) View() h.H { return h.Div(via.Child(p.C)) }
+
+func TestChild_aLiveChildsPushKeepsTheRoutersLogger(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var buf bytes.Buffer
+		app := vt.Serve(t, via.Handler(loggedParent{}, via.WithLogger(slog.New(slog.NewTextHandler(&buf, nil)))))
+		conn := app.Connect()
+		code, _ := app.ChildAction("0", 0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		conn.Await(">1<")
+
+		code, _ = app.ChildAction("0", 0).Over(conn).Body(`{"c__n":"x"}`).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		assert.Contains(t, buf.String(), "did not decode", "the warning must reach WithLogger, not slog.Default")
+	})
 }

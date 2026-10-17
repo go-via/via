@@ -331,8 +331,11 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // proven plain, or it could never have become live), and whatever the
 // discovery render found for a plain action's re-render, since that unit may
 // legitimately sit beneath an already-live root (see checkLiveUnderLive).
-func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool) (*Ctx, []byte) {
+// pol is the Router's policy for a bind with no from to inherit it from, so
+// its warnings still reach WithLogger.
+func renderChildBind(key string, inst instance, base string, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool, pol *routerPolicy) (*Ctx, []byte) {
 	c := newCtx()
+	c.policy = pol
 	c.rev = rev
 	c.badDecodeLogged = badDecodeLogged
 	c.isChild = true

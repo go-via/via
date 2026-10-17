@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A live child's warnings after its first push go to `WithLogger`. They went to `slog.Default`.
 - `List.Append` always builds a new array. A list `Set` from a slice with spare capacity, such as a shared store snapshot, appended into that slice's array, so tabs holding the same snapshot overwrote each other.
 - `vt`: an action whose `Body` is `null` and carries a `Tab` posts the body as given instead of panicking.
 - `Mount` panics on a path that does not start with "/". A host-qualified pattern used to mount and render action URLs relative to the page, which missed.

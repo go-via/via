@@ -135,7 +135,7 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 	// unit could never have connected otherwise (checkLiveNesting already proved
 	// it at connect). Its own children are under a live ancestor regardless,
 	// since checkLiveUnderLive folds in c.live itself.
-	return renderChildBind(p.childKey, p.inst, p.base, nil, rev, p.lc.badDecodeLogged, false)
+	return renderChildBind(p.childKey, p.inst, p.base, nil, rev, p.lc.badDecodeLogged, false, p.from.policy)
 }
 
 // push renders and frames the unit. Unchanged frames are dropped (the
