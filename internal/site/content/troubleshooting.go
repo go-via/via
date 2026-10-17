@@ -85,8 +85,6 @@ func (p *Troubleshooting) View() h.H {
 				h.Str(", which fails. List it.")),
 			h.Li(h.Str("A proxy that strips "), Code("Sec-Fetch-*"), h.Str(" or rewrites "), Code("Host"),
 				h.Str(" to the upstream address. nginx needs "), Code("proxy_set_header Host $host;"), h.Str(".")),
-			h.Li(h.Str("An empty origin read from the environment, like the "), Code("VIA_ORIGIN"),
-				h.Str(" the Deploy page's main.go reads, so the listed value is not the site's.")),
 		),
 		snippet.Region("troubleshooting/limits.go", "origin", snippet.Title("main.go"), snippet.Mark("app.example.com")),
 		h.P(h.Str("A 403 with the body "), Code("session mismatch"), h.Str(" is a different check: a live action carried a "+
@@ -262,7 +260,7 @@ func (p *Troubleshooting) View() h.H {
 			Code("navigator.clipboard?.writeText"), h.Str(" and swallow a refused write, so it fails with nothing in the "+
 				"console. Browsers allow it in a secure context (HTTPS, or "), Code("localhost"),
 			h.Str("), from a user gesture, in a focused document. Over plain HTTP on a LAN address "),
-			Code("navigator.clipboard"), h.Str(" is undefined and the call throws; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
+			Code("navigator.clipboard"), h.Str(" is undefined and the call does nothing; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
 				"is refused. Bind it to "), API("on.ClickCS"), h.Str(" and serve over HTTPS.")),
 		tsSee(d, "/signals#expressions", "Signals: Expressions"),
 	)

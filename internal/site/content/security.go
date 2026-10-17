@@ -78,7 +78,7 @@ func (p *Security) View() h.H {
 			h.Str(" or "), Code("Forwarded: proto=https"), h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
 				"Behind a proxy, list the public origin: the allowlist is checked first, so a rewritten Host does not matter. "+
 				"A listed origin is compared as the browser sends it: host case, a default port and a trailing \"/\" do not "+
-				"matter, and a value with a path, query, fragment or userinfo panics at startup.")),
+				"matter, and a value with a path, query, fragment, userinfo, wildcard or empty port panics at startup.")),
 		snippet.Text("shell", crossOriginPOST),
 		Callout(Warning, "Without it, every origin is accepted",
 			h.P(h.Str("A plain action never checks the tab id, even on a page with live parts, so any site can post to it. "+

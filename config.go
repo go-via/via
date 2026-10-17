@@ -132,7 +132,7 @@ func (o loggerOption) apply(c *config) {
 // lower-cased and a default port dropped, so "https://Auth.example:443"
 // matches an Origin of "https://auth.example", and a trailing "/" is
 // dropped. It panics on a value that is not a bare http(s) origin: one with a
-// path, a query, a fragment or userinfo.
+// path, a query, a fragment, userinfo, a wildcard host or an empty port.
 func WithTrustedOrigin(origin string) Option {
 	return trustedOriginOption{origin}
 }
