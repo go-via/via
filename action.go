@@ -376,33 +376,41 @@ func isType(t reflect.Type, pkg, typ string) bool {
 // typ. An array is walked for at most two elements, which is enough to tell
 // one holder from several.
 func typePaths(unit reflect.Type, pkg, typ string) (paths []string, t reflect.Type, mixed bool) {
-	var walk func(cur reflect.Type, path string)
-	walk = func(cur reflect.Type, path string) {
-		if isType(cur, pkg, typ) {
-			mixed = mixed || t != nil && t != cur
-			paths, t = append(paths, path), cur
-			return
-		}
-		switch cur.Kind() {
-		case reflect.Struct:
-			for i := range cur.NumField() {
-				f := cur.Field(i)
-				p := f.Name
-				if path != "" {
-					p = path + "." + f.Name
-				}
-				walk(f.Type, p)
-			}
-		case reflect.Array:
-			for i := range min(cur.Len(), 2) {
-				walk(cur.Elem(), path+"["+strconv.Itoa(i)+"]")
-			}
-		}
-	}
+	w := typePathWalk{pkg: pkg, typ: typ}
 	if unit != nil {
-		walk(unit, "")
+		w.walk(unit, "")
 	}
-	return paths, t, mixed
+	return w.paths, w.t, w.mixed
+}
+
+type typePathWalk struct {
+	pkg, typ string
+	paths    []string
+	t        reflect.Type
+	mixed    bool
+}
+
+func (w *typePathWalk) walk(cur reflect.Type, path string) {
+	if isType(cur, w.pkg, w.typ) {
+		w.mixed = w.mixed || w.t != nil && w.t != cur
+		w.paths, w.t = append(w.paths, path), cur
+		return
+	}
+	switch cur.Kind() {
+	case reflect.Struct:
+		for i := range cur.NumField() {
+			f := cur.Field(i)
+			p := f.Name
+			if path != "" {
+				p = path + "." + f.Name
+			}
+			w.walk(f.Type, p)
+		}
+	case reflect.Array:
+		for i := range min(cur.Len(), 2) {
+			w.walk(cur.Elem(), path+"["+strconv.Itoa(i)+"]")
+		}
+	}
 }
 
 // funcMeta is the per-code-pointer half of the actionID memo; all of it is

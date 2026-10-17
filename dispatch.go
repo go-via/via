@@ -453,19 +453,19 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, "action failed", http.StatusInternalServerError)
 		return
 	}
-	if mode == modeNative {
-		m.respond(w, req, mode, res.redirect, func() {
-			// A native submit replaces the whole document, so this must be the
-			// page a brand-new connection will hold — a fresh instance with
-			// OnInit run, not a snapshot of the dying connection's live tree
-			// (which the reconnect is about to reseed anyway). The action just
-			// ran and may have mutated the session, so this OnInit resolves it
-			// fresh.
-			m.writePage(w, req, m.newInst(), base, nil)
-		}, nil)
+	if m.answerRedirect(w, req, mode, res.redirect) {
 		return
 	}
-	m.respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
+	if mode == modeNative {
+		// A native submit replaces the whole document, so this must be the
+		// page a brand-new connection will hold — a fresh instance with OnInit
+		// run, not a snapshot of the dying connection's live tree (which the
+		// reconnect is about to reseed anyway). The action just ran and may
+		// have mutated the session, so this OnInit resolves it fresh.
+		m.writePage(w, req, m.newInst(), base, nil)
+		return
+	}
+	writePatch(w, nil) // the push already framed it
 }
 
 // liveAction is one action POST handed to its tab's stream goroutine.
@@ -909,19 +909,18 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		u.redirect = rl.redirect
 	}
 
-	if mode == modeNative {
-		m.respond(w, req, mode, u.redirect, func() {
-			m.writePage(w, req, inst, base, u)
-		}, nil)
+	if m.answerRedirect(w, req, mode, u.redirect) {
 		return
 	}
-	m.respond(w, req, mode, u.redirect, nil, func() []byte {
-		b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
-		if b == nil {
-			m.warnNoChange(act, a.name, actedViewer(inst, u))
-		}
-		return b
-	})
+	if mode == modeNative {
+		m.writePage(w, req, inst, base, u)
+		return
+	}
+	b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
+	if b == nil {
+		m.warnNoChange(act, a.name, actedViewer(inst, u))
+	}
+	writePatch(w, b)
 }
 
 // actedViewer is the composition the action just mutated: the root, or the
@@ -1017,23 +1016,25 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 // value, and its slot must survive until then.
 func connectClient(bind *Ctx, in map[string]json.RawMessage) map[string]json.RawMessage {
 	keep := map[string]json.RawMessage{}
-	var walk func(c *Ctx)
-	walk = func(c *Ctx) {
-		if c.unitV.sig != nil {
-			for _, f := range c.unitV.sig.fields {
-				if raw, ok := in[f.wire(c.scopePrefix())]; ok && !f.cs {
-					keep[f.wire(c.scopePrefix())] = raw
-				}
-			}
-		}
-		for _, child := range c.children {
-			walk(child)
-		}
-	}
-	walk(bind)
+	keepSignalValues(bind, in, keep)
 	hydrateTree(bind, keep, map[string]bool{}) // drops what does not decode
 	bind.rev.restore()
 	return keep
+}
+
+// keepSignalValues copies into keep the values in carries for the non-CS
+// signal fields of c and its children.
+func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
+	if c.unitV.sig != nil {
+		for _, f := range c.unitV.sig.fields {
+			if raw, ok := in[f.wire(c.scopePrefix())]; ok && !f.cs {
+				keep[f.wire(c.scopePrefix())] = raw
+			}
+		}
+	}
+	for _, child := range c.children {
+		keepSignalValues(child, in, keep)
+	}
 }
 
 // maxHydratePasses bounds dispatchPlain's discovery loop. The loop cannot
@@ -1170,7 +1171,7 @@ const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
 
 // writeRedirectScript answers a @post with the navigation script. The target is
 // JSON-encoded into a header and reaches the DOM through setAttribute, never
-// through the HTML parser, and respond has already cleared it through
+// through the HTML parser, and answerRedirect has already cleared it through
 // render.SafeURL (see redirectTo) — so no javascript: target and no attribute
 // escape.
 func writeRedirectScript(w http.ResponseWriter, target string) {
@@ -1186,42 +1187,38 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 	w.Write([]byte(redirectInit))
 }
 
-// respond is dispatch's one response policy for every action POST — root,
-// child, live, or native form. A queued Redirect wins: a native submit gets a
-// 303, a Datastar @post gets the navigation script above. Either way the target
-// must clear Redirect's host check and render.SafeURL, the same URL policy
-// runOnInit and rendered href/src URLs use; a refused one is dropped, not
-// followed. Otherwise renderNative or renderPatch (nil for
-// "unchanged" / "the live push already carried it") decides the body.
-func (m *mount) respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect redirectTo, renderNative func(), renderPatch func() []byte) {
-	if redirect.url != "" {
-		switch refused := redirect.refusal(); {
-		case refused != "":
-			m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
-		case mode == modeNative:
-			http.Redirect(w, req, redirect.url, http.StatusSeeOther)
-			return
-		default:
-			writeRedirectScript(w, redirect.url)
-			return
-		}
+// answerRedirect is dispatch's one redirect policy for every action POST —
+// root, child, live, or native form. It writes a queued Redirect and reports
+// whether it did: a native submit gets a 303, a Datastar @post gets the
+// navigation script above. Either way the target must clear Redirect's host
+// check and render.SafeURL, the same URL policy runOnInit and rendered href/src
+// URLs use; a refused one is logged and dropped, not followed, and the caller
+// answers as if none was queued.
+func (m *mount) answerRedirect(w http.ResponseWriter, req *http.Request, mode actionMode, redirect redirectTo) bool {
+	if redirect.url == "" {
+		return false
 	}
-	if mode == modeNative {
-		renderNative()
-		return
+	switch refused := redirect.refusal(); {
+	case refused != "":
+		m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
+		return false
+	case mode == modeNative:
+		http.Redirect(w, req, redirect.url, http.StatusSeeOther)
+	default:
+		writeRedirectScript(w, redirect.url)
 	}
-	if renderPatch == nil {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	b := renderPatch()
+	return true
+}
+
+// writePatch answers a Datastar action with its element-patch fragment, or 204
+// for a nil one: unchanged, or already carried by the live push. Fragments take
+// the default policy: a fragment carries no document, so its header is inert —
+// only the page's policy governs what runs.
+func writePatch(w http.ResponseWriter, b []byte) {
 	if b == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// Element-patch fragments take the default policy: a fragment carries no
-	// document, so its header is inert — only the page's policy governs what
-	// runs.
 	hdr := w.Header()
 	hdr.Set("Content-Type", "text/html; charset=utf-8")
 	hdr.Set("X-Content-Type-Options", "nosniff")

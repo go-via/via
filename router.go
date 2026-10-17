@@ -164,7 +164,7 @@ func recoverParamMiss(err *error) {
 
 // answerReloadFailure answers a failed OnReload the way runOnInit answers a
 // failed OnInit. A queued Redirect is not handled here: the caller
-// routes it through respond, which knows the transport.
+// routes it through answerRedirect, which knows the transport.
 func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	noteErr(w, err)
 	switch {
