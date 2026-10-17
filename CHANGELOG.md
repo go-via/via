@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- `WithTrustedOrigin` panics on a wildcard host or an empty port, which no browser Origin header can match; it accepted them and refused every request they were meant to admit.
 - `Session.Rotate` on a request with no session logs the random-key and in-memory-store warnings, as any other first write does.
 - `expr.CopyToClipboard` does nothing outside a secure context, where `navigator.clipboard` is undefined; it threw a TypeError there.
 - The reconnect banner stops probing after 20 failed probes, as documented; it ran a 21st.

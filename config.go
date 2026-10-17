@@ -160,6 +160,10 @@ func bareOrigin(origin string) string {
 		badOrigin(origin, "has userinfo")
 	case u.Host == "":
 		badOrigin(origin, "has no host")
+	case strings.Contains(u.Host, "*"):
+		badOrigin(origin, "has a wildcard; list each origin")
+	case strings.HasSuffix(u.Host, ":"):
+		badOrigin(origin, "has an empty port")
 	case u.Path != "" && u.Path != "/" || u.RawPath != "":
 		badOrigin(origin, "has a path")
 	case u.RawQuery != "" || u.ForceQuery:

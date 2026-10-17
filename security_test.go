@@ -941,6 +941,8 @@ func TestWithTrustedOrigin_panicsOnAValueThatIsNotABareOrigin(t *testing.T) {
 		{"non-http scheme", "ftp://auth.example", "scheme"},
 		{"no scheme", "auth.example", "scheme"},
 		{"no host", "https://", "host"},
+		{"wildcard", "https://*.example.com", "wildcard"},
+		{"empty port", "https://example.com:", "empty port"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
