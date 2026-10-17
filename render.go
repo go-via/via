@@ -187,6 +187,6 @@ func bootRender(inst instance) (miswired string) {
 // liveNestingViolation is checkLiveUnderLive's panic value. Unlike a render
 // panic from user code, this rule is a fixed property of the tree shape: the
 // same push will hit it again on every following tick. childPush recovers it
-// by type (see connect.go) to abort the stream once instead of retrying it
+// by type (see unitPush) to abort the stream once instead of retrying it
 // forever the way runPushItem's generic per-item recover would.
 type liveNestingViolation struct{ msg string }

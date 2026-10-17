@@ -303,7 +303,7 @@ func (g *pushGuard) close(log *slog.Logger) {
 }
 
 // panicSite is the file:line the recovered panic started at. A deferred
-// recover that re-panics (rootPush's) sits between, so it is the frame past
+// recover that re-panics (unitPush's) sits between, so it is the frame past
 // the deepest runtime.gopanic, not the nearest.
 func panicSite() string {
 	pcs := make([]uintptr, 64)
