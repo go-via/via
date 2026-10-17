@@ -619,6 +619,11 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 	lc.shareSession(rc.session)
 
+	// Behind a Redirect the tab is navigating away, so nothing is pushed. A
+	// refused one navigates nowhere, so the push still runs.
+	if rc.redirect.url != "" && rc.redirect.refusal() == "" {
+		return actionResult{redirect: rc.redirect}
+	}
 	// The dirty set this action wrote is shipped by the push itself
 	// (tabStream.flushDirty), on the one path every server-driven signal change
 	// takes — a Tick/Listen handler's Set included.

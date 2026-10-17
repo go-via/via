@@ -2738,3 +2738,29 @@ func TestLiveAction_aFailedActionStillPushesWhatItChanged(t *testing.T) {
 		})
 	}
 }
+
+type liveSetRedirector struct{ n via.State[int] }
+
+func (c *liveSetRedirector) Go(ctx *via.Ctx) { c.n.Set(42); ctx.Redirect("/dest") }
+
+func (c *liveSetRedirector) View() h.H {
+	return h.Div(h.Str("n="), c.n.Display(), h.Button(on.Click(c.Go)))
+}
+
+func TestDispatchLive_aRedirectShipsNoRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveSetRedirector{}))
+		conn := app.Connect()
+		code, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusOK, code)
+		synctest.Wait()
+
+		for {
+			line, ok := conn.Peek()
+			if !ok {
+				break
+			}
+			assert.NotContains(t, line, "n=42", "the tab is navigating away; nothing from this render is shown")
+		}
+	})
+}

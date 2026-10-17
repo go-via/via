@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A live action that calls `Redirect` no longer pushes its unit's render over the stream, as `Redirect` documents.
 - A native form submit whose text fields or part count exceed multipart's limits answers 413, not 400 "malformed form".
 - A live child's warnings after its first push go to `WithLogger`. They went to `slog.Default`.
 - `List.Append` always builds a new array. A list `Set` from a slice with spare capacity, such as a shared store snapshot, appended into that slice's array, so tabs holding the same snapshot overwrote each other.
