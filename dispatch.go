@@ -432,7 +432,7 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		return
 	}
 	if res.initErr != nil {
-		answerReloadFailure(m.cfg.log, w, res.initErr)
+		answerHookError(m.cfg.log, w, res.initErr, "via: OnReload after an action failed")
 		return
 	}
 	if answerSentinel(w, res) {
@@ -919,7 +919,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	if u.redirect.url == "" {
 		rl := &Ctx{req: req, sessions: m.sessions, policy: m.policy, sessW: w, session: auth.session, base: base}
 		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
-			answerReloadFailure(m.cfg.log, w, err)
+			answerHookError(m.cfg.log, w, err, "via: OnReload after an action failed")
 			return
 		}
 		u.redirect = rl.redirect

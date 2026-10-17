@@ -92,19 +92,9 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	ctx.inInit = true
 	oerr := ic.OnInit(ctx)
 	if oerr != nil {
-		noteErr(w, oerr)
-		switch {
-		case errors.Is(oerr, ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
-		case errors.Is(oerr, ErrForbidden):
-			http.Error(w, "forbidden", http.StatusForbidden)
-		default:
-			ctx.logger().Error("via: OnInit failed", "err", oerr)
-			http.Error(w, "init failed", http.StatusInternalServerError)
-		}
-		return oerr
+		answerHookError(ctx.logger(), w, oerr, "via: OnInit failed")
 	}
-	return nil
+	return oerr
 }
 
 // answerInit is runOnInit's deferred answer: a recovered paramMiss becomes a
@@ -120,16 +110,22 @@ func answerInit(w http.ResponseWriter, req *http.Request, ctx *Ctx, sse bool, er
 		return
 	}
 	if *err == nil && ctx.redirect.url != "" {
-		switch refused := ctx.redirect.refusal(); {
-		case sse:
-			http.Error(w, "forbidden", http.StatusForbidden)
-		case refused != "":
-			ctx.logger().Warn("via: OnInit redirect dropped", "redirect", ctx.redirect, "reason", refused)
-			http.Error(w, "init failed", http.StatusInternalServerError)
-		default:
-			http.Redirect(w, req, ctx.redirect.url, http.StatusSeeOther)
-		}
+		answerInitRedirect(ctx.logger(), w, req, ctx.redirect, sse)
 		*err = errRedirected
+	}
+}
+
+// answerInitRedirect writes a Redirect queued by OnInit. A stream cannot
+// navigate, so on sse it is refused outright.
+func answerInitRedirect(log *slog.Logger, w http.ResponseWriter, req *http.Request, r redirectTo, sse bool) {
+	switch refused := r.refusal(); {
+	case sse:
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case refused != "":
+		log.Warn("via: OnInit redirect dropped", "redirect", r, "reason", refused)
+		http.Error(w, "init failed", http.StatusInternalServerError)
+	default:
+		http.Redirect(w, req, r.url, http.StatusSeeOther)
 	}
 }
 
@@ -162,10 +158,10 @@ func recoverParamMiss(err *error) {
 	}
 }
 
-// answerReloadFailure answers a failed OnReload the way runOnInit answers a
-// failed OnInit. A queued Redirect is not handled here: the caller
-// routes it through answerRedirect, which knows the transport.
-func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
+// answerHookError answers an error from OnInit or OnReload: ErrNotFound and
+// ErrForbidden by their status, anything else logged under failed and
+// answered 500. A queued Redirect is not handled here.
+func answerHookError(log *slog.Logger, w http.ResponseWriter, err error, failed string) {
 	noteErr(w, err)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -173,7 +169,7 @@ func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
-		log.Error("via: OnReload after an action failed", "err", err)
+		log.Error(failed, "err", err)
 		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
 }
@@ -225,27 +221,11 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 // answerInitFailure gives a child's failed OnInit the same answers
 // the root's gets in runOnInit.
 func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome, sse bool) {
-	switch {
-	case ci.redirect.url != "" && sse:
-		http.Error(w, "forbidden", http.StatusForbidden)
-	case ci.redirect.url != "":
-		if refused := ci.redirect.refusal(); refused != "" {
-			log.Warn("via: OnInit redirect dropped", "redirect", ci.redirect, "reason", refused)
-			http.Error(w, "init failed", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, req, ci.redirect.url, http.StatusSeeOther)
-	case errors.Is(ci.err, ErrNotFound):
-		noteErr(w, ci.err)
-		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(ci.err, ErrForbidden):
-		noteErr(w, ci.err)
-		http.Error(w, "forbidden", http.StatusForbidden)
-	default:
-		noteErr(w, ci.err)
-		log.Error("via: OnInit failed", "err", ci.err)
-		http.Error(w, "init failed", http.StatusInternalServerError)
+	if ci.redirect.url != "" {
+		answerInitRedirect(log, w, req, ci.redirect, sse)
+		return
 	}
+	answerHookError(log, w, ci.err, "via: OnInit failed")
 }
 
 // Router serves several via pages, each Mounted at its own path, behind one
