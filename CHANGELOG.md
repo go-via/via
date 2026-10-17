@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A live action's panic now sets `PageError.Err`, as a plain action's already did.
 - A `Param` that `OnInit` cannot decode now sets `PageError.Err` to `ErrNotFound`, as the same miss in `OnReload` already did.
 - `h.El` with a void tag in upper case (`"BR"`), or `"base"`, renders without
   a closing tag, as `"br"` already did.

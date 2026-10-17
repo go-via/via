@@ -542,3 +542,30 @@ func TestErrorPage_carriesErrNotFoundForAParamOnInitCannotDecode(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.ErrorIs(t, got.Err, via.ErrNotFound, "OnInit's Param miss must report what OnReload's does")
 }
+
+type errLivePanic struct{ n via.State[int] }
+
+func (l *errLivePanic) Boom(*via.Ctx) { panic("boom") }
+
+func (l *errLivePanic) View() h.H {
+	return h.Div(h.Button(on.Click(l.Boom), h.Str("!")), l.n.Display())
+}
+
+func TestErrorPage_carriesALiveActionsPanic(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/", errLivePanic{})
+	t.Cleanup(r.Close)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	page := fetchPage(t, app, "/")
+
+	resp, _ := nativePost(t, app.Client(), app.URL()+actionURL(t, page, "r", 0), map[string]string{"_viatab": conn.TabID()})
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.ErrorContains(t, got.Err, "boom", "a live action's panic must reach the error page as the plain path's does")
+}

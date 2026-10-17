@@ -117,7 +117,7 @@ func (m *mount) warnParkedFull() {
 // carried back across the channel rather than answered where it occurred.
 type actionResult struct {
 	redirect  redirectTo
-	panicked  bool
+	panicked  error       // the action panicked — 500, and the error page reads it
 	badArg    error       // ?a= failed to decode (badActionArg) — 400, not 500
 	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
 	gone      string      // the unit/action lookup came up invalid; the reason is the response body
@@ -438,7 +438,8 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 	if answerSentinel(w, res) {
 		return
 	}
-	if res.panicked {
+	if res.panicked != nil {
+		noteErr(w, res.panicked)
 		http.Error(w, "action failed", http.StatusInternalServerError)
 		return
 	}
@@ -487,7 +488,7 @@ func (a *liveAction) recoverPanic(res *actionResult) {
 	if rec := recover(); rec != nil {
 		a.lc.mount.cfg.log.Error("via: live action panic",
 			"tab", a.lc.id, "unit", a.lc.unitType(), "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{panicked: true}
+		*res = actionResult{panicked: fmt.Errorf("via: action panic: %v", rec)}
 	}
 }
 
@@ -641,7 +642,7 @@ func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
 		}
 		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
 			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{panicked: true, pushWork: unit.pusher}
+		*res = actionResult{panicked: fmt.Errorf("via: action panic: %v", rec), pushWork: unit.pusher}
 	}
 }
 
