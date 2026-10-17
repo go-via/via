@@ -114,7 +114,7 @@ func add(name, src string) {
 }
 
 // Option adjusts one rendered block.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type config struct {
 	title  string
@@ -124,21 +124,25 @@ type config struct {
 
 // Title replaces the block's label, which defaults to the file's base name.
 // An empty label leaves the header out.
-func Title(label string) Option {
-	return func(c *config) {
-		if c.titled {
-			panic("snippet: Title given twice")
-		}
-		c.title, c.titled = label, true
+func Title(label string) Option { return titleOption{label} }
+
+type titleOption struct{ label string }
+
+func (o titleOption) apply(c *config) {
+	if c.titled {
+		panic("snippet: Title given twice")
 	}
+	c.title, c.titled = o.label, true
 }
 
 // Mark highlights every line containing any of substrs. It matches text
 // rather than line numbers, so an edit to the file cannot move the highlight
 // onto the wrong line; a substr that matches no line panics.
-func Mark(substrs ...string) Option {
-	return func(c *config) { c.marks = append(c.marks, substrs...) }
-}
+func Mark(substrs ...string) Option { return markOption{substrs} }
+
+type markOption struct{ substrs []string }
+
+func (o markOption) apply(c *config) { c.marks = append(c.marks, o.substrs...) }
 
 // Show renders the whole file name, a path under src/ ("counter/main.go") or
 // "demos/<file>". An unknown name panics, which fails site startup, since
@@ -184,7 +188,7 @@ var cache sync.Map
 func cached(name, region string, opts []Option, lines func() []string) h.H {
 	c := config{}
 	for _, o := range opts {
-		o(&c)
+		o.apply(&c)
 	}
 	if !c.titled {
 		c.title = path.Base(name)

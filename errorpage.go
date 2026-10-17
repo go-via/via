@@ -123,16 +123,20 @@ type PageError struct {
 //		}
 //		return h.Div(h.H1(h.Str("Something broke")))
 //	}))
-func WithErrorPage(fn func(*Ctx, PageError) h.H) Option {
-	return func(c *config) {
-		if fn == nil {
-			panic("via: WithErrorPage(nil)")
-		}
-		if c.errorPage != nil {
-			panic("via: conflicting WithErrorPage options")
-		}
-		c.errorPage = fn
+func WithErrorPage(fn func(*Ctx, PageError) h.H) Option { return errorPageOption{fn} }
+
+type errorPageOption struct {
+	fn func(*Ctx, PageError) h.H
+}
+
+func (o errorPageOption) apply(c *config) {
+	if o.fn == nil {
+		panic("via: WithErrorPage(nil)")
 	}
+	if c.errorPage != nil {
+		panic("via: conflicting WithErrorPage options")
+	}
+	c.errorPage = o.fn
 }
 
 func reasonFor(status int) Reason {

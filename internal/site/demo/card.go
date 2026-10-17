@@ -10,7 +10,7 @@ import (
 const emptyPane = "Use the demo to see its requests and patches here."
 
 // Option adjusts one demo card.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type config struct {
 	wireOpen bool
@@ -19,17 +19,23 @@ type config struct {
 
 // WireOpen starts the card's Wire pane open, for a demo whose point is the
 // traffic rather than the widget.
-func WireOpen() Option { return func(c *config) { c.wireOpen = true } }
+func WireOpen() Option { return wireOpenOption{} }
+
+type wireOpenOption struct{}
+
+func (wireOpenOption) apply(c *config) { c.wireOpen = true }
 
 // Try lists things to do with the demo, one item each, under the live child.
 // Items are phrasing content: text, code, links.
-func Try(items ...h.H) Option {
-	return func(c *config) {
-		if c.try != nil {
-			panic("demo: Try given twice")
-		}
-		c.try = items
+func Try(items ...h.H) Option { return tryOption{items} }
+
+type tryOption struct{ items []h.H }
+
+func (o tryOption) apply(c *config) {
+	if c.try != nil {
+		panic("demo: Try given twice")
 	}
+	c.try = o.items
 }
 
 // Card renders a running demo followed by its Wire pane and Source, each in a
@@ -40,7 +46,7 @@ func Try(items ...h.H) Option {
 func Card(heading h.H, prose h.H, child h.H, srcName string, opts ...Option) h.H {
 	c := config{}
 	for _, o := range opts {
-		o(&c)
+		o.apply(&c)
 	}
 	return h.Article(h.Class("demo"),
 		h.Header(heading),

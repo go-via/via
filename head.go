@@ -168,7 +168,15 @@ func pageMetaOf(root any) Meta {
 // that isn't a language tag, a Raw carrying a script or style, an attribute
 // [Attr] refuses, or an asset that fails [Assets] validation.
 func WithHead(head Head) Option {
-	return func(c *config) { c.head = head }
+	return headOption{head}
+}
+
+type headOption struct {
+	head Head
+}
+
+func (o headOption) apply(c *config) {
+	c.head = o.head
 }
 
 // validate rejects a malformed Head at startup; each of these would otherwise

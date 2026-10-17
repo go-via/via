@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- `via.Option`, `via.MountOption` and `on.Option` are interfaces with an
+  unexported method instead of `func` types. Code that passes, stores or
+  slices the `With*` constructors' results is unchanged; nothing outside via
+  could build one by hand, since the config they set is unexported.
+
 ### Documented (behaviour unchanged)
 
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the

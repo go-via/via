@@ -109,7 +109,7 @@ func (a actionAttr) RenderTo(r *render.Renderer) {
 }
 
 // Option is a Datastar event modifier.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type config struct {
 	debounce, throttle                     time.Duration
@@ -121,30 +121,72 @@ type config struct {
 // rounded up to the next millisecond.
 func WithDebounce(d time.Duration) Option {
 	mustPositive("WithDebounce", d)
-	return func(c *config) { c.debounce = setDuration("WithDebounce", c.debounce, d) }
+	return debounceOption{d}
+}
+
+type debounceOption struct {
+	d time.Duration
+}
+
+func (o debounceOption) apply(c *config) {
+	c.debounce = setDuration("WithDebounce", c.debounce, o.d)
 }
 
 // WithThrottle runs the handler at most once per d, rounded up to the next
 // millisecond.
 func WithThrottle(d time.Duration) Option {
 	mustPositive("WithThrottle", d)
-	return func(c *config) { c.throttle = setDuration("WithThrottle", c.throttle, d) }
+	return throttleOption{d}
+}
+
+type throttleOption struct {
+	d time.Duration
+}
+
+func (o throttleOption) apply(c *config) {
+	c.throttle = setDuration("WithThrottle", c.throttle, o.d)
 }
 
 // WithOnce removes the listener after its first run.
-func WithOnce() Option { return func(c *config) { c.once = true } }
+func WithOnce() Option { return optOnce }
 
 // WithPrevent calls preventDefault on the event.
-func WithPrevent() Option { return func(c *config) { c.prevent = true } }
+func WithPrevent() Option { return optPrevent }
 
 // WithStop calls stopPropagation on the event.
-func WithStop() Option { return func(c *config) { c.stop = true } }
+func WithStop() Option { return optStop }
 
 // WithOutside fires only for events whose target is outside the element.
-func WithOutside() Option { return func(c *config) { c.outside = true } }
+func WithOutside() Option { return optOutside }
 
 // WithWindow listens on window instead of the element.
-func WithWindow() Option { return func(c *config) { c.onWindow = true } }
+func WithWindow() Option { return optWindow }
+
+// flagOption sets one of config's boolean modifiers.
+type flagOption uint8
+
+const (
+	optOnce flagOption = iota
+	optPrevent
+	optStop
+	optOutside
+	optWindow
+)
+
+func (f flagOption) apply(c *config) {
+	switch f {
+	case optOnce:
+		c.once = true
+	case optPrevent:
+		c.prevent = true
+	case optStop:
+		c.stop = true
+	case optOutside:
+		c.outside = true
+	case optWindow:
+		c.onWindow = true
+	}
+}
 
 // WithModifier appends a Datastar modifier package on has no option for, such
 // as "delay.300ms", "passive" or "viewtransition". raw is the modifier name
@@ -157,7 +199,15 @@ func WithModifier(raw string) Option {
 	if !modifier.MatchString(raw) {
 		panic(fmt.Sprintf(`on: WithModifier(%q) must be a lower-case modifier name, optionally followed by '.'-separated lower-case letters and digits (such as "delay.300ms")`, raw))
 	}
-	return func(c *config) { c.raw = append(c.raw, raw) }
+	return modifierOption{raw}
+}
+
+type modifierOption struct {
+	raw string
+}
+
+func (o modifierOption) apply(c *config) {
+	c.raw = append(c.raw, o.raw)
 }
 
 // modifier is one segment of Datastar's "__"-split modifier list, which it
@@ -198,7 +248,7 @@ func mustEventName(name string) {
 func key(event string, opts []Option) string {
 	var c config
 	for _, o := range opts {
-		o(&c)
+		o.apply(&c)
 	}
 	if c.debounce > 0 {
 		event += "__debounce." + millis(c.debounce)

@@ -515,7 +515,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	verifyMethodTrampoline()
 	mc := &mountConfig{}
 	for _, opt := range opts {
-		opt(mc)
+		opt.applyMount(mc)
 	}
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
 	getPattern := patternBase

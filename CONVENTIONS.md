@@ -170,23 +170,26 @@ Reasoning: Optional configuration passed as variadic arguments keeps
 call sites clean and avoids boolean-laden signatures. Conflicting options
 are a programming error, not a runtime condition.
 
-Rule: Optional config uses the `func(*cfg)` pattern. When two options
-are mutually exclusive, the second one panics — fail at registration /
-init time rather than silently overriding or returning an error. This
-applies to options evaluated during startup; options resolved at runtime
-should return errors instead.
+Rule: Optional config is an interface with one unexported method,
+`apply(*config)`, and each constructor returns a small unexported type
+that implements it. When two options are mutually exclusive, the second
+one panics — fail at registration / init time rather than silently
+overriding or returning an error. This applies to options evaluated
+during startup; options resolved at runtime should return errors instead.
 
 ```go
-type Option func(*config)
+type Option interface{ apply(*config) }
 
-func WithDarkMode() Option {
-    return func(cfg *config) {
-        if cfg.themeSet {
-            panic("via: conflicting theme options")
-        }
-        cfg.theme = "dark"
-        cfg.themeSet = true
+func WithDarkMode() Option { return darkMode{} }
+
+type darkMode struct{}
+
+func (darkMode) apply(cfg *config) {
+    if cfg.themeSet {
+        panic("via: conflicting theme options")
     }
+    cfg.theme = "dark"
+    cfg.themeSet = true
 }
 ```
 
@@ -194,13 +197,14 @@ Rule: Export the option type; keep the config it mutates unexported and
 in the same package. Callers must be able to name the option type — to
 hold one in a variable, build a `[]Option` slice, or write a helper that
 returns options — so a constructor's signature may not reference an
-unexported or `internal/` type. The `func(*config)` target stays
-unexported because the option set is closed: users compose the provided
-`WithX` constructors, they never author an option by hand.
+unexported or `internal/` type. The `apply` method stays unexported
+because the option set is closed: users compose the provided `WithX`
+constructors, they never author an option by hand.
 
-- ✅ `type Option func(*config)` — `config` unexported, same package
-- ✅ `type MountOption func(*mountConfig)` — no constructors yet; it keeps
-  `Mount`'s signature stable for when one lands
+- ✅ `type Option interface{ apply(*config) }` — `config` unexported, same
+  package
+- ✅ `type MountOption interface{ applyMount(*mountConfig) }` — no
+  constructors yet; it keeps `Mount`'s signature stable for when one lands
 - ❌ `func Debounce(d string) spec.Option` (leaks `internal/spec` — a
   downstream module can't name the return type)
 
