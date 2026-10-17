@@ -337,7 +337,7 @@ var apiSymbols = []apiSymbol{
 	{"expr", "Expr.Toggle", "method", "func (e Expr) Toggle() Expr", "Toggle negates the signal in place.", ""},
 	{"expr", "Raw", "func", "func Raw(js string) Expr", "Raw emits js verbatim and unchecked.", ""},
 	{"expr", "Rawf", "func", "func Rawf(format string, args ...Expr) Expr", "Rawf splices checked expressions into unchecked text: each %s takes the next Expr verbatim, %% is a literal percent, and any other verb or a wrong argument count panics.", ""},
-	{"expr", "Val", "func", "func Val(v any) Expr", "Val encodes v as a JavaScript literal; an Expr passes through unchanged.", ""},
+	{"expr", "Val", "func", "func Val(v any) Expr", "Val encodes v as a JavaScript literal; an Expr is parenthesized unless it is already one group or a bare name or literal.", ""},
 	{"topic", "DefaultLimit", "const", "const DefaultLimit = 100_000", "DefaultLimit bounds how many undelivered values one subscriber may hold.", ""},
 	{"topic", "New", "func", "func New[T any]() *Topic[T]", "New builds a Topic with no subscribers.", ""},
 	{"topic", "Sub", "type", "type Sub[T any] struct{ … }", "Sub is a subscription.", ""},

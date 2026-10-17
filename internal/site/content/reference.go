@@ -88,7 +88,7 @@ var overrides = map[string]string{
 	"on.WithModifier": "Appends a Datastar modifier the typed options do not cover, such as \"delay.300ms\". A malformed or covered one panics.",
 
 	"expr.El":              "The element the attribute is written on.",
-	"expr.Val":             "Encodes v as a JavaScript literal; an Expr passes through unchanged. An @ is escaped so Datastar does not read an @name( in it as an action call.",
+	"expr.Val":             "Encodes v as a JavaScript literal; an Expr is parenthesized unless it is already one group or a bare name or literal. An @ is escaped so Datastar does not read an @name( in it as an action call.",
 	"expr.All":             "Joins the expressions with &&. A single one is returned unchanged; none panics.",
 	"expr.Any":             "Joins the expressions with ||. A single one is returned unchanged; none panics.",
 	"expr.Do":              "Sequences statements, for an attribute that runs more than one.",

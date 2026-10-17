@@ -276,8 +276,9 @@ child's warning waits for its first render), or nothing.
 - `h.ColSpan("2")`, `h.TabIndex("0")`, `h.MinNum(n)`, `h.ValueNum(n)` →
   `h.ColSpan(2)`, `h.TabIndex(0)`, and the generic `h.Min(n)`, `h.Value(n)`.
   Caught by: compiler.
-- `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` → `h.Class(names…)` and
-  `h.Style(css)`, with the names worked out in Go. Caught by: compiler.
+- `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` → `h.Class(names…)`, with
+  the names worked out in Go; via's CSP blocks a style attribute, so styles
+  move to a class or `h.DataStyle`. Caught by: compiler.
 - `h.Tag`, `h.NewTag`, `h.VoidTag` → `h.El(tag, …)`. Caught by: compiler.
 - `h.Raw(html)`, `h.Static`, `h.With` → gone; there is no unescaped HTML node.
   Caught by: compiler.
