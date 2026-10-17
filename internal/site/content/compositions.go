@@ -34,7 +34,7 @@ func (p *Compositions) PageMeta() via.Meta {
 func (p *Compositions) View() h.H {
 	d := p.doc()
 	return d.Page(
-		h.P(h.Str("A via page is a tree of Go structs. A struct is a component: fields hold its props and state, "+
+		h.P(h.Str("A via page is a tree of Go structs, each one a composition: fields hold its props and state, "+
 			"methods are its actions, and "), Code("View"), h.Str(" renders it.")),
 
 		d.H2("A composition is a struct"),
