@@ -1981,3 +1981,12 @@ func TestMount_bootRenderIsBestEffortAndARenderStillPanics(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, out.String(), "share the action id")
 }
+
+func TestMount_aPathWithAHostPanics(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	t.Cleanup(r.Close)
+	assert.PanicsWithValue(t,
+		`via: Mount path "example.com/docs" must start with "/"; a host or method prefix is not supported`,
+		func() { via.Mount(r, "example.com/docs", errOK{}) })
+}

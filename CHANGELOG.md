@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- `Mount` panics on a path that does not start with "/". A host-qualified pattern used to mount and render action URLs relative to the page, which missed.
 - A nil handler passed to an `on` event or to `on.Bind` panics where it is bound. It used to render a binding whose every click answered 500.
 - A live action's `Ctx.Context` is the tab's stream context, as documented. It was the POST's, so it ended with the request and `Router.Shutdown` never cancelled it.
 - A live action's panic now sets `PageError.Err`, as a plain action's already did.

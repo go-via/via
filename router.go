@@ -553,6 +553,9 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 // mountBase turns a mount path into a ServeMux base plus its {name} segments,
 // in declaration order. "/" → "".
 func mountBase(path string) (base string, names []string) {
+	if !strings.HasPrefix(path, "/") {
+		panic(fmt.Sprintf(`via: Mount path %q must start with "/"; a host or method prefix is not supported`, path))
+	}
 	if path == "/" {
 		return "", nil
 	}
