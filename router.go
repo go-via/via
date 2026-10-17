@@ -493,10 +493,11 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 		opt.applyMount(mc)
 	}
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
-	getPattern := patternBase
+	getPattern, pageSuffix := patternBase, ""
 	if patternBase == "" || strings.HasSuffix(path, "/") {
 		// Without the anchor ServeMux would read a trailing slash as a subtree.
 		getPattern += "/{$}"
+		pageSuffix = "/"
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
@@ -504,7 +505,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	m := &mount{
 		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, root: rootOf[T, PT]{root: root, typ: rootType},
-		patternBase: patternBase, names: names,
+		patternBase: patternBase, pageSuffix: pageSuffix, names: names,
 		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, unknownActs: &r.unknownActs, capWarn: &r.capWarn,
 		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}

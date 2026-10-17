@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A relative `Redirect` from an action reached by a native form submit resolves against the page, as the `@post` path does. It resolved against the action URL, so `Redirect("?step=2")` landed under `/_via/a/`.
 - A live action that calls `Redirect` no longer pushes its unit's render over the stream, as `Redirect` documents.
 - A native form submit whose text fields or part count exceed multipart's limits answers 413, not 400 "malformed form".
 - A live child's warnings after its first push go to `WithLogger`. They went to `slog.Default`.

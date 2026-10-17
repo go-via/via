@@ -11,6 +11,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -140,6 +141,7 @@ type mount struct {
 	reg         *registry
 	root        interface{ newInst() instance }
 	patternBase string
+	pageSuffix  string // "/" when the page is served at its base plus a slash
 	names       []string
 	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
 	maxLive     int
@@ -1230,11 +1232,26 @@ func (m *mount) answerRedirect(w http.ResponseWriter, req *http.Request, mode ac
 		m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
 		return false
 	case mode == modeNative:
-		http.Redirect(w, req, redirect.url, http.StatusSeeOther)
+		http.Redirect(w, req, m.fromPage(req, redirect.url), http.StatusSeeOther)
 	default:
 		writeRedirectScript(w, redirect.url)
 	}
 	return true
+}
+
+// fromPage resolves a relative target against the page the action was
+// submitted from, as the browser does for the @post script. http.Redirect
+// would resolve it against the action URL.
+func (m *mount) fromPage(req *http.Request, target string) string {
+	u, err := url.Parse(target)
+	if err != nil || u.IsAbs() || strings.HasPrefix(u.Path, "/") {
+		return target
+	}
+	page, err := url.Parse(concreteBase(m.patternBase, req, m.names) + m.pageSuffix)
+	if err != nil {
+		return target
+	}
+	return page.ResolveReference(u).String()
 }
 
 // writePatch answers a Datastar action with its element-patch fragment, or 204

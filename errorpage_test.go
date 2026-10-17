@@ -611,3 +611,26 @@ func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
 	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), map[string]string{"f": strings.Repeat("x", 12<<20)})
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
+
+type relRedirect struct{}
+
+func (relRedirect) Go(ctx *via.Ctx) { ctx.Redirect("?step=2") }
+func (p relRedirect) View() h.H     { return h.Div(h.Button(on.Click(p.Go))) }
+
+func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{"/x/{id}": "/x/7?step=2", "/docs/": "/docs/?step=2", "/": "/?step=2"} {
+		r := via.NewRouter()
+		via.Mount(r, path, relRedirect{})
+		t.Cleanup(r.Close)
+		srv := httptest.NewServer(r)
+		t.Cleanup(srv.Close)
+		c := srv.Client()
+		c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+		body := jarGet(t, c, srv.URL+strings.Replace(path, "{id}", "7", 1))
+		resp, _ := nativePost(t, c, srv.URL+actionURL(t, body, "r", 0), nil)
+		require.Equal(t, http.StatusSeeOther, resp.StatusCode, path)
+		assert.Equal(t, want, resp.Header.Get("Location"), path)
+	}
+}
