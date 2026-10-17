@@ -1338,6 +1338,26 @@ func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
 	})
 }
 
+func TestDispatch_aServerEndedTabThatReconnectsUnderItsIdTakesActionsAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := via.NewMemorySessionStore()
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		code, _ := app.Action(0).Over(app.Connect()).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		b := app.Connect()
+		b.Await("who:alice")
+		require.NoError(t, store.Delete(context.Background(), sessionCookieID(t, app)))
+		time.Sleep(25 * time.Second)
+		require.NoError(t, b.AwaitClose())
+
+		again := app.ConnectWith(`{"viatab":"` + b.TabID() + `"}`)
+		require.Equal(t, b.TabID(), again.TabID())
+		code, _ = app.Action(0).Over(again).Fire()
+
+		assert.Equal(t, http.StatusNoContent, code, "the reclaimed id must drop its tombstone")
+	})
+}
+
 func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
