@@ -315,7 +315,7 @@ var apiSymbols = []apiSymbol{
 	{"on", "WithStop", "func", "func WithStop() Option", "WithStop calls stopPropagation on the event.", ""},
 	{"on", "WithThrottle", "func", "func WithThrottle(d time.Duration) Option", "WithThrottle runs the handler at most once per d, rounded up to the next millisecond.", ""},
 	{"on", "WithWindow", "func", "func WithWindow() Option", "WithWindow listens on window instead of the element.", ""},
-	{"expr", "All", "func", "func All(es ...Expr) Expr", "All joins the expressions with &&, parenthesizing any operand that is not already a group.", ""},
+	{"expr", "All", "func", "func All(es ...Expr) Expr", "All joins the expressions with &&, parenthesizing any operand that is neither a bare name or literal nor already a group.", ""},
 	{"expr", "Any", "func", "func Any(es ...Expr) Expr", "Any joins the expressions with ||, with the same single/none rule as All.", ""},
 	{"expr", "Call", "func", "func Call(name string, args ...Expr) Expr", "Call applies a function by name, which may be a dotted path (\"console.log\").", ""},
 	{"expr", "Class", "func", "func Class(name string, on bool) Expr", "Class adds or removes a class on the handler element, for feedback not worth a signal.", ""},

@@ -160,7 +160,7 @@ func (a *App) Get(path string) (int, string) {
 	a.t.Helper()
 	req, err := http.NewRequest(http.MethodGet, a.srv.URL+path, nil)
 	if err != nil {
-		a.t.Fatalf("vt.Get: build request: %v", err)
+		a.t.Fatalf("vt.App.Get: build request: %v", err)
 	}
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {

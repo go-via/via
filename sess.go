@@ -79,9 +79,9 @@ type SessionStore interface {
 
 // VersionedSessionStore is the optional half of [SessionStore], for a backend that
 // can make a write conditional on the revision it read. via writes a session by
-// re-reading the stored blob and overlaying the keys this request touched; with
-// a plain store that read-modify-write is not atomic, so two requests writing at
-// the same instant can still lose one of them. Implement this and via retries
+// re-reading the stored blob and overlaying what this request wrote; with a
+// plain store that read-modify-write is not atomic, so a write can land on a
+// session another request deleted or rotated a moment before. Implement this and via retries
 // the merge until its write applies to the revision it merged against, which
 // closes the window entirely.
 //
@@ -224,10 +224,10 @@ type sessionData struct {
 	sid  string
 	vals map[string]json.RawMessage
 	exp  time.Time
-	// dirty is this request's write set: the keys it Put or Cleared, a nil
-	// value marking a Clear. Saving overlays only these onto whatever the
-	// store holds now, so a concurrent request writing a different key is not
-	// erased by this one re-encoding its own stale copy. It accumulates for
+	// dirty is this request's write set: the slot it Put or Cleared, a nil
+	// value marking a Clear. Saving overlays only this onto whatever the
+	// store holds now, so a request that wrote nothing never re-encodes its
+	// stale copy over a newer one. It accumulates for
 	// the life of the handle and is never trimmed: a re-save must be able to
 	// re-apply every write the request made.
 	dirty map[string]json.RawMessage
@@ -535,10 +535,9 @@ const sessionSaveRetries = 8
 
 // save writes d back under id, merging rather than replacing: the blob the
 // store holds right now is re-read and only this request's write set is
-// overlaid onto it. Two requests on one session therefore each keep their own
-// keys, where re-encoding a whole decoded copy silently dropped whichever
-// finished first. What is left is a read-modify-write window of one store
-// round-trip, and last-writer-wins on the same key — see [Session].
+// overlaid onto it, so the re-read decides whether the id still names a
+// session to write into. What is left is a read-modify-write window of one
+// store round-trip, and last-writer-wins on the value — see [Session].
 //
 // mint says id is a brand-new home for d — a freshly created session, or the
 // new id of a Rotate — and is the only case allowed to write where the store

@@ -88,8 +88,9 @@ func operand(v any) string {
 	return strings.ReplaceAll(string(b), "@", `\u0040`)
 }
 
-// All joins the expressions with &&, parenthesizing any operand that is not
-// already a group. A single one is returned unchanged; none panics.
+// All joins the expressions with &&, parenthesizing any operand that is
+// neither a bare name or literal nor already a group. A single one is
+// returned unchanged; none panics.
 func All(es ...Expr) Expr { return join("All", "&&", es) }
 
 // Any joins the expressions with ||, with the same single/none rule as [All].
