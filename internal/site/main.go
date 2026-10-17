@@ -53,13 +53,7 @@ func run() error {
 		// every SSE stream at the deadline.
 	}
 	serve := make(chan error, 1)
-	go func() {
-		err := srv.ListenAndServe()
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
-		serve <- err
-	}()
+	go listen(srv, serve)
 
 	select {
 	case err := <-serve:
@@ -82,4 +76,12 @@ func run() error {
 		err = serr
 	}
 	return err
+}
+
+func listen(srv *http.Server, done chan<- error) {
+	err := srv.ListenAndServe()
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	done <- err
 }

@@ -98,14 +98,21 @@ func clientKey(r *http.Request) string {
 // A bucket idle past bucketIdle is full again, so deleting it changes nothing.
 func (l *Limiter) sweep() {
 	cutoff := time.Now().Add(-bucketIdle)
-	l.buckets.Range(func(k, v any) bool {
-		b := v.(*bucket)
-		b.mu.Lock()
-		idle := b.last.Before(cutoff)
-		b.mu.Unlock()
-		if idle {
-			l.buckets.Delete(k)
-		}
-		return true
-	})
+	l.buckets.Range(idleSweep{l, cutoff}.visit)
+}
+
+type idleSweep struct {
+	l      *Limiter
+	cutoff time.Time
+}
+
+func (s idleSweep) visit(k, v any) bool {
+	b := v.(*bucket)
+	b.mu.Lock()
+	idle := b.last.Before(s.cutoff)
+	b.mu.Unlock()
+	if idle {
+		s.l.buckets.Delete(k)
+	}
+	return true
 }

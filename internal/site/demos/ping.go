@@ -68,15 +68,22 @@ func (p *Ping) Send(ctx *via.Ctx) {
 	// A goroutine may not touch unit state; publishing is how it reaches one.
 	// OnDispose closes gone when this tab's stream ends, so a ping from a tab
 	// closed within 3s is dropped.
-	to, gone := p.sid, p.gone
-	time.AfterFunc(3*time.Second, func() {
-		select {
-		case <-gone:
-			return
-		default:
-		}
-		pingTopic.Publish(pingEvent{To: to, Msg: "ping at " + time.Now().Format("15:04:05")})
-	})
+	time.AfterFunc(3*time.Second, delayedPing{p.sid, p.gone}.fire)
+}
+
+// delayedPing copies what the timer needs, so fire never reads the unit.
+type delayedPing struct {
+	to   string
+	gone <-chan struct{}
+}
+
+func (d delayedPing) fire() {
+	select {
+	case <-d.gone:
+		return
+	default:
+	}
+	pingTopic.Publish(pingEvent{To: d.to, Msg: "ping at " + time.Now().Format("15:04:05")})
 }
 
 func (p *Ping) View() h.H {

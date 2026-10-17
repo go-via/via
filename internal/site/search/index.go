@@ -84,10 +84,6 @@ func (x *Index) Find(q string, n int) []Hit {
 	if len(terms) == 0 {
 		return nil
 	}
-	type scored struct {
-		hit   Hit
-		score int
-	}
 	var found []scored
 	for _, d := range x.docs {
 		// A build served under an older version's base is noindex on every
@@ -125,7 +121,7 @@ func (x *Index) Find(q string, n int) []Hit {
 			})
 		}
 	}
-	slices.SortStableFunc(found, func(a, b scored) int { return b.score - a.score })
+	slices.SortStableFunc(found, byScore)
 	if len(found) > n {
 		found = found[:n]
 	}
@@ -135,6 +131,14 @@ func (x *Index) Find(q string, n int) []Hit {
 	}
 	return hits
 }
+
+type scored struct {
+	hit   Hit
+	score int
+}
+
+// byScore orders highest score first.
+func byScore(a, b scored) int { return b.score - a.score }
 
 // field scores t against sorted, de-duplicated words. A trailing "s" on the
 // word still counts as exact, so "signal" finds the Signals page first.
@@ -157,9 +161,7 @@ func field(words []string, t string, exact, prefix int) int {
 // its last word.
 func chunks(s string) []string {
 	var out []string
-	for _, c := range strings.FieldsFunc(s, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_'
-	}) {
+	for _, c := range strings.FieldsFunc(s, notWordRune) {
 		if c = strings.Trim(c, "._"); c != "" {
 			out = append(out, c)
 		}
@@ -167,13 +169,19 @@ func chunks(s string) []string {
 	return out
 }
 
+func notWordRune(r rune) bool {
+	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '.' && r != '_'
+}
+
+func isSegmentSep(r rune) bool { return r == '.' || r == '_' }
+
 // tokens is s's words, lower-cased, sorted and de-duplicated: each chunk
 // whole, its '.' and '_' segments, and each segment's camelCase parts.
 func tokens(s string) []string {
 	var out []string
 	for _, c := range chunks(s) {
 		out = append(out, strings.ToLower(c))
-		for _, seg := range strings.FieldsFunc(c, func(r rune) bool { return r == '.' || r == '_' }) {
+		for _, seg := range strings.FieldsFunc(c, isSegmentSep) {
 			out = append(out, strings.ToLower(seg))
 			for _, p := range camel(seg) {
 				out = append(out, strings.ToLower(p))

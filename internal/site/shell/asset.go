@@ -9,25 +9,30 @@ import (
 	"go-via.dev/site/static"
 )
 
-var digests = func() map[string]string {
-	out := map[string]string{}
-	err := fs.WalkDir(static.FS, ".", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		b, err := static.FS.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		sum := sha256.Sum256(b)
-		out["/static/"+p] = hex.EncodeToString(sum[:])
-		return nil
-	})
-	if err != nil {
+var digests = digestStatic()
+
+func digestStatic() map[string]string {
+	out := digestMap{}
+	if err := fs.WalkDir(static.FS, ".", out.add); err != nil {
 		panic(err)
 	}
 	return out
-}()
+}
+
+type digestMap map[string]string
+
+func (m digestMap) add(p string, d fs.DirEntry, err error) error {
+	if err != nil || d.IsDir() {
+		return err
+	}
+	b, err := static.FS.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	sum := sha256.Sum256(b)
+	m["/static/"+p] = hex.EncodeToString(sum[:])
+	return nil
+}
 
 // Digest is the hex sha256 of the embedded asset at path ("/static/…").
 func Digest(path string) (string, bool) {

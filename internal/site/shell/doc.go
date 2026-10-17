@@ -157,38 +157,41 @@ func (d *Doc) toc() (inline, rail h.H) {
 	if len(d.heads) < 2 {
 		return nil, nil
 	}
-	var items []h.H
-	var subs []h.H
-	var open []h.H
-	flush := func() {
-		if open == nil {
-			return
-		}
-		if len(subs) > 0 {
-			open = append(open, h.Ul(subs...))
-		}
-		items = append(items, h.Li(open...))
-		open, subs = nil, nil
-	}
+	var t tocList
 	for _, hd := range d.heads {
 		link := h.A(h.Href("#"+hd.id), h.Str(hd.title))
 		if hd.level == 2 {
-			flush()
-			open = []h.H{link}
+			t.flush()
+			t.open = []h.H{link}
 			continue
 		}
-		if open == nil {
-			items = append(items, h.Li(link))
+		if t.open == nil {
+			t.items = append(t.items, h.Li(link))
 			continue
 		}
-		subs = append(subs, h.Li(link))
+		t.subs = append(t.subs, h.Li(link))
 	}
-	flush()
+	t.flush()
 	inline = h.Details(h.Class("toc toc-inline"),
-		h.Summary(h.Str("On this page")), h.Ul(items...))
+		h.Summary(h.Str("On this page")), h.Ul(t.items...))
 	rail = h.Nav(h.Class("toc toc-rail"), h.Aria("label", "On this page"),
-		h.P(h.Class("toc-title"), h.Str("On this page")), h.Ul(items...))
+		h.P(h.Class("toc-title"), h.Str("On this page")), h.Ul(t.items...))
 	return inline, rail
+}
+
+// tocList builds the contents list: open is the h2 item being filled and
+// subs the h3s under it, which flush closes into items.
+type tocList struct{ items, subs, open []h.H }
+
+func (t *tocList) flush() {
+	if t.open == nil {
+		return
+	}
+	if len(t.subs) > 0 {
+		t.open = append(t.open, h.Ul(t.subs...))
+	}
+	t.items = append(t.items, h.Li(t.open...))
+	t.open, t.subs = nil, nil
 }
 
 // foot is the pager and the page's own links. It renders after </main>, so

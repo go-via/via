@@ -148,61 +148,51 @@ func (p *Reference) PageMeta() via.Meta {
 
 type refPackage struct {
 	name  string
-	intro func(d *shell.Doc) h.H
+	intro h.H
 	extra func(d *shell.Doc) h.H
 }
 
 var refPackages = []refPackage{
-	{name: "via", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("The router, the pages mounted on it, the state handles a page renders, "),
-			API("via.Ctx"), h.Str(", sessions and the error surface. Router options are policy passed to "),
-			API("via.NewRouter"), h.Str(" or "), API("via.Handler"),
-			h.Str(": a page cannot change them, which is why none of them is a method on a composition. "+
-				"Match a sentinel error with errors.Is and switch on "), APIText("via.PageError", "PageError.Reason"),
-			h.Str(" with a default: a status via does not emit today maps to ReasonInternal or ReasonBadRequest."))
-	}, extra: func(d *shell.Doc) h.H {
-		return h.Div(
-			d.H3("Lifecycle hooks"),
-			h.P(h.Str("Four methods on your own type, duck-typed: a unit opts in by having one. A hook-named "+
-				"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
-				"signature is logged once.")),
-			refTable("Method", hooks),
-		)
-	}},
-	{name: "h", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Markup as Go calls: one function per HTML element and one per attribute, all returning "),
-			API("h.H"), h.Str(". Text and attribute values are escaped at render time, and URL attributes are "+
-				"scheme-checked."))
-	}, extra: func(d *shell.Doc) h.H {
-		return h.Div(
-			d.H3("Datastar attributes"),
-			h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. The helpers take "+
-				"an expr.Expr, and "), API("h.Data"), h.Str(" writes a plugin attribute h has no helper for.")),
-			helperTable(),
-		)
-	}},
-	{name: "on", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. " +
-			"Each has a server form that posts a method and a CS twin that runs an expression in the browser."))
-	}},
-	{name: "expr", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("The small JavaScript expressions Datastar evaluates in the browser. "),
-			APIText("via.Signal.Ref", "Signal.Ref()"), h.Str(" is where one starts: it returns the signal's $name as an "),
-			API("expr.Expr"), h.Str(". Everything is checked except "), API("expr.Raw"), h.Str(" and the text of "),
-			API("expr.Rawf"), h.Str("."))
-	}},
-	{name: "topic", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("An in-process fan-out broker: one Publish reaches every subscriber. It is one process's " +
-			"memory, with no durability, replay or cross-pod delivery; put a real bus behind a Topic for those."))
-	}},
-	{name: "vt", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("A black-box test harness: drives a handler over real HTTP through via's public surface, " +
-			"so a test can fire an action or read a live stream without request plumbing."))
-	}},
-	{name: "vtbrowser", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Drives a handler in a real headless Chromium, for the bugs httptest cannot see. A separate " +
-			"module, so chromedp stays out of via's dependency graph; a test skips when no browser is found."))
-	}},
+	{name: "via", extra: viaExtra, intro: h.P(h.Str("The router, the pages mounted on it, the state handles a page renders, "),
+		API("via.Ctx"), h.Str(", sessions and the error surface. Router options are policy passed to "),
+		API("via.NewRouter"), h.Str(" or "), API("via.Handler"),
+		h.Str(": a page cannot change them, which is why none of them is a method on a composition. "+
+			"Match a sentinel error with errors.Is and switch on "), APIText("via.PageError", "PageError.Reason"),
+		h.Str(" with a default: a status via does not emit today maps to ReasonInternal or ReasonBadRequest."))},
+	{name: "h", extra: hExtra, intro: h.P(h.Str("Markup as Go calls: one function per HTML element and one per attribute, all returning "),
+		API("h.H"), h.Str(". Text and attribute values are escaped at render time, and URL attributes are "+
+			"scheme-checked."))},
+	{name: "on", intro: h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. " +
+		"Each has a server form that posts a method and a CS twin that runs an expression in the browser."))},
+	{name: "expr", intro: h.P(h.Str("The small JavaScript expressions Datastar evaluates in the browser. "),
+		APIText("via.Signal.Ref", "Signal.Ref()"), h.Str(" is where one starts: it returns the signal's $name as an "),
+		API("expr.Expr"), h.Str(". Everything is checked except "), API("expr.Raw"), h.Str(" and the text of "),
+		API("expr.Rawf"), h.Str("."))},
+	{name: "topic", intro: h.P(h.Str("An in-process fan-out broker: one Publish reaches every subscriber. It is one process's " +
+		"memory, with no durability, replay or cross-pod delivery; put a real bus behind a Topic for those."))},
+	{name: "vt", intro: h.P(h.Str("A black-box test harness: drives a handler over real HTTP through via's public surface, " +
+		"so a test can fire an action or read a live stream without request plumbing."))},
+	{name: "vtbrowser", intro: h.P(h.Str("Drives a handler in a real headless Chromium, for the bugs httptest cannot see. A separate " +
+		"module, so chromedp stays out of via's dependency graph; a test skips when no browser is found."))},
+}
+
+func viaExtra(d *shell.Doc) h.H {
+	return h.Div(
+		d.H3("Lifecycle hooks"),
+		h.P(h.Str("Four methods on your own type, duck-typed: a unit opts in by having one. A hook-named "+
+			"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
+			"signature is logged once.")),
+		refTable("Method", hooks),
+	)
+}
+
+func hExtra(d *shell.Doc) h.H {
+	return h.Div(
+		d.H3("Datastar attributes"),
+		h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. The helpers take "+
+			"an expr.Expr, and "), API("h.Data"), h.Str(" writes a plugin attribute h has no helper for.")),
+		helperTable(),
+	)
 }
 
 func (p *Reference) View() h.H {
@@ -223,7 +213,7 @@ func (p *Reference) View() h.H {
 		h.P(jumps...),
 	}
 	for _, rp := range refPackages {
-		body = append(body, d.H2(rp.name), rp.intro(d))
+		body = append(body, d.H2(rp.name), rp.intro)
 		body = append(body, pkgGroups(rp.name)...)
 		if rp.extra != nil {
 			body = append(body, rp.extra(d))

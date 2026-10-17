@@ -46,16 +46,20 @@ func Extract(title, href, page string) Doc {
 // appendSection adds cur with markup as its text, then markup's code rows.
 func appendSection(out []Section, cur Section, markup string) []Section {
 	var own []Section
-	markup = rows.ReplaceAllStringFunc(markup, func(tr string) string {
-		m := rows.FindStringSubmatch(tr)
-		r := Section{Heading: plain(m[2]), Anchor: cur.Anchor, Text: plain(m[3])}
-		if id := rowID.FindStringSubmatch(m[1]); id != nil {
+	var text strings.Builder
+	last := 0
+	for _, m := range rows.FindAllStringSubmatchIndex(markup, -1) {
+		text.WriteString(markup[last:m[0]])
+		text.WriteString(" ")
+		last = m[1]
+		r := Section{Heading: plain(markup[m[4]:m[5]]), Anchor: cur.Anchor, Text: plain(markup[m[6]:m[7]])}
+		if id := rowID.FindStringSubmatch(markup[m[2]:m[3]]); id != nil {
 			r.Anchor = html.UnescapeString(id[1])
 		}
 		own = append(own, r)
-		return " "
-	})
-	cur.Text = plain(markup)
+	}
+	text.WriteString(markup[last:])
+	cur.Text = plain(text.String())
 	if cur.Anchor != "" || cur.Text != "" {
 		out = append(out, cur)
 	}

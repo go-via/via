@@ -38,7 +38,7 @@ func (s *sessionLog) add(sid string, lines ...string) []string {
 	// Instances append out of order (a request that ran before the session
 	// existed hands its lines over later), and every line starts with its time.
 	log := append(s.by[sid], lines...)
-	slices.SortStableFunc(log, func(a, b string) int { return strings.Compare(a[:len(stampFormat)], b[:len(stampFormat)]) })
+	slices.SortStableFunc(log, byStamp)
 	if len(log) > hookLogRows {
 		log = log[len(log)-hookLogRows:]
 	}
@@ -102,3 +102,5 @@ func (l *HookLog) View() h.H {
 }
 
 func (l *HookLog) row(s string) h.H { return h.Li(h.Str(s)) }
+
+func byStamp(a, b string) int { return strings.Compare(a[:len(stampFormat)], b[:len(stampFormat)]) }

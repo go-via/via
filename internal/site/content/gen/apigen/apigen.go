@@ -111,9 +111,11 @@ func loadPkg(dir, name, importPath string) ([]Symbol, error) {
 			c.add(t.Name+"."+m.Name, "method", funcSig(fset, m.Decl), m.Doc)
 		}
 	}
-	slices.SortFunc(c.out, func(a, b Symbol) int { return strings.Compare(a.Name, b.Name) })
+	slices.SortFunc(c.out, byName)
 	return c.out, nil
 }
+
+func byName(a, b Symbol) int { return strings.Compare(a.Name, b.Name) }
 
 type collector struct {
 	fset *token.FileSet
