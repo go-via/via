@@ -471,9 +471,10 @@ var childPrefixes sync.Map // childPrefixKey -> string ("" = ambiguous)
 
 // childFieldName is the parent field a Child's child came from. Child takes
 // the child by value, so the copy's address says nothing about which field it
-// came from; the type does, as long as the parent holds exactly one field of
-// it. Two fields of that type answer "" (Child's argument order need not match
-// declaration order), and the caller falls back to the positional child key.
+// came from; the type does, as long as the parent holds exactly one value of
+// it, in a direct field. More than one place that can hold it answers ""
+// (Child's argument order need not match declaration order), and the caller
+// falls back to the positional child key.
 func childFieldName(parent, child reflect.Type) string {
 	if parent == nil || child == nil || parent.Kind() != reflect.Struct {
 		return ""
@@ -482,16 +483,19 @@ func childFieldName(parent, child reflect.Type) string {
 	if v, ok := childPrefixes.Load(k); ok {
 		return v.(string)
 	}
-	name := ""
+	name, n := "", 0
 	for i := range parent.NumField() {
-		if parent.Field(i).Type != child {
+		f := parent.Field(i)
+		if f.Type == child {
+			name, n = lowerFirst(f.Name), n+1
 			continue
 		}
-		if name != "" {
-			name = "" // more than one candidate: ambiguous
-			break
-		}
-		name = lowerFirst(parent.Field(i).Name)
+		// A nested struct, slice or map holding the type is a candidate too:
+		// Child(p.Box.B) would otherwise take the direct field's name.
+		n += holdsType(f.Type, child, map[reflect.Type]bool{})
+	}
+	if n != 1 {
+		name = "" // ambiguous, or the only candidate is nested
 	}
 	if name != "" {
 		// A child scopes its child's slots under name+"__", while a plain
@@ -506,6 +510,31 @@ func childFieldName(parent, child reflect.Type) string {
 	}
 	childPrefixes.Store(k, name)
 	return name
+}
+
+// holdsType counts the places a value of type t can hold a child, with any
+// collection counted as two: its elements are as many children as it holds.
+func holdsType(t, child reflect.Type, seen map[reflect.Type]bool) int {
+	if t == child {
+		return 1
+	}
+	if seen[t] {
+		return 0
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Struct:
+		n := 0
+		for i := range t.NumField() {
+			n += holdsType(t.Field(i).Type, child, seen)
+		}
+		return n
+	case reflect.Array, reflect.Slice, reflect.Map:
+		if holdsType(t.Elem(), child, seen) > 0 {
+			return 2
+		}
+	}
+	return 0
 }
 
 // ptrViewer is the *T constraint Handler/Mount share. Exported so `go doc`

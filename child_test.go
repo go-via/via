@@ -1769,3 +1769,25 @@ func TestChild_aPlainChildsPatchDeclaresAGrandchildItOpened(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, `"o__in__note":""`)
 }
+
+type cntKid struct{ N via.Signal[int] }
+
+func (k *cntKid) View() h.H { return h.Div(k.N.Display()) }
+
+type cntBox struct{ B cntKid }
+
+type directAndNested struct {
+	A   cntKid
+	Box cntBox
+}
+
+func (p *directAndNested) View() h.H { return h.Div(via.Child(p.A), via.Child(p.Box.B)) }
+
+func TestChild_aDirectFieldSharingItsTypeWithANestedOneTakesThePositionalKey(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(directAndNested{}))
+	_, page := app.Get("/")
+	assert.NotContains(t, page, `"a__n"`, "a__n would name both children's slot")
+	assert.Contains(t, page, `"i0__n"`)
+	assert.Contains(t, page, `"i1__n"`)
+}

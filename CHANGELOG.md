@@ -19,6 +19,7 @@
 
 ### Fixed
 
+- A child whose type the parent also holds inside a nested struct, slice or map takes the positional slot prefix; it took the direct field's name, so two children shared one client signal.
 - A plain child's action patch declares the signals of a grandchild it opened; the client store had no value for them.
 - A grandchild's signals are declared on the page; only a direct child's were, so a grandchild's `Display` or `Ref` read `undefined` client-side.
 - A live push seeds a signal slot its render newly declares, such as one in a branch an action opened; the client store had no value for it, so its `Display` showed `undefined`.

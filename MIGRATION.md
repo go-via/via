@@ -593,7 +593,7 @@ A plain nested struct joins its path with one underscore (`c_s`), a child
 boundary with two (`c__s`). A parent cannot bind its child's signal itself:
 with `C` a composition, `p.C.S` in the parent's View has no slot in the
 parent's unit and panics at `Mount`. A parent holding two fields of the
-child's type is ambiguous (`Child`'s argument order need not match
+child's type, or one plus a nested struct, slice or map that holds it, is ambiguous (`Child`'s argument order need not match
 declaration order), so those children fall back to the positional key:
 `i0__s`, `i1__s`, and `i0__i0_0__s` for one nested inside the first. The key's own depth
 separator is `-` (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS

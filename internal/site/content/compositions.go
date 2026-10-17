@@ -64,7 +64,7 @@ func (p *Compositions) View() h.H {
 			h.Str(") and the address in the child's action URLs. Signal names come from the field path instead: the child's field name "+
 				"and a double underscore, so "), Code("Draft"), h.Str(" inside "), Code("Inbox.Chat"), h.Str(" is "),
 			Code("$chat__draft"), h.Str(". Two fields of the same type cannot be told apart by type, so their signals take the "+
-				"position: "), Code("$i0__chat__draft"), h.Str(". So does a child held in a nested plain struct rather than a direct field.")),
+				"position: "), Code("$i0__chat__draft"), h.Str(". So does a child held in a nested plain struct rather than a direct field, and a direct field whose type a nested struct, slice or map also holds.")),
 
 		demo.Card(d.H3("Conditional children shift keys"),
 			h.P(h.Str("Both halves hold a banner and a clock. The first wraps the banner's Child in "), API("via.When"),
