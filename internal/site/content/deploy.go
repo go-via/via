@@ -303,7 +303,8 @@ func (p *Deploy) View() h.H {
 			h.Str(") or nats.go ("), Code("Publish"), h.Str(", "), Code("ChanSubscribe"), h.Str(").")),
 		Callout(Caveat, "Pub/sub drops what a reloading tab misses",
 			h.P(API("via.StateTrack"), h.Str(" calls its load again at every connect, so tracked state converges "+
-				"from the database whatever was missed. A "), API("via.Ctx.Listen"), h.Str(" handler reacting to "+
+				"from the database whatever was missed, except a write landing between the page's GET and its stream "+
+				"connect, which shows at the next publish. A "), API("via.Ctx.Listen"), h.Str(" handler reacting to "+
 				"events can skip a beat: derive presence from state rather than counting arrivals and "+
 				"departures."))),
 	)
