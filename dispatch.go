@@ -673,6 +673,7 @@ func answerSentinel(w http.ResponseWriter, res actionResult) bool {
 	case res.badArg != nil:
 		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
 	case res.paramMiss:
+		noteErr(w, ErrNotFound)
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		return false

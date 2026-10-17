@@ -569,3 +569,27 @@ func TestErrorPage_carriesALiveActionsPanic(t *testing.T) {
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.ErrorContains(t, got.Err, "boom", "a live action's panic must reach the error page as the plain path's does")
 }
+
+type errActParam struct{}
+
+func (errActParam) Go(ctx *via.Ctx) { ctx.Param[int]("id") }
+func (p errActParam) View() h.H     { return h.Div(h.Button(on.Click(p.Go), h.Str("go"))) }
+
+func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/thread/{id}", errActParam{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	page := jarGet(t, srv.Client(), srv.URL+"/thread/abc")
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), nil)
+
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrNotFound, "an action's Param miss must report what OnInit's does")
+}
