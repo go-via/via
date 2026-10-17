@@ -356,6 +356,9 @@ type Conn struct {
 // push before the one that was expected, few enough to read.
 const recentKept = 3
 
+// awaitTimeout bounds every wait on the stream.
+const awaitTimeout = 2 * time.Second
+
 // frameHead and frameTail cap each printed event. A patch carries the unit's
 // whole HTML, so a long list would push everything else off the screen; the
 // head names the element and the tail is where a list's last row lands.
@@ -570,12 +573,12 @@ func (c *Conn) Peek() (string, bool) {
 // Await read, and the last three, each cut to a few hundred bytes.
 func (c *Conn) Await(needle string) string {
 	c.t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(awaitTimeout)
 	read := 0
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatalf("vt.Await: timed out after 2s waiting for %q. %s", needle, c.arrived(read))
+			c.t.Fatalf("vt.Await: timed out after %v waiting for %q. %s", awaitTimeout, needle, c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
 				c.t.Fatalf("vt.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
@@ -598,8 +601,8 @@ func (c *Conn) AwaitClose() error {
 	c.t.Helper()
 	select {
 	case <-c.closed:
-	case <-time.After(2 * time.Second):
-		c.t.Fatal("vt.AwaitClose: the stream was still open after 2s")
+	case <-time.After(awaitTimeout):
+		c.t.Fatalf("vt.AwaitClose: the stream was still open after %v", awaitTimeout)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -611,7 +614,7 @@ func (c *Conn) Close() { c.cancel() }
 
 func (c *Conn) awaitTab() string {
 	c.t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(awaitTimeout)
 	read := 0
 	for {
 		select {
