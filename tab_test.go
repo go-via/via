@@ -1378,9 +1378,11 @@ func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T
 		default:
 		}
 
+		start := time.Now()
 		again := app.ConnectWith(`{"viatab":"` + id + `"}`)
 		require.Equal(t, id, again.TabID())
 		assert.Equal(t, http.StatusNoContent, <-got, "a network drop's retry reconnects under the same id")
+		assert.Zero(t, time.Since(start), "the reconnect wakes the parked action")
 		again.Await("count: 1")
 	})
 }
