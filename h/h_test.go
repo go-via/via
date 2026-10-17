@@ -1,7 +1,6 @@
 package h_test
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/go-via/via/h"
@@ -16,7 +15,7 @@ type stubBinder struct{}
 
 func (*stubBinder) DeclareSignal(string, any) {}
 
-func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
+func (*stubBinder) Hydrator(string, render.Hydrator) {}
 
 func (*stubBinder) Action(*render.Renderer, string, any) {}
 

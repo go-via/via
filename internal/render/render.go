@@ -47,15 +47,20 @@ type Binder interface {
 	// initial value, for the page-level data-signals declaration. Idempotent
 	// within a render.
 	DeclareSignal(slot string, initial any)
-	// Hydrator records slot's update function, kept across renders so a live
-	// action can update the underlying value in place without a re-render. fn
-	// reports whether the value decoded.
-	Hydrator(slot string, fn func(json.RawMessage) bool)
+	// Hydrator records slot's updater, kept across renders so a live action
+	// can update the underlying value in place without a re-render.
+	Hydrator(slot string, h Hydrator)
 	// Action binds fn, a func(*via.Ctx), to event on the element r is writing.
 	Action(r *Renderer, event string, fn any)
 	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. call
 	// decodes a dispatched arg and calls fn with it.
 	ArgAction(r *Renderer, event string, fn, arg any, call ArgCall)
+}
+
+// Hydrator writes a posted signal value into the handle it was bound from.
+type Hydrator interface {
+	// Hydrate reports whether raw decoded; a value that did not is not written.
+	Hydrate(raw json.RawMessage) bool
 }
 
 // ArgCall is on.Bind's typed half of an arg action: via checks the raw arg

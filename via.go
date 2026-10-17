@@ -165,7 +165,7 @@ type clientSignal interface {
 // *Signal[T], *SignalCS[T] and *State[T] — and by *List[E] through the State it
 // embeds first, so the pointer the applier receives is the embedded State's
 // address too. decodeSeed carries T out of the generic type, and seedApplier
-// builds the typed write once, on the Mount walk, so a seed costs a closure
+// builds the typed write once, on the Mount walk, so a seed costs an interface
 // call per unit and no reflection.
 //
 // The applier writes only into a handle whose start value is not decided yet —
@@ -174,7 +174,13 @@ type clientSignal interface {
 // is what a Signal's slot is declared at.
 type seeded interface {
 	decodeSeed(raw string) (any, error)
-	seedApplier(v any) func(handle unsafe.Pointer) any
+	seedApplier(v any) seedApplier
+}
+
+// seedApplier writes a decoded seed into the handle at its pointer and
+// returns the value the handle then holds.
+type seedApplier interface {
+	apply(handle unsafe.Pointer) any
 }
 
 var seededMarker = reflect.TypeOf((*seeded)(nil)).Elem()
@@ -195,19 +201,19 @@ type signalField struct {
 	off      uintptr
 	name     string
 	cs       bool
-	seed     any                      // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
-	declares bool                     // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	apply    func(unsafe.Pointer) any // tagged Signal only; a SignalCS holds no value to write
+	seed     any         // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
+	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
+	applier  seedApplier // tagged Signal only; a SignalCS holds no value to write
 }
 
 type seedField struct {
-	off   uintptr
-	apply func(unsafe.Pointer) any
+	off     uintptr
+	applier seedApplier
 }
 
 type trackField struct {
-	off   uintptr
-	start func(unsafe.Pointer, *Ctx)
+	off uintptr
+	tk  tracker
 }
 
 // wire is the slot name: the "_" goes ahead of the scope prefix, because
@@ -254,7 +260,7 @@ func signalsOf(t reflect.Type) *typeSignals {
 				if tagged {
 					sf.seed, sf.declares = decodeSeedTag(t, f, handle.(seeded), tag), true
 					if !sf.cs {
-						sf.apply = handle.(seeded).seedApplier(sf.seed)
+						sf.applier = handle.(seeded).seedApplier(sf.seed)
 					}
 				}
 				slot := sf.wire("")
@@ -269,13 +275,13 @@ func signalsOf(t reflect.Type) *typeSignals {
 				if tagged {
 					h := handle.(seeded)
 					v := decodeSeedTag(t, f, h, tag)
-					ts.seeds = append(ts.seeds, seedField{off: off, apply: h.seedApplier(v)})
+					ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(v)})
 				}
 				// Every State lands here, tracked or not: whether this instance
 				// carries a StateTrack literal is a per-instance fact the type
-				// cannot answer, so the starter nil-checks at init.
+				// cannot answer, so startTrack nil-checks at init.
 				if tk, ok := handle.(tracker); ok {
-					ts.tracks = append(ts.tracks, trackField{off: off, start: tk.trackStarter()})
+					ts.tracks = append(ts.tracks, trackField{off: off, tk: tk})
 				}
 				continue
 			}
@@ -418,13 +424,13 @@ func prebindSignals(c *Ctx, inst instance) {
 		// no Set will ever declare it, and a data-show may be its only reader,
 		// so its seed is declared on every pass.
 		v := f.seed
-		if f.apply != nil {
-			v = f.apply(unsafe.Add(inst.base, f.off))
+		if f.applier != nil {
+			v = f.applier.apply(unsafe.Add(inst.base, f.off))
 		}
 		c.declareSignal(sid.slot, v)
 	}
 	for _, s := range inst.sig.seeds {
-		s.apply(unsafe.Add(inst.base, s.off))
+		s.applier.apply(unsafe.Add(inst.base, s.off))
 	}
 }
 
@@ -438,13 +444,14 @@ func startTracks(c *Ctx, inst instance) {
 	if inst.sig == nil || inst.base == nil || len(inst.sig.tracks) == 0 {
 		return
 	}
-	was := c.inInit
+	defer c.restoreInInit(c.inInit)
 	c.inInit = true
-	defer func() { c.inInit = was }()
 	for _, t := range inst.sig.tracks {
-		t.start(unsafe.Add(inst.base, t.off), c)
+		t.tk.startTrack(unsafe.Add(inst.base, t.off), c)
 	}
 }
+
+func (c *Ctx) restoreInInit(was bool) { c.inInit = was }
 
 // childPrefixKey memoizes the parent-type -> child-type field-name lookup.
 type childPrefixKey struct{ parent, child reflect.Type }
@@ -507,10 +514,10 @@ type ptrViewer[T any] = interface {
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
 type Ctx struct {
-	order       []string                              // slots in assignment order
-	initial     map[string]any                        // per-slot value seen at render time
-	actions     map[string]action                     // content-addressed action table, keyed by handler identity
-	hydrators   map[string]func(json.RawMessage) bool // per-slot updater, kept from the last render so a live action hydrates without re-rendering
+	order       []string                   // slots in assignment order
+	initial     map[string]any             // per-slot value seen at render time
+	actions     map[string]action          // content-addressed action table, keyed by handler identity
+	hydrators   map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	ticks       []tickReg
 	subs        []subscription
 	onConnect   []func() // run once when the stream opens
@@ -616,7 +623,7 @@ func newCtx() *Ctx {
 		initial:   map[string]any{},
 		actions:   map[string]action{},
 		dirty:     map[string]any{},
-		hydrators: map[string]func(json.RawMessage) bool{},
+		hydrators: map[string]render.Hydrator{},
 	}
 }
 
@@ -639,8 +646,8 @@ func (c *Ctx) dirtyAll() map[string]any {
 // Ctx's public surface.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) DeclareSignal(slot string, initial any)              { b.c.declareSignal(slot, initial) }
-func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage) bool) { b.c.hydrator(slot, fn) }
+func (b binderCtx) DeclareSignal(slot string, initial any)  { b.c.declareSignal(slot, initial) }
+func (b binderCtx) Hydrator(slot string, h render.Hydrator) { b.c.hydrators[slot] = h }
 
 func (b binderCtx) Action(r *render.Renderer, event string, fn any) {
 	bind(r, b.c, event, fn.(func(*Ctx)))
@@ -734,13 +741,6 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 		c.order = append(c.order, slot)
 	}
 	c.initial[slot] = initial
-}
-
-// hydrator records slot's update function. A live unit keeps the table from
-// its last render (every push is a render), so a live action hydrates in place
-// without re-rendering. render.Binder.
-func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
-	c.hydrators[slot] = fn
 }
 
 // PostForm renders a native <form method="post"> whose submit runs handler on

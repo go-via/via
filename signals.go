@@ -110,19 +110,22 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 // Signal.Set drops the slot's entry — a server write supersedes the client's
 // and must survive the revert.
 type revertSet struct {
-	undo map[string]func()
+	undo map[string]reverter
 }
 
-func newRevertSet() *revertSet { return &revertSet{undo: map[string]func(){}} }
+// reverter puts one slot's server-authored value back.
+type reverter interface{ revert() }
 
-func (r *revertSet) note(slot string, fn func()) {
+func newRevertSet() *revertSet { return &revertSet{undo: map[string]reverter{}} }
+
+func (r *revertSet) note(slot string, u reverter) {
 	if r == nil {
 		return
 	}
 	if _, dup := r.undo[slot]; dup {
 		return
 	}
-	r.undo[slot] = fn
+	r.undo[slot] = u
 }
 
 func (r *revertSet) drop(slot string) {
@@ -135,8 +138,8 @@ func (r *revertSet) restore() {
 	if r == nil {
 		return
 	}
-	for _, fn := range r.undo {
-		fn()
+	for _, u := range r.undo {
+		u.revert()
 	}
 	clear(r.undo)
 }
@@ -162,15 +165,16 @@ type Signal[T any] struct {
 
 func (*Signal[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
-func (*Signal[T]) seedApplier(v any) func(unsafe.Pointer) any {
-	seed := v.(T)
-	return func(handle unsafe.Pointer) any {
-		s := (*Signal[T])(handle)
-		if !s.settled {
-			s.settled, s.val = true, seed
-		}
-		return s.val
+func (*Signal[T]) seedApplier(v any) seedApplier { return signalSeed[T]{v.(T)} }
+
+type signalSeed[T any] struct{ seed T }
+
+func (a signalSeed[T]) apply(handle unsafe.Pointer) any {
+	s := (*Signal[T])(handle)
+	if !s.settled {
+		s.settled, s.val = true, a.seed
 	}
+	return s.val
 }
 
 // jsonSeed decodes a via:"init=…" value into T and hands it back as any, which
@@ -268,37 +272,47 @@ func (s *Signal[T]) bind(r *render.Renderer, writable bool) {
 		// server-authored between renders. A second path that wrote s.val
 		// straight from the request would silently re-open the escalation
 		// livePush closes.
-		b.Hydrator(s.slot, func(raw json.RawMessage) bool {
-			var v T
-			if err := json.Unmarshal(raw, &v); err != nil {
-				// s.bound may be nil outside a live render; Ctx.logger nil-guards.
-				// badDecodeLogged is a pointer shared by the whole render tree it
-				// belongs to (see Ctx.badDecodeLogged): one Warn per plain dispatch
-				// POST no matter how many slots it hydrates or how many passes
-				// dispatchPlain's rebind loop takes (both re-invoke this closure per
-				// malformed slot), and one Warn per live connection for as long as
-				// it stays open. A nil pointer (a bare render with no Ctx wiring)
-				// logs unguarded rather than silently dropping the Warn.
-				var flag *atomic.Bool
-				if c := s.bound; c != nil {
-					flag = c.badDecodeLogged
-				}
-				if flag == nil || !flag.Swap(true) {
-					s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
-						"slot", s.slot, "type", fmt.Sprintf("%T", v))
-				}
-				return false
-			}
-			if c := s.bound; c != nil {
-				prev := s.val
-				c.rev.note(s.slot, func() { s.val = prev })
-			}
-			s.val = v
-			return true
-		})
+		b.Hydrator(s.slot, signalHydrator[T]{s})
 	}
 	b.DeclareSignal(s.slot, s.val)
 }
+
+type signalHydrator[T any] struct{ s *Signal[T] }
+
+func (h signalHydrator[T]) Hydrate(raw json.RawMessage) bool {
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		// h.s.bound may be nil outside a live render; Ctx.logger nil-guards.
+		// badDecodeLogged is a pointer shared by the whole render tree it
+		// belongs to (see Ctx.badDecodeLogged): one Warn per plain dispatch
+		// POST no matter how many slots it hydrates or how many passes
+		// dispatchPlain's rebind loop takes (both re-invoke this hydrator per
+		// malformed slot), and one Warn per live connection for as long as
+		// it stays open. A nil pointer (a bare render with no Ctx wiring)
+		// logs unguarded rather than silently dropping the Warn.
+		var flag *atomic.Bool
+		if c := h.s.bound; c != nil {
+			flag = c.badDecodeLogged
+		}
+		if flag == nil || !flag.Swap(true) {
+			h.s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
+				"slot", h.s.slot, "type", fmt.Sprintf("%T", v))
+		}
+		return false
+	}
+	if c := h.s.bound; c != nil {
+		c.rev.note(h.s.slot, signalUndo[T]{s: h.s, prev: h.s.val})
+	}
+	h.s.val = v
+	return true
+}
+
+type signalUndo[T any] struct {
+	s    *Signal[T]
+	prev T
+}
+
+func (u signalUndo[T]) revert() { u.s.val = u.prev }
 
 // Display renders the signal as a Datastar text-bound span. Displaying the same
 // signal in several places reuses its name, so they all update together. Unlike
@@ -357,7 +371,7 @@ func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw
 // seedApplier has nothing to write: a SignalCS holds no value, so its seed
 // lives in the type table and reaches the client through the declaration
 // prebindSignals makes. The nil keeps that fact in one place.
-func (*SignalCS[T]) seedApplier(any) func(unsafe.Pointer) any { return nil }
+func (*SignalCS[T]) seedApplier(any) seedApplier { return nil }
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,

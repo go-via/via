@@ -48,20 +48,19 @@ type stateTracking[T any] struct {
 }
 
 // tracker is how a StateTrack literal is started without naming T: the type
-// walk holds the handle as an any, so the closure it asks for here carries T
-// out of the generic type, exactly as seedApplier does for a seed tag.
+// walk holds a zero handle of the field's type as an any, and its method
+// carries T out of the generic type, as seedApplier does for a seed tag. The
+// receiver is that zero handle; the instance's field is handle.
 type tracker interface {
-	trackStarter() func(handle unsafe.Pointer, ctx *Ctx)
+	startTrack(handle unsafe.Pointer, ctx *Ctx)
 }
 
-func (*State[T]) trackStarter() func(unsafe.Pointer, *Ctx) {
-	return func(handle unsafe.Pointer, ctx *Ctx) {
-		s := (*State[T])(handle)
-		if s.track == nil {
-			return
-		}
-		s.Track(ctx, s.track.topic, s.track.load)
+func (*State[T]) startTrack(handle unsafe.Pointer, ctx *Ctx) {
+	s := (*State[T])(handle)
+	if s.track == nil {
+		return
 	}
+	s.Track(ctx, s.track.topic, s.track.load)
 }
 
 // StateTrack is the literal form of [State.Track]: a State that seeds from
@@ -83,16 +82,17 @@ func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
 // seedApplier writes through the handle pointer the type walk found by offset.
 // List[E] embeds State[[]E] first, so that pointer is the embedded State's
-// address too and a List seeds through this same closure.
-func (*State[T]) seedApplier(v any) func(unsafe.Pointer) any {
-	seed := v.(T)
-	return func(handle unsafe.Pointer) any {
-		s := (*State[T])(handle)
-		if !s.lit {
-			s.lit, s.val = true, seed
-		}
-		return s.val
+// address too and a List seeds through this same applier.
+func (*State[T]) seedApplier(v any) seedApplier { return stateSeed[T]{v.(T)} }
+
+type stateSeed[T any] struct{ seed T }
+
+func (a stateSeed[T]) apply(handle unsafe.Pointer) any {
+	s := (*State[T])(handle)
+	if !s.lit {
+		s.lit, s.val = true, a.seed
 	}
+	return s.val
 }
 
 // StateOf seeds a State with v, so a parent can hand an embedded child its
@@ -136,11 +136,18 @@ func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
 	s.Set(load())
 	// The subscribe runs before any OnConnect fn, so this re-read covers every
 	// write between OnInit and it.
-	ctx.OnConnect(func() { s.Set(load()) })
+	ctx.OnConnect(stateReload[T]{s: s, load: load}.run)
 	ctx.Listen(t, s.recv)
 }
 
 func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
+
+type stateReload[T any] struct {
+	s    *State[T]
+	load func() T
+}
+
+func (r stateReload[T]) run() { r.s.Set(r.load()) }
 
 // Display renders the current value as literal, escaped server text and marks
 // its unit live, so server-held state alone earns a connection.

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-via/via/internal/render"
 )
 
 // actionMode is decided by the request, not the route: the bundled Datastar
@@ -585,7 +587,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
-			if !hydrate(raw) {
+			if !hydrate.Hydrate(raw) {
 				delete(lc.client, slot)
 				continue
 			}
@@ -939,7 +941,7 @@ func rebindFrom(auth *Ctx) *Ctx {
 	c := *auth
 	c.order, c.initial = nil, map[string]any{}
 	c.actions = map[string]action{}
-	c.hydrators = map[string]func(json.RawMessage) bool{}
+	c.hydrators = map[string]render.Hydrator{}
 	c.dirty = map[string]any{}
 	c.children = nil
 	c.rendered, c.pusher = nil, nil
@@ -966,7 +968,7 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 		if !ok {
 			continue
 		}
-		if !hydrate(raw) {
+		if !hydrate.Hydrate(raw) {
 			// Gone, so a live connection does not re-decode it on every push.
 			delete(in, slot)
 			continue
