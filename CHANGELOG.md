@@ -19,6 +19,11 @@
 
 ### Fixed
 
+- A `List` seeded by `ListOf` or a `via:"init=…"` tag no longer leaks one tab's
+  edits into others. Each tab copies the mounted literal, so all of them
+  shared the seed's array, and `Remove` shifted it in place: after one tab
+  removed and appended, a fresh GET rendered that tab's list. `Remove` now
+  builds a new array, and a seed is clipped so the first `Append` reallocates.
 - `expr` groups a composite operand: `expr.Raw("$a || $b").Not()` is
   `(!($a || $b))` and `.Eq(1)` is `(($a || $b) === 1)`. Both used to bind to
   the last term only. A bare `$name`, a literal and an already parenthesized
