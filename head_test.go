@@ -335,10 +335,10 @@ func (c *warnChild) View() h.H          { return h.Span(h.Str("child")) }
 func TestPageMeta_inertFieldsDoNotTouchTheCSP(t *testing.T) {
 	t.Parallel()
 	plain, _ := metaBody(t, metaPage{})
-	titled, _ := metaBody(t, metaPage{title: "x"})
+	filled, _ := metaBody(t, inertPage{})
 
 	assert.Equal(t, withoutNonce(plain.Header.Get("Content-Security-Policy")),
-		withoutNonce(titled.Header.Get("Content-Security-Policy")))
+		withoutNonce(filled.Header.Get("Content-Security-Policy")))
 }
 
 type assetPage struct{}

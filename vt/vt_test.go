@@ -1,7 +1,9 @@
 package vt_test
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -183,7 +185,15 @@ func TestConnAwait_timeoutCountsTheFramesThisWaitRead(t *testing.T) {
 
 func TestAction_aNullBodyWithATabIsPostedVerbatim(t *testing.T) {
 	t.Parallel()
-	app := vt.Serve(t, via.Handler(tally{}))
-	code, _ := app.Action(0).Body("null").Tab("x").Fire()
-	assert.NotZero(t, code)
+	inner := via.Handler(tally{})
+	var posted []byte
+	app := vt.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posted, _ = io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(posted))
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	app.Action(0).Body("null").Tab("x").Fire()
+	assert.Equal(t, "null", string(posted))
 }

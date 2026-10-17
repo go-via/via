@@ -1854,9 +1854,7 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 
 	// The panicking action's Set must still reach the client on the next push.
 	conn.Await(`"x":1`)
-	frame := conn.Await(">1<")
-	assert.Contains(t, frame, ">1<",
-		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
+	conn.Await(">1<") // the display shows the server's value, not the client's stale 0 painted back
 }
 
 func TestDispatchLive_aNullConnectBodyStillAcceptsActions(t *testing.T) {
