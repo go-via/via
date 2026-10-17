@@ -1121,7 +1121,7 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	code, _ := app.Action(0).Raw(childURL).Over(conn).Body(`{"i0__kid__step":5}`).Fire()
 	assert.Equal(t, http.StatusNoContent, code,
 		"the URL the parent's patch handed the browser must still reach the live child")
-	assert.Contains(t, conn.Await("n="), "5", "and drive it")
+	conn.Await("n=5<")
 }
 
 // threeDeepOuter/Mid nest a live leaf under two plain children, so its key is
@@ -1151,7 +1151,7 @@ func TestChild_liveLeafUnderTwoPlainChildsKeepsItsPathKey(t *testing.T) {
 
 	status, _ := app.ChildAction("0-0-0", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
-	assert.Contains(t, conn.Await("n="), "3")
+	conn.Await("n=3<")
 }
 
 // initKid loads its own data in OnInit. A re-render that skips it renders the
@@ -1559,23 +1559,25 @@ func (c *storedCard) View() h.H {
 // storedBody builds its child's markup in a helper that OnInit and OnReload
 // both call, so the GET and an action's re-render reach via.Child through
 // different frames.
-type storedBody struct{ body h.H }
+type storedBody struct {
+	body h.H
+	n    int
+}
 
 func (p *storedBody) load()                       { p.body = via.Child(storedCard{Label: "S"}) }
 func (p *storedBody) OnInit(ctx *via.Ctx) error   { p.load(); return nil }
 func (p *storedBody) OnReload(ctx *via.Ctx) error { p.load(); return nil }
-func (p *storedBody) Poke(ctx *via.Ctx)           {}
-func (p *storedBody) View() h.H                   { return h.Div(p.body, h.Button(on.Click(p.Poke), h.Str("poke"))) }
+func (p *storedBody) Poke(ctx *via.Ctx)           { p.n++ }
+func (p *storedBody) View() h.H {
+	return h.Div(h.Str(p.n), p.body, h.Button(on.Click(p.Poke), h.Str("poke")))
+}
 
 func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossAReRender(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(storedBody{}))
 
 	status, patch := app.Action(0).Fire()
-	require.Less(t, status, 300)
-	if status == http.StatusNoContent {
-		_, patch = app.Get("/")
-	}
+	require.Equal(t, http.StatusOK, status, "the root action must ship a re-render")
 	status, body := app.ChildAction("0", 0).Raw(actionURL(t, patch, "0", 0)).Fire()
 	assert.Equal(t, http.StatusOK, status, "the URL the root action's re-render shipped must still dispatch")
 	assert.Contains(t, body, "S hits=1")
