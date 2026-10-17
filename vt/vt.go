@@ -624,7 +624,7 @@ func (c *Conn) awaitTab() string {
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatal("vt.Connect: no viatab frame arrived. " + c.arrived(read))
+			c.t.Fatal("vt.Connect: no tab-id frame arrived. " + c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
 				c.t.Fatal("vt.Connect: stream closed before the tab-id frame. " + c.arrived(read))

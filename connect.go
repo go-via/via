@@ -526,9 +526,5 @@ func disposeUnstreamed(log *slog.Logger, g *pushGuard, units []*Ctx, streaming *
 	if *streaming {
 		return
 	}
-	for _, u := range units {
-		for _, d := range u.disposers {
-			runRecovered(log, g, d)
-		}
-	}
+	runDisposers(log, g, units)
 }

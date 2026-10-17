@@ -210,12 +210,16 @@ func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*
 
 // disposeUnits runs every unit's disposers, then closes the guard.
 func disposeUnits(log *slog.Logger, g *pushGuard, units []*Ctx) {
+	runDisposers(log, g, units)
+	g.close(log)
+}
+
+func runDisposers(log *slog.Logger, g *pushGuard, units []*Ctx) {
 	for _, u := range units {
 		for _, d := range u.disposers {
 			runRecovered(log, g, d)
 		}
 	}
-	g.close(log)
 }
 
 // pushItem is one piece of serialized stream work. Exactly one of its work
