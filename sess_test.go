@@ -2057,3 +2057,22 @@ func TestSession_anAnonymousRotateWarnsLikeAnyMint(t *testing.T) {
 	require.NotEmpty(t, resp.Cookies(), "Rotate on a cookieless request mints a session")
 	assert.Contains(t, logs.String(), "random per-process key")
 }
+
+func TestSession_VIA_SESSION_KEYSignsCookiesEveryRouterAccepts(t *testing.T) {
+	t.Setenv("VIA_SESSION_KEY", "an-env-signing-key-32-bytes-long")
+	store := via.WithSessionStore(via.NewMemorySessionStore())
+	a, b := sessionServer(t, store), sessionServer(t, store)
+	c := jarClient(t)
+
+	fireAction(t, c, a, 0)            // SignIn on one router; cookies ignore the port, so b gets it too
+	_, body := fireAction(t, c, b, 1) // Greet on the other
+
+	assert.Contains(t, body, "hi alice")
+}
+
+func TestSession_aShortVIA_SESSION_KEYPanics(t *testing.T) {
+	t.Setenv("VIA_SESSION_KEY", "short")
+	assert.PanicsWithValue(t, "via: session key must be at least 16 bytes (got 5)", func() {
+		via.Handler(loginComp{}, via.WithSessionTTL(time.Hour))
+	})
+}
