@@ -33,7 +33,11 @@ func valField(name, typ, val string) h.H {
 
 func link(href, text string) h.H { return h.A(h.Href(href), h.Str(text)) }
 
-func note(msg string) func() h.H { return func() h.H { return h.P(h.Str(msg)) } }
+// note is an error line a View shows through via.When, which takes a method
+// value.
+type note string
+
+func (n note) render() h.H { return h.P(h.Str(string(n))) }
 
 // errorPage turns via's plain-text failures into documents. It runs for a
 // mistyped URL as well as for a thread that no longer exists, so it may not
@@ -78,7 +82,7 @@ func (s *SignUp) View() h.H {
 		via.PostForm(s.Submit,
 			field("email", "email", "email"),
 			field("name", "text", "display name"),
-			via.When(s.err != "", note(s.err)),
+			via.When(s.err != "", note(s.err).render),
 			h.Button(h.Str("Create account")),
 		),
 		link("/login", "Already have an account? Log in"),
@@ -107,7 +111,7 @@ func (l *Login) View() h.H {
 	return page("Log in",
 		via.PostForm(l.Submit,
 			field("email", "email", "email"),
-			via.When(l.err != "", note(l.err)),
+			via.When(l.err != "", note(l.err).render),
 			h.Button(h.Str("Log in")),
 		),
 		link("/signup", "Need an account? Sign up"),
