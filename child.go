@@ -17,7 +17,8 @@ import (
 
 // Child renders a child composition — a plain struct field of the parent,
 // seeded at the parent's literal — into its own positional container. The child
-// gets its own OnInit (before its View, on every request-scoped render) and may
+// gets its own OnInit (before its View, on every request-scoped render and, for
+// a plain child of a live root, every pushed frame) and may
 // be plain or live; liveness is what the child does, never a separate type. One
 // live child anywhere makes the page stream.
 //

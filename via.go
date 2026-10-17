@@ -34,7 +34,8 @@
 // action over an already-open stream: it ran once, at connect, so a session
 // whose authorization changes after that keeps acting on the stream until
 // the tab next acts and is denied, the stream closes, or the router shuts
-// down.
+// down. A plain child of a live root is the exception: it is a fresh copy on
+// every pushed frame, so its OnInit runs once per frame.
 //
 // OnReload is the fix for the commonest week-one defect — OnInit loads, the
 // handler mutates the store, and the render answering the action still shows
@@ -563,9 +564,9 @@ type Ctx struct {
 // cookies, URL, RemoteAddr, TLS. Nil when no request is in scope (a bare
 // render).
 //
-// Read-only: the body is already consumed into the request's signals, and a
-// live action runs on the stream goroutine after the POST has acked, so the
-// request's Context may already be done.
+// Read-only: the body is already consumed into the request's signals. A live
+// action runs on the stream goroutine while the POST waits for it, and keeps
+// running if the client hangs up, so the request's Context may end mid-action.
 //
 // There is no matching writer. Ctx cannot set a header, a status or a response
 // body — [Ctx.Redirect] is the only response shaping a handler gets — because a
@@ -591,9 +592,9 @@ func (c *Ctx) Request() *http.Request { return c.req }
 // Outside a live unit it is the request's own context, and context.Background
 // when there is no request in scope (a bare render). It is never nil.
 //
-// Note the asymmetry with [Ctx.Request]: a live action's req.Context may
-// already be done by the time the handler runs on the stream goroutine, so
-// prefer this for anything that outlives the POST.
+// Note the asymmetry with [Ctx.Request]: a live action's req.Context ends if
+// the client hangs up, while the action runs on to the end, so prefer this for
+// anything that outlives the POST.
 func (c *Ctx) Context() context.Context {
 	if c.streamCtx != nil {
 		return c.streamCtx
