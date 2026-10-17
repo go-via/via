@@ -137,3 +137,26 @@ func BenchmarkTopic_burstFanOut(b *testing.B) {
 	}
 	b.ReportMetric(float64(delivered)/float64(published)*100, "%delivered")
 }
+
+func TestSub_wakeOnSignalsAtOnceForAValueAlreadyQueued(t *testing.T) {
+	t.Parallel()
+	tp := topic.New[int]()
+	s := tp.Subscribe()
+	defer s.Stop()
+	tp.Publish(1)
+
+	ch := make(chan struct{}, 1)
+	s.WakeOn(ch)
+	assert.Len(t, ch, 1)
+}
+
+func TestSub_stopSignalsTheWakeChannel(t *testing.T) {
+	t.Parallel()
+	s := topic.New[int]().Subscribe()
+	ch := make(chan struct{}, 1)
+	s.WakeOn(ch)
+	require.Empty(t, ch)
+
+	s.Stop()
+	assert.Len(t, ch, 1)
+}
