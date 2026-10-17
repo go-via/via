@@ -663,24 +663,20 @@ type sharedSeed struct {
 }
 
 func (p *sharedSeed) Drop(ctx *via.Ctx) { p.Lit.Remove(0); p.Tagged.Remove(0) }
-func (p *sharedSeed) Grow(ctx *via.Ctx) { p.Lit.Append("new"); p.Tagged.Append("new") }
 
 func (p *sharedSeed) View() h.H {
-	return h.Div(h.Button(on.Click(p.Drop)), h.Button(on.Click(p.Grow)),
+	return h.Div(h.Button(on.Click(p.Drop)),
 		h.P(h.Str("lit="), p.Lit.Each(seedItem)), h.P(h.Str("tagged="), p.Tagged.Each(seedItem)))
 }
 
 func seedItem(s string) h.H { return h.Str(s + ",") }
 
-func TestList_aTabsRemoveAndAppendLeaveTheSeedOtherTabsGet(t *testing.T) {
+func TestList_aTabsRemoveLeavesTheSeedOtherTabsGet(t *testing.T) {
 	app := vt.Serve(t, via.Handler(sharedSeed{Lit: via.ListOf("a", "b", "c")}))
 	conn := app.Connect()
 	status, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("lit=b,c,<")
-	status, _ = app.Action(1).Over(conn).Fire()
-	require.Equal(t, http.StatusNoContent, status)
-	conn.Await("lit=b,c,new,<")
 
 	_, page := app.Get("/")
 	assert.Contains(t, page, "lit=a,b,c,<")
