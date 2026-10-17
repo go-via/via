@@ -122,6 +122,7 @@ type actionResult struct {
 	panicked  error       // the action panicked — 500, and the error page reads it
 	badArg    error       // ?a= failed to decode (badActionArg) — 400, not 500
 	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
+	session   *Session    // live only: the action's handle, so a native answer's OnInit sees what the action wrote
 	gone      string      // the unit/action lookup came up invalid; the reason is the response body
 	initErr   error       // live only: the post-action OnInit re-run failed (see reloadUnit)
 	forbidden string      // live only: the session-bound check rejected the request
@@ -252,7 +253,7 @@ func (m *mount) serveGet(w http.ResponseWriter, req *http.Request) {
 	// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 	// leaving every live child under a parametrised mount dead.
 	base := concreteBase(m.patternBase, req, m.names)
-	m.writePage(w, req, m.newInst(), base, nil)
+	m.writePage(w, req, m.newInst(), base, nil, nil)
 }
 
 // recoverRequest answers a panic on a plain request transport.
@@ -454,9 +455,9 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		// A native submit replaces the whole document, so this must be the
 		// page a brand-new connection will hold — a fresh instance with OnInit
 		// run, not a snapshot of the dying connection's live tree (which the
-		// reconnect is about to reseed anyway). The action just ran and may
-		// have mutated the session, so this OnInit resolves it fresh.
-		m.writePage(w, req, m.newInst(), base, nil)
+		// reconnect is about to reseed anyway). The request's cookie predates
+		// the action's Put or Rotate, so OnInit reads the action's session.
+		m.writePage(w, req, m.newInst(), base, nil, res.session)
 		return
 	}
 	writePatch(w, nil) // the push already framed it
@@ -632,6 +633,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	return actionResult{
 		redirect: rc.redirect,
 		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
+		session:  rc.session,
 	}
 }
 
@@ -787,8 +789,8 @@ func noStream(mode actionMode, tab string) string {
 //
 // from non-nil already ran OnInit for this request; it carries that wiring down
 // (inheritRequestScope) instead of running OnInit twice.
-func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx) {
-	ctx, body := inst.renderPage(w, req, m, base, from)
+func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx, sess *Session) {
+	ctx, body := inst.renderPage(w, req, m, base, from, sess)
 	if ctx == nil {
 		return
 	}
@@ -799,12 +801,18 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	writeHTMLPage(w, m, body, base, tab, inst.v)
 }
 
-func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
+func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx, sess *Session) (*Ctx, []byte) {
 	if from != nil {
 		return renderRootBase(inst, true, base, nil, nil, from, nil, from.badDecodeLogged)
 	}
 	ctx := newRootCtx(true, base, nil)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
+	if sess != nil {
+		// Detached from the action's stream: this page's tab is not that one.
+		s := *sess
+		s.stream = nil
+		ctx.session = &s
+	}
 	// Before OnInit, not just before the View: seeding an island with Set is
 	// what OnInit is for, and a Set with no slot and no pass goes nowhere.
 	prebindSignals(ctx, inst)
@@ -898,7 +906,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		return
 	}
 	if mode == modeNative {
-		m.writePage(w, req, inst, base, u)
+		m.writePage(w, req, inst, base, u, nil)
 		return
 	}
 	b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)

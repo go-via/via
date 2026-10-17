@@ -2000,3 +2000,43 @@ func TestSession_writesLandAfterTheClientHungUp(t *testing.T) {
 	_, body := fireAction(t, c, srv.URL, 1) // Greet
 	assert.Contains(t, body, "hi alice", "store calls must not inherit the request's cancellation")
 }
+
+// liveLogin is a live page whose native form logs in; its OnInit shows who the
+// session holds, so the page a native submit answers with reveals which
+// session that OnInit saw.
+type liveLogin struct {
+	who string
+	n   via.State[int]
+}
+
+func (l *liveLogin) OnInit(ctx *via.Ctx) error {
+	if m, ok := ctx.Session().Get[member](); ok {
+		l.who = m.Name
+	}
+	return nil
+}
+
+func (l *liveLogin) LogIn(ctx *via.Ctx) {
+	ctx.Session().Put(member{Name: "alice"})
+	ctx.Session().Rotate()
+}
+
+func (l *liveLogin) View() h.H {
+	return h.Div(h.P(h.Str("who="+l.who)), l.n.Display(), via.PostForm(l.LogIn, h.Button(h.Str("in"))))
+}
+
+func TestSession_aLiveNativeSubmitsPageSeesTheSessionItsActionWrote(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(liveLogin{}, testSessionKey))
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	page := jarGet(t, c, srv.URL+"/")
+	lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", "")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "who=alice")
+}

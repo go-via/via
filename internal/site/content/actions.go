@@ -145,7 +145,7 @@ func (p *Actions) View() h.H {
 			h.Str(" the Signal from it. The answer renders those values, with the error beside them.")),
 		Callout(Caveat, "Plain units only",
 			h.P(h.Str("In a plain unit the submit answers with the instance the handler changed. "+
-				"In a live unit it answers with a fresh page, as a reload would, and what the handler set is gone. "+
+				"In a live unit it answers with a fresh page: its OnInit sees the session the handler wrote, but what the handler set on the unit is gone. "+
 				"Keep the form in a plain unit, or end the handler with a Redirect."))),
 
 		d.H2("File uploads"),
