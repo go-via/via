@@ -17,7 +17,9 @@ package vtbrowser
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"iter"
 	"math"
 	"net"
 	"net/http"
@@ -29,8 +31,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -84,7 +86,6 @@ func Open(t testing.TB, handler http.Handler) *Session {
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.ExecPath(exe),
-			chromedp.WSURLReadTimeout(launchBound(t)),
 			chromedp.CombinedOutput(output),
 			chromedp.Flag("headless", true),
 			chromedp.NoSandbox,
@@ -98,7 +99,11 @@ func Open(t testing.TB, handler http.Handler) *Session {
 	// The browser binds to the context this first Run receives, so it must be
 	// the long-lived browser context — a per-op timeout context would kill the
 	// browser when it expired.
-	err := chromedp.Run(browse)
+	// The pipe transport has no launch timeout of its own, so a hung browser is
+	// cut off by cancelling the allocator once the launch bound passes.
+	hung := time.AfterFunc(launchBound(t), cancelAlloc)
+	err := chromedp.Do(browse)
+	hung.Stop()
 	out := output.stop()
 	if err != nil {
 		// A browser that exited is already quoted in chromedp's error.
@@ -109,7 +114,7 @@ func Open(t testing.TB, handler http.Handler) *Session {
 	}
 
 	s := &Session{t: t, ctx: browse, srv: srv, browse: browse}
-	chromedp.ListenTarget(browse, s.collectConsole)
+	go s.collectConsole(chromedp.Console(browse))
 	s.watchStream()
 	s.navigate()
 	return s
@@ -127,11 +132,11 @@ func (s *Session) NewTab() *Session {
 	// binds its target; if that first Run were the per-op-timeout navigate
 	// below, cancelling that timeout child would tear the tab down the moment
 	// navigate returned — and every later op on it would hang.
-	if err := chromedp.Run(ctx); err != nil {
+	if err := chromedp.Do(ctx); err != nil {
 		s.t.Fatalf("vtbrowser: open new tab: %v", err)
 	}
 	n := &Session{t: s.t, ctx: ctx, srv: s.srv, browse: s.browse}
-	chromedp.ListenTarget(ctx, n.collectConsole)
+	go n.collectConsole(chromedp.Console(ctx))
 	n.watchStream()
 	n.navigate()
 	return n
@@ -146,11 +151,12 @@ const streamWatch = `document.addEventListener('datastar-fetch',function(e){var 
 
 func (s *Session) watchStream() {
 	s.t.Helper()
-	s.run("install the stream watch", chromedp.ActionFunc(installStreamWatch))
+	s.run("install the stream watch", chromedp.Func(installStreamWatch))
 }
 
-func installStreamWatch(ctx context.Context) error {
-	_, err := page.AddScriptToEvaluateOnNewDocument(streamWatch).Do(ctx)
+func installStreamWatch(ctx context.Context, t *chromedp.Target) error {
+	_, err := cdp.Call(ctx, t, page.AddScriptToEvaluateOnNewDocument,
+		page.AddScriptToEvaluateOnNewDocumentParams{Source: streamWatch})
 	return err
 }
 
@@ -158,7 +164,7 @@ func (s *Session) navigate() {
 	s.t.Helper()
 	s.run(fmt.Sprintf("navigate to %s/", s.srv.URL),
 		chromedp.Navigate(s.srv.URL+"/"),
-		chromedp.WaitReady("body", chromedp.ByQuery),
+		chromedp.WaitReady(chromedp.CSS("body")),
 	)
 }
 
@@ -202,7 +208,7 @@ func (s *Session) Restart(gap time.Duration, handler http.Handler) {
 // selector, waiting for it to become visible first.
 func (s *Session) Click(selector string) {
 	s.t.Helper()
-	s.run(fmt.Sprintf("click %q", selector), chromedp.Click(selector, chromedp.ByQuery))
+	s.run(fmt.Sprintf("click %q", selector), chromedp.Click(chromedp.CSS(selector)))
 }
 
 // Type focuses the first node matching the selector and sends text as real key
@@ -210,7 +216,7 @@ func (s *Session) Click(selector string) {
 func (s *Session) Type(selector, text string) {
 	s.t.Helper()
 	s.run(fmt.Sprintf("type %q into %q", text, selector),
-		chromedp.SendKeys(selector, text, chromedp.ByQuery))
+		chromedp.SendKeys(chromedp.CSS(selector), text))
 }
 
 // Text returns the trimmed textContent of the first node matching the selector
@@ -409,43 +415,50 @@ func (s *Session) text(selector string) string {
 	return txt
 }
 
+// tryEval decodes the raw JSON itself so a JS null leaves out unchanged;
+// chromedp's typed Evaluate would fail with ErrJSNull instead.
 func (s *Session) tryEval(js string, out any) error {
 	ctx, cancel := context.WithTimeout(s.ctx, defaultTimeout)
 	defer cancel()
-	return chromedp.Run(ctx, chromedp.Evaluate(js, out))
+	raw, err := chromedp.Run(ctx, chromedp.Evaluate[[]byte](js))
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, out)
 }
 
 func (s *Session) eval(js string, out any) {
 	s.t.Helper()
-	s.run(fmt.Sprintf("evaluate %q", js), chromedp.Evaluate(js, out))
+	if err := s.tryEval(js, out); err != nil {
+		s.t.Fatalf("vtbrowser: evaluate %q: %v", js, err)
+	}
 }
 
 // run executes chromedp actions with a per-call timeout so one hung operation
 // cannot stall the whole suite.
-func (s *Session) run(what string, actions ...chromedp.Action) {
+func (s *Session) run(what string, actions ...chromedp.Action[chromedp.Void]) {
 	s.t.Helper()
 	ctx, cancel := context.WithTimeout(s.ctx, defaultTimeout)
 	defer cancel()
-	if err := chromedp.Run(ctx, actions...); err != nil {
+	if err := chromedp.Do(ctx, actions...); err != nil {
 		s.t.Fatalf("vtbrowser: %s: %v", what, err)
 	}
 }
 
-// collectConsole runs on chromedp's event goroutine, so it only records under
-// the mutex — it must never touch testing.TB.
-func (s *Session) collectConsole(ev any) {
-	switch e := ev.(type) {
-	case *runtime.EventConsoleAPICalled:
-		if e.Type != runtime.APITypeError {
+// collectConsole runs on its own goroutine for the tab's life, so it only
+// records under the mutex — it must never touch testing.TB. Browser log
+// entries (Source set) were never collected and stay out.
+func (s *Session) collectConsole(msgs iter.Seq2[chromedp.ConsoleMessage, error]) {
+	for m, err := range msgs {
+		switch {
+		case err != nil:
 			return
+		case m.Source != "":
+		case m.IsException():
+			s.appendConsoleError("uncaught exception: " + m.Text)
+		case m.Type == chromedp.ConsoleError:
+			s.appendConsoleError("console.error: " + m.Text)
 		}
-		parts := make([]string, 0, len(e.Args))
-		for _, arg := range e.Args {
-			parts = append(parts, formatRemoteObject(arg))
-		}
-		s.appendConsoleError("console.error: " + strings.Join(parts, " "))
-	case *runtime.EventExceptionThrown:
-		s.appendConsoleError("uncaught exception: " + e.ExceptionDetails.Error())
 	}
 }
 
@@ -453,19 +466,6 @@ func (s *Session) appendConsoleError(msg string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.consoleErrs = append(s.consoleErrs, msg)
-}
-
-func formatRemoteObject(obj *runtime.RemoteObject) string {
-	switch {
-	case obj == nil:
-		return "<nil>"
-	case len(obj.Value) > 0:
-		return string(obj.Value)
-	case obj.Description != "":
-		return obj.Description
-	default:
-		return string(obj.Type)
-	}
 }
 
 func launchBound(t testing.TB) time.Duration {
