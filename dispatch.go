@@ -2,7 +2,6 @@ package via
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,7 +105,7 @@ func (m *mount) warnAtCapacity(open int64) {
 	m.cfg.log.Warn("via: refusing an SSE connect with 503: the router is at its live-stream cap. "+
 		"There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused "+
 		"until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it.",
-		"open", open, "cap", m.maxLive)
+		"open", open, "cap", m.cfg.maxSSEConn)
 }
 
 // warnParkedFull is warnAtCapacity for parked actions: the cap is router-wide
@@ -144,24 +143,11 @@ type actionResult struct {
 // mount bundles a page's per-request wiring, shared by its GET, action, and
 // SSE routes so origin floor, OnInit, and body caps can't drift between them.
 type mount struct {
-	cfg         *config
-	sessions    *sessionManager
-	policy      *routerPolicy
-	reg         *registry
+	*routerShared
 	root        interface{ newInst() instance }
 	patternBase string
 	pageSuffix  string // "/" when the page is served at its base plus a slash
 	names       []string
-	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
-	maxLive     int
-	noChange    *sync.Map     // the Router's dead-click warning dedupe (see warnNoChange)
-	unknownActs *idDedupe     // the Router's unknown-action warning dedupe (see unknownAction)
-	capWarn     *atomic.Int64 // unix nanos of the last at-capacity log, router-wide (see warnAtCapacity)
-	// routerCtx bounds every stream this mount opens, so Router.Close can end
-	// them; live counts the streams still running, so Close can wait.
-	routerCtx context.Context
-	live      *sync.WaitGroup
-	liveMu    *sync.RWMutex
 	// csp is this mount's Content-Security-Policy, built once at Mount from the
 	// router-wide assets plus the root's own PageMeta().Assets; assetsFP is the
 	// fingerprint of the latter, re-checked on every document render so a
@@ -306,7 +292,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// for it is on its way, and the plain path could only 410 a live unit.
 	// An address via never renders is not worth a slot.
 	park := tab != "" && validAddr(child) && isActionID(act) && m.issuedTab(tab, tabCredential(m.sessions, req))
-	lc, ticket, out := m.reg.enter(req.Context(), m.routerCtx, tab, deadline, park)
+	lc, ticket, out := m.reg.enter(req.Context(), m.ctx, tab, deadline, park)
 	switch out {
 	case enterGone:
 		noteErr(w, ErrStaleTab)

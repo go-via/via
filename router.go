@@ -243,36 +243,16 @@ func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Reques
 // The zero Router is usable and configures itself on first use, like
 // http.ServeMux; reach for [NewRouter] whenever you have options to pass.
 type Router struct {
-	once      sync.Once
-	opts      []Option // NewRouter's, held until build reads them
-	mux       *http.ServeMux
-	cfg       *config
-	sessions  *sessionManager
-	policy    *routerPolicy
-	reg       *registry // tab id → stream goroutine, app-wide
-	liveCount *atomic.Int64
-	maxLive   int
-	capWarn   atomic.Int64 // see mount.warnAtCapacity
-	// ctx bounds every stream this router opens; Close cancels it and waits on
-	// live, so a stream's own goroutine, its tickers and its disposers are all
-	// finished by the time Close returns.
-	ctx    context.Context
+	routerShared
+	once   sync.Once
+	opts   []Option // NewRouter's, held until build reads them
+	mux    *http.ServeMux
 	cancel context.CancelFunc
-	live   sync.WaitGroup
-	// liveMu orders a stream's live.Add against Close's Wait. Without it a
-	// connect that has passed the ctx.Done check can Add while Close is parked
-	// in Wait, which is a WaitGroup misuse throw.
-	liveMu sync.RWMutex
 	// drained closes once live has drained. One waiter for every Shutdown, so
 	// a call that gives up at its deadline leaves one goroutine behind, not one
 	// per call.
 	drainOnce sync.Once
 	drained   chan struct{}
-	// noChange dedupes the dead-click warning per action (see warnNoChange).
-	// Per Router, not per process, so a second app in the same binary — or a
-	// second test — still gets told.
-	noChange    sync.Map
-	unknownActs idDedupe // see mount.unknownAction
 	// hookWarned dedupes the near-miss hook warning, root's and children's,
 	// per Router for the same reason noChange is.
 	hookWarned sync.Map
@@ -311,6 +291,31 @@ const (
 	datastarRoute = "/_via/datastar.js"
 )
 
+// routerShared is the Router state every mount reads and writes. A mount holds
+// a pointer to it rather than copies of its fields.
+type routerShared struct {
+	cfg       *config
+	sessions  *sessionManager
+	policy    *routerPolicy
+	reg       *registry    // tab id → stream goroutine, app-wide
+	liveCount atomic.Int64 // concurrent SSE streams across the whole router, capped at cfg.maxSSEConn
+	capWarn   atomic.Int64 // see mount.warnAtCapacity
+	// ctx bounds every stream this router opens; Close cancels it and waits on
+	// live, so a stream's own goroutine, its tickers and its disposers are all
+	// finished by the time Close returns.
+	ctx  context.Context
+	live sync.WaitGroup
+	// liveMu orders a stream's live.Add against Close's Wait. Without it a
+	// connect that has passed the ctx.Done check can Add while Close is parked
+	// in Wait, which is a WaitGroup misuse throw.
+	liveMu sync.RWMutex
+	// noChange dedupes the dead-click warning per action (see warnNoChange).
+	// Per Router, not per process, so a second app in the same binary — or a
+	// second test — still gets told.
+	noChange    sync.Map
+	unknownActs idDedupe // see mount.unknownAction
+}
+
 func (r *Router) build() {
 	r.cfg = newConfig(r.opts)
 	r.opts = nil
@@ -318,8 +323,6 @@ func (r *Router) build() {
 	r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
 	r.mux = http.NewServeMux()
 	r.reg = newRegistry(r.cfg.maxSSEConn)
-	r.liveCount = &atomic.Int64{}
-	r.maxLive = r.cfg.maxSSEConn
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
 	r.mux.HandleFunc("GET "+datastarRoute, r.serveDatastar)
@@ -514,10 +517,8 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	checkHooks(r.cfg.log, rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
 	m := &mount{
-		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, root: rootOf[T, PT]{root: root, typ: rootType},
+		routerShared: &r.routerShared, root: rootOf[T, PT]{root: root, typ: rootType},
 		patternBase: patternBase, pageSuffix: pageSuffix, names: names,
-		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, unknownActs: &r.unknownActs, capWarn: &r.capWarn,
-		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
 	}
 	// The CSP is derived from the root's declaration once, here, off the
 	// zero-data literal: one string per mount, none per request. writeHTMLPage

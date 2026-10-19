@@ -273,7 +273,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		timeout: sseWriteTimeout,
 		cancel:  cancel,
 	}
-	defer context.AfterFunc(m.routerCtx, stream.end)()
+	defer context.AfterFunc(m.ctx, stream.end)()
 
 	// The credential dispatch requires a match against, so that a leaked tab id
 	// is not on its own a bearer token good from any origin with no session at
@@ -484,7 +484,7 @@ type admission struct{ m *mount }
 // the router is shutting down.
 func (m *mount) admit(w http.ResponseWriter) (admission, bool) {
 	// Increment-then-check so the gauge can't be raced past the limit.
-	if n := m.liveCount.Add(1); n > int64(m.maxLive) {
+	if n := m.liveCount.Add(1); n > int64(m.cfg.maxSSEConn) {
 		m.liveCount.Add(-1)
 		m.warnAtCapacity(n - 1)
 		http.Error(w, "stream capacity reached", http.StatusServiceUnavailable)
@@ -500,7 +500,7 @@ func (m *mount) admit(w http.ResponseWriter) (admission, bool) {
 	// misuse throw, not a recoverable panic.
 	m.liveMu.RLock()
 	select {
-	case <-m.routerCtx.Done():
+	case <-m.ctx.Done():
 		m.liveMu.RUnlock()
 		m.liveCount.Add(-1)
 		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
