@@ -168,6 +168,22 @@ func bareOrigin(origin string) string {
 // scheme://host[:port], or "" when none applies. The order picks which
 // reason a multiply-bad value reports.
 func originFault(origin string, u *url.URL) string {
+	if f := authorityFault(u); f != "" {
+		return f
+	}
+	switch {
+	case u.Path != "" && u.Path != "/" || u.RawPath != "":
+		return "has a path"
+	case u.RawQuery != "" || u.ForceQuery:
+		return "has a query"
+	case u.Fragment != "" || strings.Contains(origin, "#"):
+		return "has a fragment"
+	}
+	return ""
+}
+
+// authorityFault is originFault's scheme://host[:port] half.
+func authorityFault(u *url.URL) string {
 	switch {
 	case u.Scheme != "http" && u.Scheme != "https":
 		return "scheme is not http or https"
@@ -179,12 +195,6 @@ func originFault(origin string, u *url.URL) string {
 		return "has a wildcard; list each origin"
 	case strings.HasSuffix(u.Host, ":"):
 		return "has an empty port"
-	case u.Path != "" && u.Path != "/" || u.RawPath != "":
-		return "has a path"
-	case u.RawQuery != "" || u.ForceQuery:
-		return "has a query"
-	case u.Fragment != "" || strings.Contains(origin, "#"):
-		return "has a fragment"
 	}
 	return ""
 }

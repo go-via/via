@@ -75,7 +75,7 @@ func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 }
 
 // childRedirector is a plain child (dispatchPlain, not
-// liveRunAction) whose action queues a Redirect.
+// liveAction.runOn) whose action queues a Redirect.
 type childRedirector struct{}
 
 func (r *childRedirector) Go(ctx *via.Ctx) { ctx.Redirect("/dest") }

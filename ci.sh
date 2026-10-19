@@ -52,9 +52,9 @@ $GO tool staticcheck ./...
 
 # go list keeps out tests, nested modules and dot-dirs, which a bare path
 # argument would walk into.
-echo "== gocyclo, gocognit (over 15) =="
+echo "== gocyclo (over 10), gocognit (over 15) =="
 srcs="$($GO list -f '{{range .GoFiles}}{{$.Dir}}/{{.}} {{end}}' ./...)"
-$GO tool gocyclo -over 15 $srcs
+$GO tool gocyclo -over 10 $srcs
 $GO tool gocognit -over 15 $srcs
 
 echo "== go build =="

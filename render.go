@@ -10,6 +10,29 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
+// rerender is what a render after an action or on a push carries over from
+// the request or connection it belongs to.
+//
+// only restricts the data-signals declaration to the slots named, for a plain
+// action's patch; seen is the pre-action render's slot set (see
+// declareFilter). from is the request-scoped Ctx the render belongs to; it
+// inits nested children — see inheritRequestScope.
+type rerender struct {
+	base            string
+	only            map[string]any
+	seen            map[string]bool
+	from            *Ctx
+	rev             *revertSet
+	badDecodeLogged *atomic.Bool
+}
+
+func (r rerender) wire(ctx *Ctx) {
+	ctx.declareSeen = r.seen
+	ctx.rev = r.rev
+	ctx.badDecodeLogged = r.badDecodeLogged
+	inheritRequestScope(ctx, r.from)
+}
+
 // renderRootBase renders inst into <div id="root">…</div> and returns the bind
 // Ctx plus the bytes. It never hydrates from request echoes: every render that
 // reaches here follows an action, so the answer must reflect mutated server
@@ -18,15 +41,12 @@ import (
 // declareSignals false is what a live push passes: re-declaring data-signals on
 // every push would re-merge and clobber a signal the user is mid-edit (their
 // half-typed message vanishing when someone else's arrives). Server-driven
-// signal changes ride an explicit signal-patch instead. only restricts the
+// signal changes ride an explicit signal-patch instead. r.only restricts the
 // declaration further, for a plain action's patch.
-func renderRootBase(inst instance, declareSignals bool, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool) (*Ctx, []byte) {
-	ctx := newRootCtx(declareSignals, base, only)
-	ctx.declareSeen = seen
+func renderRootBase(inst instance, declareSignals bool, r rerender) (*Ctx, []byte) {
+	ctx := newRootCtx(declareSignals, r.base, r.only)
 	ctx.unitV = inst
-	ctx.rev = rev
-	ctx.badDecodeLogged = badDecodeLogged
-	inheritRequestScope(ctx, from)
+	r.wire(ctx)
 	return ctx, renderRootWith(ctx, inst.v)
 }
 
@@ -84,7 +104,7 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	b.WriteString(`<div id="root"`)
 	if declareSignals {
 		order, initial := withWritten(ctx, only)
-		writeSignalsAttr(ctx.logger(), &b, order, initial, only, ctx.declareSeen)
+		writeSignalsAttr(ctx.logger(), &b, order, initial, declareFilter{only, ctx.declareSeen})
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())

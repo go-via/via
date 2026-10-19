@@ -224,6 +224,21 @@ allocates per call.
 all three modules. Tests are exempt (`t.Run`, `assert.Eventually`), and so is
 `internal/site/snippet/src`, which shows readers plain `net/http` code.
 
+## Fitness Functions
+
+Reasoning: A long parameter list or a branchy function is a sign that one
+function does several jobs, and review misses it once the code works. Length
+is not such a sign: a long function or file with one cohesive concern is fine
+(see Files).
+
+Rule: Non-test code keeps cyclomatic complexity at 10 or less and takes at
+most five parameters, the receiver not counted. Params that travel together
+become a struct; branches split into named helpers. There is no allowlist.
+
+`ci.sh` enforces complexity with `gocyclo -over 10` on via's root module.
+`TestSources_takeAtMostFiveParams` in `sourcelint_test.go` enforces params
+across all three modules. There is no line limit on functions or files.
+
 ## Panic on Invalid Registration
 
 Reasoning: Errors during page or router registration are programming
@@ -530,10 +545,10 @@ signal — change the surface, not the test boundary.
 Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
 (the reflect allowlist, the no-`&`/no-closure guard over the site's demos and
 snippets, the guard that keeps `internal/render`'s binder plumbing off every
-public package, the black-box test lint and the func-literal lint) parse the
-tree and assert on what it says, so they pair with every source file and
-therefore with none. A failure there means the source drifted from a design
-rule, not a behavioral regression.
+public package, the black-box test lint, the func-literal lint and the param
+lint) parse the tree and assert on what it says, so they pair with every
+source file and therefore with none. A failure there means the source drifted
+from a design rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A

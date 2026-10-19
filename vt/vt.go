@@ -299,18 +299,7 @@ func (a *Action) signalBody() string {
 // for a malformed body, an oversized one, or a busy or closing server.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
-	path := a.raw
-	if path == "" && a.conn != nil {
-		path = a.conn.ActionURL(a.child, a.n)
-	}
-	if path == "" {
-		u, ok := nthActionURL([]byte(a.app.page()), a.child, a.n)
-		if !ok {
-			a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.child, a.n)
-		}
-		path = u
-	}
-	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+path, strings.NewReader(a.signalBody()))
+	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.path(), strings.NewReader(a.signalBody()))
 	if err != nil {
 		a.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
@@ -335,6 +324,25 @@ func (a *Action) Fire() (int, string) {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
+}
+
+// path is the action URL Fire posts to: the raw one the test pinned, else the
+// open Conn's, else the one the rendered page carries.
+func (a *Action) path() string {
+	a.app.t.Helper()
+	if a.raw != "" {
+		return a.raw
+	}
+	if a.conn != nil {
+		if u := a.conn.ActionURL(a.child, a.n); u != "" {
+			return u
+		}
+	}
+	u, ok := nthActionURL([]byte(a.app.page()), a.child, a.n)
+	if !ok {
+		a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.child, a.n)
+	}
+	return u
 }
 
 // Conn is an open SSE stream to a live page, carrying its tab id.

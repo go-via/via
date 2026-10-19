@@ -15,6 +15,7 @@ package via_test
 //   - no binder plumbing on any public package (it stays in internal/render)
 //   - black-box tests, and none of package main (CONVENTIONS.md)
 //   - no func literals outside tests (CONVENTIONS.md, No Func Literals)
+//   - at most five parameters per func (CONVENTIONS.md, Fitness Functions)
 
 import (
 	"bytes"
@@ -341,7 +342,7 @@ func typeCheck(fset *token.FileSet, imp types.Importer, path string, files []*as
 
 func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 	t.Parallel()
-	// reflect is admitted in these four files. Its walks run once per
+	// reflect is admitted in these five files. Its walks run once per
 	// composition type and are memoized: the action-id func name and receiver
 	// field path, the field-name signal table (including a SignalCS field's
 	// zero value), the child's parent field lookup, the hook-shape check, and
@@ -360,6 +361,9 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 		"action.go": {"reflect.Array", "reflect.Interface", "reflect.Struct",
 			"reflect.StructField", "reflect.Type", "reflect.ValueOf"},
 		"child.go": {"reflect.TypeOf"},
+		// hooks.go checks each composition type's hook methods once — see
+		// checkHooks.
+		"hooks.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
 		// router.go's kind switch is the Assets constancy probe, which runs once
 		// per Mount and never again.
 		"router.go": {"reflect.Bool", "reflect.Float32", "reflect.Float64", "reflect.Int",
@@ -646,6 +650,96 @@ func TestFuncLiteralLint_flagsLiteralsOutsideTestsAndShownSnippets(t *testing.T)
 // snippet/src is exempt: it shows readers plain net/http, where a closure is
 // the idiom they will meet.
 func funcLiterals(root string) ([]string, error) {
+	files, err := sourceFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rel := range files {
+		if strings.Contains(filepath.ToSlash(rel), "snippet/src/") {
+			continue
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok {
+				p := fset.Position(lit.Pos())
+				out = append(out, fmt.Sprintf("%s:%d:%d: func literal: use a named func, method value or typed value", rel, p.Line, p.Column))
+			}
+			return true
+		})
+	}
+	return out, nil
+}
+
+func TestSources_takeAtMostFiveParams(t *testing.T) {
+	t.Parallel()
+	got, err := wideFuncs(".")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestParamLint_flagsFuncsOverFiveParams(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"p/five.go":   "package p\n\nfunc f(a, b, c int, d string, e bool) {}",
+		"p/six.go":    "package p\n\nfunc g(a, b, c int, d string, e bool, f any) {}",
+		"p/recv.go":   "package p\n\ntype T struct{}\n\nfunc (T) m(int, int, int, int, int) {}",
+		"p/p_test.go": "package p_test\n\nfunc h(a, b, c, d, e, f int) {}",
+	} {
+		path := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(src+"\n"), 0o644))
+	}
+	got, err := wideFuncs(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join("p", "six.go") + ":3:1: g takes 6 params; group the ones that travel together"}, got)
+}
+
+// wideFuncs lists every func under root outside tests that takes more than
+// five params, the receiver not counted.
+func wideFuncs(root string) ([]string, error) {
+	files, err := sourceFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, rel := range files {
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, filepath.Join(root, rel), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range f.Decls {
+			fd, ok := d.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+			if n := paramCount(fd.Type.Params); n > 5 {
+				p := fset.Position(fd.Pos())
+				out = append(out, fmt.Sprintf("%s:%d:%d: %s takes %d params; group the ones that travel together", rel, p.Line, p.Column, fd.Name.Name, n))
+			}
+		}
+	}
+	return out, nil
+}
+
+func paramCount(fl *ast.FieldList) int {
+	n := 0
+	for _, f := range fl.List {
+		n += max(len(f.Names), 1)
+	}
+	return n
+}
+
+// sourceFiles lists every non-test .go file under root, relative to it, across
+// nested modules; dot, underscore, vendor and testdata dirs are skipped as the
+// go tool skips them.
+func sourceFiles(root string) ([]string, error) {
 	var out []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -656,31 +750,14 @@ func funcLiterals(root string) ([]string, error) {
 			if path != root && (strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_") || n == "vendor" || n == "testdata") {
 				return filepath.SkipDir
 			}
-			if filepath.Base(filepath.Dir(path)) == "snippet" && n == "src" {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		fset := token.NewFileSet()
-		f, err := parser.ParseFile(fset, path, nil, 0)
-		if err != nil {
-			return err
-		}
 		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		ast.Inspect(f, func(n ast.Node) bool {
-			if lit, ok := n.(*ast.FuncLit); ok {
-				p := fset.Position(lit.Pos())
-				out = append(out, fmt.Sprintf("%s:%d:%d: func literal: use a named func, method value or typed value", rel, p.Line, p.Column))
-			}
-			return true
-		})
-		return nil
+		out = append(out, rel)
+		return err
 	})
 	return out, err
 }

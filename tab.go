@@ -579,7 +579,6 @@ func (t *parkTicket) wait(ctx, routerCtx context.Context, now, deadline time.Tim
 	}
 	timer := time.NewTimer(connectBy.Sub(now))
 	defer timer.Stop()
-	var out enterOutcome
 	for {
 		switch {
 		case !s.gone.IsZero():
@@ -588,34 +587,41 @@ func (t *parkTicket) wait(ctx, routerCtx context.Context, now, deadline time.Tim
 		case s.lc != nil && s.queue[0] == w:
 			return s.lc, t, enterReady
 		}
-		if w.wake == nil {
-			w.wake = make(chan struct{})
-		}
-		ch := w.wake
-		r.mu.Unlock()
-		select {
-		case <-ch:
-			r.mu.Lock()
+		out, woke := t.sleep(ctx, routerCtx, timer.C)
+		if woke {
 			continue
-		case <-timer.C:
-			r.mu.Lock()
-			if s.lc != nil && connectBy.Before(deadline) {
-				// Connected, and queued behind earlier clicks: only the wait
-				// for the stream is capped, the turn in line runs to deadline.
-				connectBy = deadline
-				timer.Reset(time.Until(deadline))
-				continue
-			}
-			r.unpark(id, s, w)
-			return nil, nil, enterTimeout
-		case <-ctx.Done():
-			out = enterAbandoned
-		case <-routerCtx.Done():
-			out = enterClosed
 		}
-		r.mu.Lock()
+		if out == enterTimeout && s.lc != nil && connectBy.Before(deadline) {
+			// Connected, and queued behind earlier clicks: only the wait
+			// for the stream is capped, the turn in line runs to deadline.
+			connectBy = deadline
+			timer.Reset(time.Until(deadline))
+			continue
+		}
 		r.unpark(id, s, w)
 		return nil, nil, out
+	}
+}
+
+// sleep blocks with r.mu released until t is woken, the timer fires, the client
+// hangs up or the router closes, and holds r.mu again on return. woke reports a
+// wake-up, which needs a fresh look at the slot and carries no outcome.
+func (t *parkTicket) sleep(ctx, routerCtx context.Context, timer <-chan time.Time) (out enterOutcome, woke bool) {
+	if t.w.wake == nil {
+		t.w.wake = make(chan struct{})
+	}
+	ch := t.w.wake
+	t.r.mu.Unlock()
+	defer t.r.mu.Lock()
+	select {
+	case <-ch:
+		return 0, true
+	case <-timer:
+		return enterTimeout, false
+	case <-ctx.Done():
+		return enterAbandoned, false
+	case <-routerCtx.Done():
+		return enterClosed, false
 	}
 }
 

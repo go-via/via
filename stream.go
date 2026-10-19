@@ -88,6 +88,7 @@ type stream struct {
 	rc      *http.ResponseController
 	timeout time.Duration
 	cancel  context.CancelFunc
+	done    <-chan struct{} // closed by cancel
 	failed  bool
 	// busy says what the goroutine is waiting on outside user code, for the
 	// pinned warning: read from the pin timer's goroutine, hence atomic.
@@ -190,9 +191,10 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*Ctx, listeners []subscription, wake chan struct{}, lc *tabStream) {
-	defer disposeUnits(log, g, units)
-	for _, u := range units {
+func runStream(reqCtx context.Context, lc *tabStream, listeners []subscription, wake chan struct{}) {
+	log, g := lc.mount.cfg.log, lc.guard
+	defer disposeUnits(log, g, lc.handlers)
+	for _, u := range lc.handlers {
 		for _, t := range u.ticks {
 			go runTicker(reqCtx, u, t, lc.pushq)
 		}

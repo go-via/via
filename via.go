@@ -244,17 +244,15 @@ func signalsOf(t reflect.Type) *typeSignals {
 	if v, ok := typeSignalCache.Load(t); ok {
 		return v.(*typeSignals)
 	}
-	ts := &typeSignals{byOff: map[uintptr]signalField{}}
-	minted := map[string]bool{}
-	walkSignals(ts, minted, t, 0, "", 0)
-	ts.names = minted
+	ts := &typeSignals{byOff: map[uintptr]signalField{}, names: map[string]bool{}}
+	walkSignals(ts, t, 0, "", 0)
 	typeSignalCache.Store(t, ts)
 	return ts
 }
 
 // walkSignals adds t's signal and State fields at base to ts, descending
 // through plain nested structs.
-func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base uintptr, prefix string, depth int) {
+func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, depth int) {
 	if t == nil || t.Kind() != reflect.Struct || depth > 8 { // depth: a self-referential composition must not spin here
 		return
 	}
@@ -263,7 +261,7 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 		name, off := prefix+lowerFirst(f.Name), base+f.Offset
 		switch ptr := reflect.PointerTo(f.Type); {
 		case ptr.Implements(signalMarker):
-			addSignalField(ts, minted, t, f, off, name)
+			addSignalField(ts, t, f, off, name)
 		case ptr.Implements(seededMarker): // State, List
 			addSeededField(ts, t, f, off)
 		case ptr.Implements(viewerType):
@@ -272,7 +270,7 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 			checkNoSeedTag(t, f)
 		case f.Type.Kind() == reflect.Struct:
 			checkNoSeedTag(t, f)
-			walkSignals(ts, minted, f.Type, off, name+"_", depth+1)
+			walkSignals(ts, f.Type, off, name+"_", depth+1)
 		default:
 			checkNoSeedTag(t, f)
 			checkSignalReachable(t, f)
@@ -282,7 +280,7 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 
 // addSignalField registers f, a Signal or SignalCS field of t, under its wire
 // slot, with the seed its tag or client zero declares.
-func addSignalField(ts *typeSignals, minted map[string]bool, t reflect.Type, f reflect.StructField, off uintptr, name string) {
+func addSignalField(ts *typeSignals, t reflect.Type, f reflect.StructField, off uintptr, name string) {
 	tag, tagged := f.Tag.Lookup("via")
 	sf := signalField{off: off, name: name}
 	handle := reflect.New(f.Type).Interface()
@@ -298,8 +296,8 @@ func addSignalField(ts *typeSignals, minted map[string]bool, t reflect.Type, f r
 		}
 	}
 	slot := sf.wire("")
-	checkSlotName(t, f.Name, slot, minted)
-	minted[slot] = true
+	checkSlotName(t, f.Name, slot, ts.names)
+	ts.names[slot] = true
 	ts.fields = append(ts.fields, sf)
 	ts.byOff[off] = sf
 }
@@ -505,18 +503,23 @@ func childFieldName(parent, child reflect.Type) string {
 		name = "" // ambiguous, or the only candidate is nested
 	}
 	if name != "" {
-		// A child scopes its child's slots under name+"__", while a plain
-		// field literally named A__b mints "a__b" in the parent — same slot,
-		// two different fields.
-		for own := range signalsOf(parent).names {
-			if strings.HasPrefix(own, name+"__") {
-				panic(render.Miswired("via: signal slot " + own + " on " + parent.String() +
-					" collides with the child prefix of field " + name + " — rename the field"))
-			}
-		}
+		checkChildPrefix(parent, name)
 	}
 	childPrefixes.Store(k, name)
 	return name
+}
+
+// checkChildPrefix panics when a parent slot collides with the slot prefix of
+// its child field name: a child's slots are scoped under name+"__", while a
+// plain field literally named A__b mints "a__b" in the parent — same slot, two
+// different fields.
+func checkChildPrefix(parent reflect.Type, name string) {
+	for own := range signalsOf(parent).names {
+		if strings.HasPrefix(own, name+"__") {
+			panic(render.Miswired("via: signal slot " + own + " on " + parent.String() +
+				" collides with the child prefix of field " + name + " — rename the field"))
+		}
+	}
 }
 
 // holdsType counts the places a value of type t can hold a child, with any
@@ -717,7 +720,7 @@ func (b binderCtx) Action(r *render.Renderer, event string, fn any) {
 }
 
 func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, call render.ArgCall) {
-	bindArg(r, b.c, event, fn, arg, call)
+	b.c.bindArg(r, event, fn, arg, call)
 }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
@@ -944,14 +947,14 @@ func (c *Ctx) RedirectExternal(target string) {
 func bind(r *render.Renderer, ctx *Ctx, event string, fn func(*Ctx)) {
 	mustActionEvent("package on", event)
 	// fn is stored as-is: dispatch calls it with a fresh per-dispatch Ctx,
-	// never the one bound here at render time (see liveRunAction).
+	// never the one bound here at render time (see liveAction.runOn).
 	idx := ctx.actionSlot(fn)
 	writeActionAttr(r, ctx, event, idx, "")
 }
 
 // bindArg wires event to a POST of fn carrying arg, for on.Bind, whose godoc
 // states the dispatchable-iff-rendered property this enforces.
-func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call render.ArgCall) {
+func (c *Ctx) bindArg(r *render.Renderer, event string, fn, arg any, call render.ArgCall) {
 	mustActionEvent("on.Bind", event)
 	// Marshalled before the slot is claimed: the encoded arg is both what
 	// the binding ships and what dispatch matches against, so one that
@@ -959,16 +962,16 @@ func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call rende
 	// render a button whose every click 410s.
 	data, err := json.Marshal(arg)
 	if err != nil {
-		ctx.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
+		c.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
 		return
 	}
 	// Dispatch reads null as a missing arg, so the binding would 400 on every click.
 	if string(data) == "null" {
-		ctx.logger().Warn("via: on.Bind arg is null; the binding is dropped", "event", event)
+		c.logger().Warn("via: on.Bind arg is null; the binding is dropped", "event", event)
 		return
 	}
-	idx := ctx.actionSlotArg(fn, call, string(data))
-	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
+	idx := c.actionSlotArg(fn, call, string(data))
+	writeActionAttr(r, c, event, idx, "a="+url.QueryEscape(string(data)))
 }
 
 // writeActionAttr splices event into an attribute name raw, so a quote, space
