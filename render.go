@@ -44,10 +44,7 @@ func inheritRequestScope(ctx, from *Ctx) {
 	// A re-render of a live unit is live whether or not this View re-derives
 	// it: a Tick or Listen that made it live is not registered again here.
 	ctx.live = from.live
-	ctx.req = from.req
-	ctx.sessions = from.sessions
-	ctx.policy = from.policy
-	ctx.sessW = from.sessW
+	ctx.reqScope = from.reqScope
 	// The resolved handle, not just the manager: a session minted this request
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).

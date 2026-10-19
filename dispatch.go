@@ -608,7 +608,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, streamCtx: unit.streamCtx}
+	rc := &Ctx{reqScope: reqScope{req: req, sessions: sessions, policy: pol, sessW: w}, streamCtx: unit.streamCtx}
 	rc.adoptSession(sessID, beforeSession, nil)
 	rc.session.stream = lc
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
@@ -623,7 +623,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
 	// the tab is navigating away from this render. See reloader.
 	if rc.redirect.url == "" {
-		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
+		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
 			return actionResult{reloadErr: err, pushWork: unit.pusher}
 		}
@@ -865,10 +865,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
-	u.req = req
-	u.sessions = m.sessions
-	u.policy = m.policy
-	u.sessW = w
+	u.reqScope = reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
 	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
 	// The handler mutated state the acted unit's OnInit had already read, so
@@ -876,7 +873,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// silently unchanged UI. Skipped behind a Redirect: nothing from this
 	// instance gets rendered. See reloader.
 	if u.redirect.url == "" {
-		rl := &Ctx{req: req, sessions: m.sessions, policy: m.policy, sessW: w, session: auth.session, base: base}
+		rl := &Ctx{reqScope: u.reqScope, session: auth.session, base: base}
 		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
 			answerHookError(m.cfg.log, w, err, "via: OnReload after an action failed")
 			return

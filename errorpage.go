@@ -302,9 +302,7 @@ func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, 
 	defer r.recoverErrorPage(&body, &ok)
 	ctx := newRootCtx(false, "", nil)
 	ctx.errPage = true
-	ctx.req = req
-	ctx.sessions = r.sessions
-	ctx.policy = r.policy
+	ctx.reqScope = reqScope{req: req, sessions: r.sessions, policy: r.policy}
 	node := r.cfg.errorPage(ctx, pe)
 	if node == nil {
 		if r.errPageWarned.CompareAndSwap(false, true) {

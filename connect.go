@@ -467,7 +467,7 @@ func (m *mount) discover(w http.ResponseWriter, req *http.Request, pv instance, 
 	// OnInit gets the session load connect made rather than a second one: when
 	// that load slid the idle window, only its handle knows to re-send the
 	// cookie, and a reconnect may be the only request an open tab ever makes.
-	bind.req, bind.sessions, bind.policy, bind.sessW = req, m.sessions, m.policy, w
+	bind.reqScope = reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
 	bind.adoptSession(sessID, sessDat, nil)
 	if runOnInit(pv.v, bind, w, req, m.sessions, m.policy, true) != nil {
 		return nil, false

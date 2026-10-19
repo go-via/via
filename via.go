@@ -560,24 +560,30 @@ type ptrViewer[T any] = interface {
 // handed to; to reach a live unit from a goroutine of your own, publish to a
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
+// reqScope is the request a Ctx answers. Every Ctx derived for the same
+// request copies it whole, so a field added here reaches each derived Ctx.
+type reqScope struct {
+	req      *http.Request
+	sessions *sessionManager
+	policy   *routerPolicy
+	sessW    http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
+}
+
 type Ctx struct {
 	unitPass
 	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
 	declareOnly map[string]any  // when non-nil, declare only these slots
 	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
-	req         *http.Request
-	sessions    *sessionManager
-	policy      *routerPolicy
-	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
-	session     *Session
-	isChild     bool
-	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
-	unitV       instance
-	declare     bool   // this render declares page-level data-signals
-	base        string // mount path prefix for action POSTs
-	doInit      bool   // request-scoped, so every child's OnInit runs before its View
-	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
-	actedInst   instance
+	reqScope
+	session   *Session
+	isChild   bool
+	childKey  string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
+	unitV     instance
+	declare   bool   // this render declares page-level data-signals
+	base      string // mount path prefix for action POSTs
+	doInit    bool   // request-scoped, so every child's OnInit runs before its View
+	actedKey  string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
+	actedInst instance
 	// passUnits is dispatchPlain's discovery-only record of each child key's
 	// first-pass Ctx, shared by the whole tree. Later passes render that pass's
 	// instance again instead of a fresh copy off the parent's field, so a

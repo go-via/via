@@ -62,10 +62,7 @@ var errRedirected = errors.New("via: redirected")
 // fetch follows a 303 and would deliver the target page's HTML as the stream
 // body, so a redirect there answers a plain 403 instead.
 func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sse bool) (err error) {
-	ctx.req = req
-	ctx.sessions = sessions
-	ctx.policy = pol
-	ctx.sessW = w
+	ctx.reqScope = reqScope{req: req, sessions: sessions, policy: pol, sessW: w}
 	ctx.doInit = true // every child's OnInit runs too, inside Child
 	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint

@@ -305,10 +305,7 @@ func newChildCtx(parent *Ctx, key string, inst instance, prior *Ctx) *Ctx {
 	// A child is the parent of its own children, so it passes the declaration
 	// down or a grandchild's slots never reach the client store.
 	child.declare, child.declareOnly, child.declareSeen = parent.declare, parent.declareOnly, parent.declareSeen
-	child.req = parent.req
-	child.sessions = parent.sessions
-	child.policy = parent.policy
-	child.sessW = parent.sessW
+	child.reqScope = parent.reqScope
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	return child
 }
