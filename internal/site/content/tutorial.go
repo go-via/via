@@ -96,8 +96,8 @@ func (p *Tutorial) View() h.H {
 		h.P(h.Str("Every open tab holds a streaming response. "), APIText("via.Router.Close", "r.Close()"),
 			h.Str(" ends each one the way a closed tab would, running its OnDispose; "), Code("http.Server.Shutdown"),
 			h.Str(" waits for in-flight responses and never ends a stream itself, so Close goes first. "), API("via.Handler"),
-			h.Str(" returns the "), APIText("via.Router", "*Router"), h.Str(" so main can reach it. Steps 1 to 3 call Close "+
-				"only after ListenAndServe returns, which Ctrl-C never lets happen. "), Code("VIA_ADDR"),
+			h.Str(" returns the "), APIText("via.Router", "*Router"), h.Str(" so main can reach it. Steps 1 to 3 never call Close: "+
+				"Ctrl-C kills the process before ListenAndServe returns. "), Code("VIA_ADDR"),
 			h.Str(" overrides the listen address.")),
 
 		d.H2("5. Why it's live"),

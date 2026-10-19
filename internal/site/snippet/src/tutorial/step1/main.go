@@ -46,7 +46,5 @@ func (c *Chat) View() h.H {
 func main() {
 	room := NewRoom()
 	r := via.Handler(Chat{room: room})
-	err := http.ListenAndServe(":8080", r)
-	r.Close()
-	log.Fatal(err)
+	log.Fatal(http.ListenAndServe(":8080", r))
 }

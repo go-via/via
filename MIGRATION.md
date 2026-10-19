@@ -1,7 +1,8 @@
 # Migrating from v0.7 to v0.8
 
-This document tracks `main`. Lines marked v0.9.0 describe behaviour v0.8.3
-does not have; [Upgrading from v0.8.3](#upgrading-from-v083) lists all of it.
+This document tracks `main`. Lines marked v0.9.0 or v0.9.1 describe
+behaviour v0.8.3 does not have; [Upgrading from v0.8.3](#upgrading-from-v083)
+lists all of it. v0.9.1 only adds API, so it asks nothing of an upgrade.
 
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
 changes without a module-path change — so `go get -u` walks v0.7.0 → v0.9.1 as

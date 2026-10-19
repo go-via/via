@@ -70,6 +70,10 @@
 
 ### Documented (behaviour unchanged)
 
+- `/start`, the README, the counter example and tutorial steps 1 to 3 no
+  longer call `r.Close()` after `ListenAndServe`, which Ctrl-C never reaches;
+  `/start` points to the tutorial's step 4 for the Close-then-Shutdown order.
+  `MIGRATION.md` names v0.9.1 alongside v0.9.0 (#178).
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
   shorthand `encode br zstd gzip` runs it at quality 0, so each stream frame
   is compressed on its own (145 bytes against 13).
