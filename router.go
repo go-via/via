@@ -300,6 +300,15 @@ func (r *Router) init(opts []Option) {
 	r.once.Do(r.build)
 }
 
+// via's own routes sit under the mount base. Each path is spelled once here:
+// the mux registers it, rendered markup posts to it, and the error-page
+// wrapper must recognise the stream route to stay out of its way.
+const (
+	streamRoute   = "/_via/sse"
+	actionRoute   = "/_via/a/"
+	datastarRoute = "/_via/datastar.js"
+)
+
 func (r *Router) build() {
 	r.cfg = newConfig(r.opts)
 	r.opts = nil
@@ -311,7 +320,7 @@ func (r *Router) build() {
 	r.maxLive = r.cfg.maxSSEConn
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
-	r.mux.HandleFunc("GET /_via/datastar.js", r.serveDatastar)
+	r.mux.HandleFunc("GET "+datastarRoute, r.serveDatastar)
 }
 
 func (r *Router) serveDatastar(w http.ResponseWriter, req *http.Request) {
@@ -547,8 +556,8 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	}
 
 	r.mux.HandleFunc("GET "+getPattern, m.serveGet)
-	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
-	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
+	r.mux.HandleFunc("POST "+patternBase+actionRoute+"{child}/{act}", m.dispatch)
+	r.mux.HandleFunc("POST "+patternBase+streamRoute, m.connect)
 }
 
 // mountBase turns a mount path into a ServeMux base plus its {name} segments,
@@ -641,7 +650,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 		// body before the id is in the store. Attribute-escaped here,
 		// path-escaped in concreteBase — both layers are needed; see
 		// concreteBase.
-		bodyOpen += ` data-init="@post('` + render.EscapeString(base+"/_via/sse") + `')"`
+		bodyOpen += ` data-init="@post('` + render.EscapeString(base+streamRoute) + `')"`
 	}
 	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))
 	bodyOpen += attrString(mergeAttrs(m.cfg.head.BodyAttrs, pageAttrs(m.cfg.log, root, "BodyAttrs", meta.BodyAttrs))) + ">"
@@ -651,7 +660,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	head.WriteString(m.cfg.head.Raw)
 	m.cfg.head.Assets.render(&head)
 	meta.Assets.render(&head)
-	head.WriteString(`<script type="module" src="/_via/datastar.js?v=` + datastarHash + `"></script>` +
+	head.WriteString(`<script type="module" src="` + datastarRoute + `?v=` + datastarHash + `"></script>` +
 		eventsScript() +
 		reconnectScript(hasLive) +
 		bodyOpen)

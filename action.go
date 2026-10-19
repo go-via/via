@@ -566,7 +566,7 @@ const unitIdentParam = "u"
 
 // actionPath is the POST path of action id on c's unit, unescaped.
 func actionPath(c *Ctx, id string) string {
-	path := c.base + "/_via/a/" + unitAddr(c) + "/" + id
+	path := c.base + actionRoute + unitAddr(c) + "/" + id
 	if c.unitV.ident != "" {
 		path += "?" + unitIdentParam + "=" + c.unitV.ident
 	}

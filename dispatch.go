@@ -27,6 +27,10 @@ import (
 // element-patch.
 type actionMode int
 
+func isDatastarRequest(req *http.Request) bool {
+	return req.Header.Get("Datastar-Request") == "true"
+}
+
 const (
 	modeDatastar actionMode = iota
 	modeNative
@@ -274,7 +278,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	mode := modeNative
-	if req.Header.Get("Datastar-Request") == "true" {
+	if isDatastarRequest(req) {
 		mode = modeDatastar
 	}
 	m.capBody(w, req, mode)

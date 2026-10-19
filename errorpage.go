@@ -267,8 +267,8 @@ func noteErr(w http.ResponseWriter, err error) {
 // would commit a bare 200 ahead of the error page.
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {
 	if r.cfg.errorPage == nil ||
-		req.Header.Get("Datastar-Request") == "true" ||
-		strings.HasSuffix(req.URL.Path, "/_via/sse") {
+		isDatastarRequest(req) ||
+		strings.HasSuffix(req.URL.Path, streamRoute) {
 		return nil
 	}
 	return &errPageWriter{ResponseWriter: w, r: r, req: req}
