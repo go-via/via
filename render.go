@@ -120,6 +120,9 @@ func withWritten(c *Ctx, written map[string]any) ([]string, map[string]any) {
 	return append(slices.Clone(c.order), extra...), initial
 }
 
+const liveUnderLiveMsg = "via: via.Child: a live unit cannot sit inside another live unit — " +
+	"embed it directly from a plain ancestor instead"
+
 // checkLiveNesting enforces the two deferred-feature rules on the finished
 // render tree: a live unit may not hold another live unit, and a live child's
 // View may not call Child at all (a live root may — its plain children are
@@ -129,8 +132,7 @@ func withWritten(c *Ctx, written map[string]any) ([]string, map[string]any) {
 func checkLiveNesting(c *Ctx, underLive bool) {
 	if c.live {
 		if underLive {
-			panic("via: via.Child: a live unit cannot sit inside another live unit — " +
-				"embed it directly from a plain ancestor instead")
+			panic(liveUnderLiveMsg)
 		}
 		if c.isChild && len(c.children) > 0 {
 			panic("via: via.Child: a live child's View must not call Child — keep a live child's View flat")
@@ -153,8 +155,7 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 // descendant with no ancestor left to register it.
 func checkLiveUnderLive(c *Ctx, underLive bool) {
 	if c.live && underLive {
-		panic(liveNestingViolation{msg: "via: via.Child: a live unit cannot sit inside another live unit — " +
-			"embed it directly from a plain ancestor instead"})
+		panic(liveNestingViolation{msg: liveUnderLiveMsg})
 	}
 	for _, ch := range c.children {
 		checkLiveUnderLive(ch, underLive || c.live)
