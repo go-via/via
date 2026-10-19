@@ -2,10 +2,7 @@ package via
 
 import (
 	"context"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/go-via/via/internal/session"
 )
 
 const (
@@ -249,19 +248,11 @@ type sessionData struct {
 	dropLogged bool
 }
 
-// sessionBlob is the wire form of a session. Field names are short because
-// every request that writes re-encodes the whole thing.
-type sessionBlob struct {
-	SID  string                     `json:"sid"`
-	Exp  int64                      `json:"exp"` // unix nanos; via's own expiry check, independent of the store's
-	Vals map[string]json.RawMessage `json:"v"`
-}
-
 // sessionManager holds the per-Router session config and store. Sessions are
 // always available; the cookie is issued lazily on the first write.
 type sessionManager struct {
 	store          SessionStore
-	key            []byte
+	signer         session.Signer
 	cookie         string
 	ttl            time.Duration
 	forceSecure    bool // WithSecureCookies: set Secure even when neither TLS nor a proxy header says https
@@ -353,15 +344,11 @@ func (m *sessionManager) peek(id, sid string) (map[string]json.RawMessage, time.
 	if err != nil || !ok {
 		return nil, time.Time{}, false, err
 	}
-	var b sessionBlob
-	if json.Unmarshal(raw, &b) != nil || b.SID != sid {
+	b, st := session.Decode(raw)
+	if st != session.Live || b.SID != sid {
 		return nil, time.Time{}, false, nil
 	}
-	exp := time.Unix(0, b.Exp)
-	if b.Exp > 0 && time.Now().After(exp) {
-		return nil, time.Time{}, false, nil
-	}
-	return b.Vals, exp, true, nil
+	return b.Vals, b.Expiry(), true, nil
 }
 
 // refresh replaces d's values with a newer write's. exp orders the writes: it
@@ -427,17 +414,9 @@ func newSessionManager(cfg *config) *sessionManager {
 	if store == nil {
 		store, inMemory = NewMemorySessionStore(), true
 	}
-	return &sessionManager{store: store, key: key, cookie: name, ttl: ttl,
+	return &sessionManager{store: store, signer: session.NewSigner(key), cookie: name, ttl: ttl,
 		forceSecure: cfg.sessionSecure, randomKey: random, memoryStore: inMemory,
 		storeTimeout: timeout, log: cfg.log}
-}
-
-// sign returns the signature appended to the id in the cookie, so a tampered
-// id is rejected.
-func (m *sessionManager) sign(id string) string {
-	mac := hmac.New(sha256.New, m.key)
-	mac.Write([]byte(id))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // resolve returns the session data for the request's cookie when it verifies
@@ -452,7 +431,7 @@ func (m *sessionManager) resolve(req *http.Request) (string, *sessionData, error
 	if err != nil {
 		return "", nil, nil
 	}
-	id, ok := m.verify(ck.Value)
+	id, ok := m.signer.Verify(ck.Value)
 	if !ok {
 		// Almost always another app on the same host signing the same cookie
 		// name with a different key (two dev servers on localhost ports).
@@ -504,17 +483,15 @@ func (m *sessionManager) get(ctx context.Context, id string) (*sessionData, erro
 	if !ok {
 		return nil, nil
 	}
-	var b sessionBlob
-	if json.Unmarshal(raw, &b) != nil || b.SID == "" {
+	b, st := session.Decode(raw)
+	switch st {
+	case session.Invalid:
 		return nil, nil
-	}
-	exp := time.Unix(0, b.Exp)
-	if b.Exp > 0 && time.Now().After(exp) {
-		// via's own expiry, so a store that ignores the ttl it was handed
-		// cannot resurrect an idle session.
+	case session.Expired:
 		_ = m.store.Delete(ctx, id)
 		return nil, nil
 	}
+	exp := b.Expiry()
 	if b.Vals == nil {
 		b.Vals = map[string]json.RawMessage{}
 	}
@@ -574,7 +551,7 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 		}
 		vals := mergeVals(own, b, live, dirty)
 		exp := time.Now().Add(m.ttl)
-		applied, ok := m.persist(ctx, cas, id, sessionBlob{SID: sid, Exp: exp.UnixNano(), Vals: vals}, ver)
+		applied, ok := m.persist(ctx, cas, id, session.Blob{SID: sid, Exp: exp.UnixNano(), Vals: vals}, ver)
 		if !ok {
 			return false
 		}
@@ -594,8 +571,8 @@ func (m *sessionManager) save(ctx context.Context, id string, d *sessionData, mi
 
 // persist encodes and writes b under id. ok is false on a logged failure;
 // applied is false when a CAS store saw a newer version than ver.
-func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore, id string, b sessionBlob, ver uint64) (applied, ok bool) {
-	blob, err := json.Marshal(b)
+func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore, id string, b session.Blob, ver uint64) (applied, ok bool) {
+	blob, err := session.Encode(b)
 	if err != nil {
 		m.logger().Error("via: session encode failed", "err", err)
 		return false, false
@@ -617,7 +594,7 @@ func (m *sessionManager) persist(ctx context.Context, cas VersionedSessionStore,
 
 // mergeVals overlays dirty onto the stored values when b is live, else onto
 // own. A nil value in dirty is a tombstone.
-func mergeVals(own map[string]json.RawMessage, b sessionBlob, live bool, dirty map[string]json.RawMessage) map[string]json.RawMessage {
+func mergeVals(own map[string]json.RawMessage, b session.Blob, live bool, dirty map[string]json.RawMessage) map[string]json.RawMessage {
 	vals := b.Vals
 	if !live || vals == nil {
 		vals = make(map[string]json.RawMessage, len(own))
@@ -649,7 +626,7 @@ func (m *sessionManager) retire(d *sessionData, mintFailed bool) {
 
 // loadLive reads the blob under id and reports whether it is still sid's
 // unexpired session. ver is only meaningful when cas is non-nil.
-func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore, id, sid string) (b sessionBlob, ver uint64, live bool, err error) {
+func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore, id, sid string) (b session.Blob, ver uint64, live bool, err error) {
 	var (
 		raw []byte
 		ok  bool
@@ -665,9 +642,11 @@ func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore
 	// Deliberately no b.Vals != nil clause: get accepts a nil value map as
 	// an empty session, and a store that normalises {} to null would
 	// otherwise yield a session that reads fine and retires on first write.
-	live = ok && json.Unmarshal(raw, &b) == nil && b.SID == sid &&
-		(b.Exp <= 0 || time.Now().Before(time.Unix(0, b.Exp)))
-	return b, ver, live, nil
+	if !ok {
+		return b, ver, false, nil
+	}
+	b, st := session.Decode(raw)
+	return b, ver, st == session.Live && b.SID == sid, nil
 }
 
 // snapshot copies what save needs from d under one lock, or reports false when
@@ -723,26 +702,13 @@ func (m *sessionManager) reID(ctx context.Context, oldID string, d *sessionData)
 			// exactly when the store is flaky. Overwrite the old id with a
 			// blob that is already expired instead: get deletes it on sight.
 			m.logger().Error("via: session store Delete failed on rotate, writing an expired tombstone", "err", err)
-			dead, _ := json.Marshal(sessionBlob{SID: d.sid, Exp: time.Now().Add(-time.Minute).UnixNano()})
-			if err := m.store.Save(ctx, oldID, dead, time.Second); err != nil {
+			if err := m.store.Save(ctx, oldID, session.Tombstone(d.sid), time.Second); err != nil {
 				panic("via: Session.Rotate could neither delete nor invalidate the old session id, " +
 					"so the pre-rotation id is still valid: " + err.Error())
 			}
 		}
 	}
 	return newID
-}
-
-func (m *sessionManager) verify(value string) (string, bool) {
-	i := strings.LastIndexByte(value, '.')
-	if i < 0 {
-		return "", false
-	}
-	id, sig := value[:i], value[i+1:]
-	if !hmac.Equal([]byte(sig), []byte(m.sign(id))) {
-		return "", false
-	}
-	return id, true
 }
 
 // servedOverHTTPS reports whether the browser reached us over https: TLS here,
@@ -787,7 +753,7 @@ func (m *sessionManager) setCookie(w http.ResponseWriter, id string, secure bool
 	noStore(w)
 	http.SetCookie(w, &http.Cookie{
 		Name:     m.cookie,
-		Value:    id + "." + m.sign(id),
+		Value:    m.signer.Value(id),
 		Path:     "/",
 		MaxAge:   int(m.ttl.Seconds()), // persist up to the idle TTL, not just the browser session
 		HttpOnly: true,

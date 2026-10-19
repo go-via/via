@@ -717,7 +717,7 @@ func tabCredential(sm *sessionManager, req *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	id, ok := sm.verify(ck.Value)
+	id, ok := sm.signer.Verify(ck.Value)
 	if !ok {
 		return ""
 	}
