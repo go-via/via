@@ -222,7 +222,7 @@ func TestOpen_aHungLaunchFailsBeforeTheTestDeadlineWithTheBrowserOutput(t *testi
 	case msg := <-stub.fatal:
 		assert.Contains(t, msg, "fake-chrome: still starting", "launch failure omits the browser output")
 	case <-time.After(15 * time.Second):
-		t.Fatal("launch still waiting: the 20s chromedp default, not the test deadline, bounds it")
+		t.Fatal("launch still waiting: nothing bounds it by the test deadline")
 	}
 }
 
@@ -1168,4 +1168,19 @@ func TestSignal_atSignInLivePatchSignalsReachesTheStoreIntact(t *testing.T) {
 	s.WaitTextContains("#out", "now")
 	assert.Equal(t, atLiteral, s.Text("#out"))
 	s.RequireCleanConsole()
+}
+
+func TestConsole_errorsAndUncaughtExceptionsAreCollected(t *testing.T) {
+	t.Parallel()
+	s := vtbrowser.Open(t, via.Handler(styledPage{}))
+	s.Eval(`console.error('boom');setTimeout(function(){throw new Error('kaboom')});true`, new(bool))
+
+	deadline := time.Now().Add(10 * time.Second)
+	for len(s.ConsoleErrors()) < 2 && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	errs := strings.Join(s.ConsoleErrors(), "\n")
+	assert.Contains(t, errs, "console.error: boom")
+	assert.Contains(t, errs, "uncaught exception: ")
+	assert.Contains(t, errs, "kaboom")
 }
