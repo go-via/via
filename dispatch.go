@@ -833,7 +833,7 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 	// Before OnInit, not just before the View: seeding an island with Set is
 	// what OnInit is for, and a Set with no slot and no pass goes nowhere.
 	prebindSignals(ctx, inst)
-	if runOnInit(inst.v, ctx, w, req, m.sessions, m.policy, false) != nil {
+	if runOnInit(inst.v, ctx, m.scope(w, req), false) != nil {
 		return nil, nil
 	}
 	return ctx, renderRootWith(ctx, inst.v)
@@ -865,7 +865,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		http.Error(w, noStream(mode, tab), http.StatusGone)
 		return
 	}
-	u.reqScope = reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
+	u.reqScope = m.scope(w, req)
 	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
 	// The handler mutated state the acted unit's OnInit had already read, so
@@ -957,7 +957,7 @@ func (m *mount) discoverPlain(w http.ResponseWriter, req *http.Request, inst ins
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	auth.passUnits = map[string]*Ctx{}
 	prebindSignals(auth, inst)
-	if runOnInit(inst.v, auth, w, req, m.sessions, m.policy, false) != nil {
+	if runOnInit(inst.v, auth, m.scope(w, req), false) != nil {
 		return nil, nil, nil, false
 	}
 	rootBefore = renderRootWith(auth, inst.v)

@@ -52,6 +52,10 @@ var ErrNotFound = errors.New("via: not found")
 // Redirect; the caller must stop, like any other non-nil return.
 var errRedirected = errors.New("via: redirected")
 
+func (m *mount) scope(w http.ResponseWriter, req *http.Request) reqScope {
+	return reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
+}
+
 // runOnInit calls v.OnInit on ctx — the same Ctx the render then binds, so a
 // Tick or Listen it registers marks the unit live. The response is still open,
 // so OnInit may set the session cookie or queue a Redirect (303'd here, before
@@ -61,8 +65,9 @@ var errRedirected = errors.New("via: redirected")
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
 // fetch follows a 303 and would deliver the target page's HTML as the stream
 // body, so a redirect there answers a plain 403 instead.
-func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sse bool) (err error) {
-	ctx.reqScope = reqScope{req: req, sessions: sessions, policy: pol, sessW: w}
+func runOnInit(v any, ctx *Ctx, scope reqScope, sse bool) (err error) {
+	ctx.reqScope = scope
+	w, req := scope.sessW, scope.req
 	ctx.doInit = true // every child's OnInit runs too, inside Child
 	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint
