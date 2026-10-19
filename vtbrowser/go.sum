@@ -1,13 +1,11 @@
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c h1:pxW6RcqyfI9/kWtOwnv/G+AzdKuy2ZrqINhenH4HyNs=
 github.com/BurntSushi/toml v1.4.1-0.20240526193622-a339e1f7089c/go.mod h1:ukJfTF/6rtPPRCnwkur4qwRxa8vTRFBF0uk2lLoLwho=
-github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 h1:UQ4AU+BGti3Sy/aLU8KVseYKNALcX9UXY6DfpwQ6J8E=
-github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327/go.mod h1:NItd7aLkcfOA/dcMXvl8p1u+lQqioRMq/SqDp71Pb/k=
+github.com/chromedp/cdproto v0.158.1 h1:MozBKdkagM7gGuSqaNOPRMRb5RAQXhrXFR///IfghvQ=
+github.com/chromedp/cdproto v0.158.1/go.mod h1:h68JaIuFr9o3yiayxEYhBdvaxgYO3shDrPSYhNlyfu0=
 github.com/chromedp/chromedp v0.14.1 h1:0uAbnxewy/Q+Bg7oafVePE/6EXEho9hnaC38f+TTENg=
 github.com/chromedp/chromedp v0.14.1/go.mod h1:rHzAv60xDE7VNy/MYtTUrYreSc0ujt2O1/C3bzctYBo=
-github.com/chromedp/sysutil v1.1.0 h1:PUFNv5EcprjqXZD9nJb9b/c9ibAbxiYo4exNWZyipwM=
-github.com/chromedp/sysutil v1.1.0/go.mod h1:WiThHUdltqCNKGc4gaU50XgYjwjYIhKWoHGPTUfWTJ8=
-github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2 h1:iizUGZ9pEquQS5jTGkh4AqeeHCMbfbjeb0zMt0aEFzs=
-github.com/go-json-experiment/json v0.0.0-20250725192818-e39067aee2d2/go.mod h1:TiCD2a1pcmjd7YnhGH0f/zKNcCD06B029pHhzV23c2M=
+github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 h1:XGPtjxqp0FS8jj1Z7QGcSOSgyq1fUPjNyJXvi3KfI4A=
+github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875/go.mod h1:uNVvRXArCGbZ508SxYYTC5v1JWoz2voff5pm25jU1Ok=
 github.com/gobwas/httphead v0.1.0 h1:exrUm0f4YX0L7EBwZHuCF4GDp8aJfVeBrlLQrs6NqWU=
 github.com/gobwas/httphead v0.1.0/go.mod h1:O/RXo79gxV8G+RqlR/otEwx4Q36zl9rqC5u12GKvMCM=
 github.com/gobwas/pool v0.2.1 h1:xfeeEhW7pwmX8nuLVlqbzVc7udMDrwetjEv+TZIz1og=
