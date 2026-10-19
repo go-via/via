@@ -22,7 +22,6 @@ package on
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -202,7 +201,7 @@ func WithModifier(raw string) Option {
 	if typed, ok := modeled[strings.SplitN(raw, ".", 2)[0]]; ok {
 		panic(fmt.Sprintf("on: WithModifier(%q): use on.%s", raw, typed))
 	}
-	if !modifier.MatchString(raw) {
+	if !render.ValidModifier(raw) {
 		panic(fmt.Sprintf(`on: WithModifier(%q) must be a lower-case modifier name, optionally followed by '.'-separated lower-case letters and digits (such as "delay.300ms")`, raw))
 	}
 	return modifierOption{raw}
@@ -215,11 +214,6 @@ type modifierOption struct {
 func (o modifierOption) apply(c *config) {
 	c.raw = append(c.raw, o.raw)
 }
-
-// modifier is one segment of Datastar's "__"-split modifier list, which it
-// splits again on '.' into a name and tags. Tags are held to the modifier
-// grammar via's action binding accepts.
-var modifier = regexp.MustCompile(`^[a-z]+(?:\.[a-z0-9]+)*$`)
 
 var modeled = map[string]string{
 	"debounce": "WithDebounce", "throttle": "WithThrottle", "once": "WithOnce",
@@ -239,12 +233,8 @@ func setDuration(name string, have, d time.Duration) time.Duration {
 	return d
 }
 
-// eventName admits no quote or space, which would break out of the attribute,
-// and no "__", which Datastar would read as a modifier.
-var eventName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[:.-][a-z0-9]+)*$`)
-
 func mustEventName(name string) {
-	if !eventName.MatchString(name) {
+	if !render.ValidEventName(name) {
 		panic(fmt.Sprintf(`on: event name %q must be lower-case letters and digits, optionally joined by ':', '.' or '-' (such as "click" or "via:patch")`, name))
 	}
 }

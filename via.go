@@ -94,7 +94,6 @@ import (
 	"log/slog"
 	"maps"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -966,13 +965,10 @@ func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call rende
 	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 }
 
-// actionEvent is package on's event-name grammar followed by Datastar
-// modifiers. writeActionAttr splices the name into an attribute name raw, so a
-// quote, space or '=' would open an attribute of the caller's choosing.
-var actionEvent = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[:.-][a-z0-9]+)*(?:__[a-z]+(?:\.[a-z0-9]+)*)*$`)
-
+// writeActionAttr splices event into an attribute name raw, so a quote, space
+// or '=' would open an attribute of the caller's choosing.
 func mustActionEvent(fn, event string) {
-	if !actionEvent.MatchString(event) {
+	if !render.ValidEventKey(event) {
 		panic("via: " + fn + " event name " + strconv.Quote(event) +
 			` must be lower-case letters and digits, optionally joined by ':', '.' or '-', then Datastar modifiers (such as "click" or "input__debounce.250ms")`)
 	}
@@ -1006,7 +1002,7 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // claimed action slot. Written raw, not via h.Data: the value is a Datastar
 // expression whose single quotes must survive verbatim, and every byte of it is
 // via-generated or checked (fixed template, an event name bind and bindArg hold to
-// actionEvent, hashed id, url-encoded arg), so no attribute-breaking byte
+// render.ValidEventKey, hashed id, url-encoded arg), so no attribute-breaking byte
 // reaches it. The colon spelling is
 // mandatory — see h.Data.
 //
