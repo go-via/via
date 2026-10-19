@@ -193,8 +193,9 @@ func (c *tabStream) flushDirty(u *Ctx) {
 	}
 	// A server-driven signal change reaches the client as its own signal-patch:
 	// the element push omits data-signals, so a morph never clobbers what the
-	// user is typing.
-	if raw, err := json.Marshal(all); err == nil {
+	// user is typing. encodeSlots drops and logs a value that does not encode,
+	// rather than losing the whole frame to it.
+	if raw, n := encodeSlots(c.mount.cfg.log, slices.Sorted(maps.Keys(all)), all); n > 0 {
 		c.wire.signals(string(raw))
 	}
 	clearDirty(u)

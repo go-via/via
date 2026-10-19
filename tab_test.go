@@ -1457,3 +1457,32 @@ func TestLive_aPinnedTabUnderAPlainRootIsLoggedWithTheRootType(t *testing.T) {
 		close(p.B.release)
 	})
 }
+
+type mixedTick struct {
+	Good via.Signal[string]
+	Bad  via.Signal[unmarshalable]
+}
+
+func (m *mixedTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, m.tick)
+	return nil
+}
+
+func (m *mixedTick) tick(*via.Ctx) {
+	m.Good.Set("ticked")
+	m.Bad.Set(unmarshalable{})
+}
+
+func (m *mixedTick) View() h.H {
+	return h.Div(h.Input(m.Good.Bind()), h.Input(m.Bad.Bind()))
+}
+
+func TestTab_aPushedUnmarshalableSignalDropsOnlyItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mixedTick{}))
+	app.Get("/")
+	c := app.Connect()
+	defer c.Close()
+	line := c.Await(`"ticked"`)
+	assert.True(t, strings.HasPrefix(line, "data: signals "), "the good slot rides in a patch-signals frame: %s", line)
+}
