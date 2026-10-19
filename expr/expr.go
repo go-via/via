@@ -131,21 +131,13 @@ func oneGroup(s string) bool {
 		return false
 	}
 	depth := 0
-	var quote byte
 	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case quote != 0:
-			if c == '\\' {
-				i++
-			} else if c == quote {
-				quote = 0
-			}
-		case c == '"' || c == '\'' || c == '`':
-			quote = c
-		case c == '(':
+		switch s[i] {
+		case '"', '\'', '`':
+			i = closingQuote(s, i)
+		case '(':
 			depth++
-		case c == ')':
+		case ')':
 			depth--
 			if depth == 0 && i < len(s)-1 {
 				return false
@@ -153,6 +145,21 @@ func oneGroup(s string) bool {
 		}
 	}
 	return depth == 0
+}
+
+// closingQuote returns the index of the quote that closes the string literal
+// opening at i, or len(s) when it never closes.
+func closingQuote(s string, i int) int {
+	q := s[i]
+	for i++; i < len(s); i++ {
+		switch s[i] {
+		case '\\':
+			i++
+		case q:
+			return i
+		}
+	}
+	return len(s)
 }
 
 // Do sequences statements, for an attribute that runs more than one.

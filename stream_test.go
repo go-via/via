@@ -682,7 +682,7 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 }
 
 // flakyRender panics inside View once boom is set — modelling a push (a
-// pulse item) whose render fails, as opposed to liveRunAction's own mutation,
+// pulse item) whose render fails, as opposed to liveAction.runOn's own mutation,
 // which already recovers separately.
 type flakyRender struct {
 	boom via.State[bool]

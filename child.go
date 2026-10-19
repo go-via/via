@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 
 	"github.com/go-via/via/h"
@@ -195,7 +194,7 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial, parent.declareOnly, parent.declareSeen)
+		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial, declareFilter{parent.declareOnly, parent.declareSeen})
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)
@@ -354,26 +353,21 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // exactly as the full-page walk numbered them, instead of restarting at the
 // root's key and aliasing onto it.
 //
-// from is the request-scoped Ctx this re-render belongs to (nil for a live
-// push); it inits the child's nested children — see inheritRequestScope.
-//
 // underLive says whether c itself sits under a live ancestor in the real
 // tree — false for a live child's own push (its ancestor chain was already
 // proven plain, or it could never have become live), and whatever the
 // discovery render found for a plain action's re-render, since that unit may
 // legitimately sit beneath an already-live root (see checkLiveUnderLive).
-// only and seen are renderRootBase's: non-nil only makes this a declaring
-// render, so the child's own children seed their slots; a push passes nil.
-func renderChildBind(key string, inst instance, base string, only map[string]any, seen map[string]bool, from *Ctx, rev *revertSet, badDecodeLogged *atomic.Bool, underLive bool) (*Ctx, []byte) {
+// Non-nil r.only makes this a declaring render, so the child's own children
+// seed their slots; a push passes nil.
+func renderChildBind(key string, inst instance, r rerender, underLive bool) (*Ctx, []byte) {
 	c := newCtx()
-	c.declare, c.declareOnly, c.declareSeen = only != nil, only, seen
-	c.rev = rev
-	c.badDecodeLogged = badDecodeLogged
+	c.declare, c.declareOnly = r.only != nil, r.only
 	c.isChild = true
 	c.childKey = key
 	c.unitV = inst
-	c.base = base
-	inheritRequestScope(c, from)
+	c.base = r.base
+	r.wire(c)
 	body := renderChildInner(c, inst.v)
 	checkLiveUnderLive(c, underLive)
 	return c, body

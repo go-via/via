@@ -43,6 +43,30 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 	return obj.Bytes(), n
 }
 
+// declareFilter picks the slots a data-signals attribute declares. only nil
+// declares every slot (the GET first paint). Non-nil declares only the slots
+// named, so a plain action patch ships what it wrote without clobbering a value
+// the user is mid-edit. seen is the pre-action render's slot set.
+type declareFilter struct {
+	only map[string]any
+	seen map[string]bool
+}
+
+func (f declareFilter) declares(slot string) bool {
+	if f.only == nil {
+		return true
+	}
+	if _, dirty := f.only[slot]; dirty {
+		return true
+	}
+	// A slot the pre-action render did not carry is a control new to this
+	// render (a branch opened): the client store has no value for it, or worse
+	// a stale one from whatever occupied the slot before, so seed it even
+	// though the action never wrote it. seen nil means there is no pre-action
+	// render to compare against.
+	return f.seen != nil && !f.seen[slot]
+}
+
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
 // attribute: data-signals='{...}'.
 //
@@ -58,29 +82,18 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 // still goes out as \u0040 so a compiler that did not would find none; JSON
 // puts @ only inside strings, where it reads back as @.
 //
-// only nil declares every slot (the GET first paint). Non-nil declares only the
-// slots named, so a plain action patch ships what it wrote without clobbering a
-// value the user is mid-edit; if that leaves nothing, no attribute is written.
-func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
+// If f leaves no slot to declare, no attribute is written.
+func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial map[string]any, f declareFilter) {
 	want := make([]string, 0, len(order))
 	for _, slot := range order {
-		if only != nil {
-			_, dirty := only[slot]
-			// A slot the pre-action render did not carry is a control new to
-			// this render (a branch opened): the client store has no value for it,
-			// or worse a stale one from whatever occupied the slot before, so
-			// seed it even though the action never wrote it. seen nil means
-			// there is no pre-action render to compare against.
-			if !dirty && (seen == nil || seen[slot]) {
-				continue
-			}
+		if f.declares(slot) {
+			want = append(want, slot)
 		}
-		want = append(want, slot)
 	}
 	sort.Strings(want) // encoding/json sorted the map this used to build; keep the bytes stable
 
 	raw, n := encodeSlots(log, want, initial)
-	if n == 0 && only != nil {
+	if n == 0 && f.only != nil {
 		return
 	}
 

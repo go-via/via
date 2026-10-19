@@ -76,7 +76,7 @@ func openStreamWithClient(t *testing.T, srv *httptest.Server, c *http.Client, pa
 
 // sessionLive renders its State, so it is a live root whose own actions only
 // ever route through the tab handshake (dispatchPlain refuses them, see
-// dispatch.go), so establishing the session ahead of connecting needs a
+// dispatch_plain.go), so establishing the session ahead of connecting needs a
 // separate, plain mount (loginComp, from sess_test.go) sharing the same
 // router-wide session manager. Bump is the live action a stolen tab id would
 // try to drive.

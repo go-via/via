@@ -51,6 +51,12 @@ func originAllowed(req *http.Request, cfg *config) bool {
 	if site := req.Header.Get("Sec-Fetch-Site"); site != "" {
 		return site == "same-origin" || site == "none"
 	}
+	return originMatchesHost(req, origin)
+}
+
+// originMatchesHost is the origin floor's last resort, for a browser that
+// sends no Sec-Fetch-Site: an Origin whose host is the request's own.
+func originMatchesHost(req *http.Request, origin string) bool {
 	if origin == "" {
 		return false
 	}
@@ -65,6 +71,32 @@ func originAllowed(req *http.Request, cfg *config) bool {
 		return false
 	}
 	return sameOriginHost(u, req.Host)
+}
+
+// servedOverHTTPS reports whether the browser reached us over https: TLS here,
+// or a proxy's X-Forwarded-Proto / Forwarded proto (the first hop, the one the
+// browser spoke to). The header is trusted unauthenticated because all it can
+// do is mark the sender's own cookie Secure: a client that forges it only loses
+// its own session over plain http, and cannot touch anyone else's cookie.
+func servedOverHTTPS(req *http.Request) bool {
+	if req == nil {
+		return false
+	}
+	if req.TLS != nil {
+		return true
+	}
+	if v := req.Header.Get("X-Forwarded-Proto"); v != "" {
+		first, _, _ := strings.Cut(v, ",")
+		return strings.EqualFold(strings.TrimSpace(first), "https")
+	}
+	first, _, _ := strings.Cut(req.Header.Get("Forwarded"), ",")
+	for pair := range strings.SplitSeq(first, ";") {
+		k, v, _ := strings.Cut(strings.TrimSpace(pair), "=")
+		if strings.EqualFold(k, "proto") {
+			return strings.EqualFold(strings.Trim(v, `"`), "https")
+		}
+	}
+	return false
 }
 
 // routerPolicy is the router-wide configuration a Ctx reads outside the

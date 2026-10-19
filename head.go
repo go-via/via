@@ -211,21 +211,7 @@ func checkAttrs(attrs []Attr) (kept []Attr, refused []string) {
 	seen := make(map[string]bool, len(attrs))
 	for _, a := range attrs {
 		low := strings.ToLower(a.Name)
-		why := ""
-		switch {
-		case !isAttrName(a.Name):
-			why = "is not an attribute name (want a letter, then letters, digits, ':', '.', '_' or '-')"
-		case low == "lang":
-			why = "is written by via; set Head.Lang instead"
-		case low == "data-nonce" || low == "data-signals" || low == "data-init":
-			why = "is written by via"
-		case strings.HasPrefix(low, "on"):
-			why = "is an inline event handler, which the CSP blocks; use a data-on: attribute"
-		case low == "style":
-			why = "is an inline style, which the CSP blocks; use a class"
-		case seen[low]:
-			why = "is set twice"
-		}
+		why := attrFault(a.Name, low, seen)
 		seen[low] = true
 		if why != "" {
 			refused = append(refused, quote(a.Name)+" "+why)
@@ -236,17 +222,33 @@ func checkAttrs(attrs []Attr) (kept []Attr, refused []string) {
 	return kept, refused
 }
 
+const (
+	asciiLetters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	asciiAlnum   = asciiLetters + "0123456789"
+)
+
+// attrFault is why checkAttrs refuses the attribute named name (low is its
+// lowercase), or "" when it keeps it.
+func attrFault(name, low string, seen map[string]bool) string {
+	switch {
+	case !isAttrName(name):
+		return "is not an attribute name (want a letter, then letters, digits, ':', '.', '_' or '-')"
+	case low == "lang":
+		return "is written by via; set Head.Lang instead"
+	case low == "data-nonce" || low == "data-signals" || low == "data-init":
+		return "is written by via"
+	case strings.HasPrefix(low, "on"):
+		return "is an inline event handler, which the CSP blocks; use a data-on: attribute"
+	case low == "style":
+		return "is an inline style, which the CSP blocks; use a class"
+	case seen[low]:
+		return "is set twice"
+	}
+	return ""
+}
+
 func isAttrName(s string) bool {
-	if s == "" || !(s[0] >= 'a' && s[0] <= 'z' || s[0] >= 'A' && s[0] <= 'Z') {
-		return false
-	}
-	for i := range len(s) {
-		c := s[i]
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte(":._-", c) >= 0) {
-			return false
-		}
-	}
-	return true
+	return s != "" && strings.IndexByte(asciiLetters, s[0]) >= 0 && strings.Trim(s, asciiAlnum+":._-") == ""
 }
 
 // attrIndex is the index of the attribute named name, compared as HTML does,
@@ -512,21 +514,15 @@ func (hd Head) htmlOpen(nonce string, attrs []Attr) string {
 // is to reject anything that could break out of the attribute or carry markup,
 // not to police which languages exist.
 func isLangTag(s string) bool {
-	if len(s) > 35 {
+	if s == "" || len(s) > 35 {
 		return false
 	}
 	for sub := range strings.SplitSeq(s, "-") {
-		if sub == "" {
+		if sub == "" || strings.Trim(sub, asciiAlnum) != "" {
 			return false
 		}
-		for i := range len(sub) {
-			c := sub[i]
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9') {
-				return false
-			}
-		}
 	}
-	return s != ""
+	return true
 }
 
 // originOf returns scheme://host for an absolute http(s) URL, or "" for a

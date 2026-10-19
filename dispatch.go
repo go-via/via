@@ -1,7 +1,6 @@
 package via
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +10,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -269,18 +267,19 @@ func (m *mount) newInst() instance { return m.root.newInst() }
 
 // serveGet renders the page.
 func (m *mount) serveGet(w http.ResponseWriter, req *http.Request) {
-	defer recoverRequest(m.cfg.log, w, req, "render")
+	defer m.recoverRequest(w, req, "render")
 	// concreteBase, not patternBase: a page at /job/{id} must advertise
 	// /job/7/_via/sse. The pattern would be POSTed literally and 404,
 	// leaving every live child under a parametrised mount dead.
 	base := concreteBase(m.patternBase, req, m.names)
-	m.writePage(w, req, m.newInst(), base, nil, nil, false)
+	ctx, body := m.renderFreshPage(w, req, base, nil)
+	m.writePage(w, req, ctx, body)
 }
 
 // recoverRequest answers a panic on a plain request transport.
-func recoverRequest(log *slog.Logger, w http.ResponseWriter, req *http.Request, what string) {
+func (m *mount) recoverRequest(w http.ResponseWriter, req *http.Request, what string) {
 	if rec := recover(); rec != nil {
-		recoverToHTTP(log, w, req, rec, what, false)
+		m.recoverToHTTP(w, req, rec, what, false)
 	}
 }
 
@@ -289,28 +288,14 @@ func recoverRequest(log *slog.Logger, w http.ResponseWriter, req *http.Request, 
 // the six transports this replaced each re-implemented them and drifted (OnInit
 // never ran on a child action; a live/child action dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
-	defer recoverRequest(m.cfg.log, w, req, "action")
-	if !originAllowed(req, m.cfg) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	mode := modeNative
-	if isDatastarRequest(req) {
-		mode = modeDatastar
-	}
-	m.capBody(w, req, mode)
-	base := concreteBase(m.patternBase, req, m.names)
-	in, ok := m.decodeSignals(w, req, mode)
+	defer m.recoverRequest(w, req, "action")
+	ar, ok := m.readAction(w, req)
 	if !ok {
 		return
 	}
-	if mode == modeNative {
+	if ar.mode == modeNative {
 		defer req.MultipartForm.RemoveAll() // drop any spilled temp files
 	}
-	child := req.PathValue("child")
-	act := req.PathValue("act")
-
-	tab := actionTab(req, mode, in)
 	// The tab id rides in the body, so the body is read before anything can
 	// park: a parked action holds its decoded signals. parkedCap bounds that.
 	deadline := time.Now().Add(m.cfg.pinnedDeadline)
@@ -318,44 +303,100 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// may park: the id is one this app issued to this browser, so a stream
 	// for it is on its way, and the plain path could only 410 a live unit.
 	// An address via never renders is not worth a slot.
-	park := tab != "" && validAddr(child) && isActionID(act) && m.issuedTab(tab, tabCredential(m.sessions, req))
-	lc, ticket, out := m.reg.enter(req.Context(), m.ctx, tab, deadline, park)
+	park := ar.tab != "" && validAddr(ar.child) && isActionID(ar.act) && m.issuedTab(ar.tab, tabCredential(m.sessions, req))
+	lc, ticket, out := m.reg.enter(req.Context(), m.ctx, ar.tab, deadline, park)
+	if m.refuseEnter(w, out) {
+		return
+	}
+	if out == enterReady && m.routeToStream(ar, lc, ticket, deadline) {
+		return
+	}
+	m.dispatchPlain(ar)
+}
+
+// actionReq is one action POST, read and decoded: what every step of its
+// dispatch works from.
+type actionReq struct {
+	w     http.ResponseWriter
+	req   *http.Request
+	mode  actionMode
+	child string
+	act   string
+	in    map[string]json.RawMessage
+	base  string
+	tab   string
+}
+
+// readAction runs the origin floor and decodes the body, answering the request
+// itself when either fails.
+func (m *mount) readAction(w http.ResponseWriter, req *http.Request) (*actionReq, bool) {
+	if !originAllowed(req, m.cfg) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return nil, false
+	}
+	mode := modeNative
+	if isDatastarRequest(req) {
+		mode = modeDatastar
+	}
+	m.capBody(w, req, mode)
+	in, ok := m.decodeSignals(w, req, mode)
+	if !ok {
+		return nil, false
+	}
+	return &actionReq{
+		w:     w,
+		req:   req,
+		mode:  mode,
+		child: req.PathValue("child"),
+		act:   req.PathValue("act"),
+		in:    in,
+		base:  concreteBase(m.patternBase, req, m.names),
+		tab:   actionTab(req, mode, in),
+	}, true
+}
+
+// refuseEnter answers the registry outcomes that end an action before any unit
+// runs, and reports whether it did.
+func (m *mount) refuseEnter(w http.ResponseWriter, out enterOutcome) bool {
 	switch out {
 	case enterGone:
 		noteErr(w, ErrStaleTab)
 		http.Error(w, "stream closed", http.StatusGone)
-		return
 	case enterAbandoned:
 		http.Error(w, "request abandoned", http.StatusGone)
-		return
 	case enterClosed:
 		http.Error(w, "server shutting down", http.StatusServiceUnavailable)
-		return
 	case enterFull:
 		m.warnParkedFull()
 		http.Error(w, "too many actions waiting for their stream", http.StatusServiceUnavailable)
-		return
-	case enterReady:
-		if lc.mount != m {
-			ticket.leave()
-			// The registry is router-wide, and a tab id from another mount is
-			// otherwise structurally valid here (same field, same action-id
-			// space), so nothing else would fail first.
-			http.Error(w, "no such child", http.StatusGone)
-			return
-		}
-		// A streaming page's plain child echoes the tab id too, and its address
-		// was never registered on the connection. Membership is stable (a unit
-		// is published before the tab id is, and never removed), so this check
-		// is safe off the stream goroutine, unlike the staleness lookup
-		// dispatchOverStream still does there.
-		if lc.unit(child) != nil {
-			m.dispatchOverStream(w, req, mode, lc, deadline, ticket, child, act, in, base)
-			return
-		}
-		ticket.leave()
+	default:
+		return false
 	}
-	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
+	return true
+}
+
+// routeToStream dispatches over lc when it holds the addressed unit, and
+// reports whether it answered; false leaves the action to the plain path.
+func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, deadline time.Time) bool {
+	if lc.mount != m {
+		ticket.leave()
+		// The registry is router-wide, and a tab id from another mount is
+		// otherwise structurally valid here (same field, same action-id
+		// space), so nothing else would fail first.
+		http.Error(ar.w, "no such child", http.StatusGone)
+		return true
+	}
+	// A streaming page's plain child echoes the tab id too, and its address
+	// was never registered on the connection. Membership is stable (a unit
+	// is published before the tab id is, and never removed), so this check
+	// is safe off the stream goroutine, unlike the staleness lookup
+	// dispatchOverStream still does there.
+	if lc.unit(ar.child) == nil {
+		ticket.leave()
+		return false
+	}
+	m.dispatchOverStream(ar, lc, deadline, ticket)
+	return true
 }
 
 // actionTab reads the tab id an action POST echoes, from the form field or the
@@ -430,244 +471,6 @@ func formError(req *http.Request, err error) string {
 	}
 	return "no Datastar-Request: true header, and the body is not multipart/form-data: " +
 		"an action is a Datastar @post (JSON signals) or a native form submit"
-}
-
-// dispatchOverStream runs act against a connected live unit on its
-// connection's serialized goroutine and waits for the result — synchronous,
-// unlike the old fire-and-forget child dispatch, so a Redirect, the session
-// cookie, and a panic all resolve on this response like a plain action. The
-// wait for the goroutine to pick the action up is bounded by req.Context(), the
-// connection closing and the pinned deadline; an action already running is
-// waited for, since it writes this response.
-func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, t *parkTicket, child string, act string, in map[string]json.RawMessage, base string) {
-	res, outcome := lc.run(req.Context(), deadline, t, &liveAction{m: m, w: w, req: req, lc: lc, child: child, act: act, in: in})
-	switch outcome {
-	case runPinned:
-		// 503, not 410: the tab is fine and the action is legitimate — this
-		// connection's goroutine is not answering. See warnPinned.
-		http.Error(w, "stream busy", http.StatusServiceUnavailable)
-		return
-	case runClosed:
-		noteErr(w, ErrStaleTab)
-		http.Error(w, "stream closed", http.StatusGone)
-		return
-	case runAbandoned:
-		http.Error(w, "request abandoned", http.StatusGone)
-		return
-	}
-	if res.fail != nil {
-		res.fail.answer(m.cfg.log, w)
-		return
-	}
-	if m.answerRedirect(w, req, mode, res.redirect) {
-		return
-	}
-	if mode == modeNative {
-		// A native submit replaces the whole document, so this must be the
-		// page a brand-new connection will hold — a fresh instance with OnInit
-		// run, not a snapshot of the dying connection's live tree (which the
-		// reconnect is about to reseed anyway). The request's cookie predates
-		// the action's Put or Rotate, so OnInit reads the action's session.
-		m.writePage(w, req, m.newInst(), base, nil, res.session, false)
-		return
-	}
-	writePatch(w, nil) // the push already framed it
-}
-
-// liveAction is one action POST handed to its tab's stream goroutine.
-type liveAction struct {
-	m      *mount
-	w      http.ResponseWriter
-	req    *http.Request
-	lc     *tabStream
-	child  string
-	act    string
-	in     map[string]json.RawMessage
-	result chan actionResult
-}
-
-// run applies the action, answers the waiting POST, then pushes.
-func (a *liveAction) run() {
-	res := a.applyRecovered()
-	a.result <- res
-	if res.pushWork != nil {
-		res.pushWork.push()
-	}
-}
-
-func (a *liveAction) applyRecovered() (res actionResult) {
-	defer a.recoverPanic(&res)
-	return a.apply()
-}
-
-func (a *liveAction) recoverPanic(res *actionResult) {
-	if rec := recover(); rec != nil {
-		a.lc.mount.cfg.log.Error("via: live action panic",
-			"tab", a.lc.id, "unit", a.lc.unitType(), "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{fail: failPanic(rec)}
-	}
-}
-
-func (a *liveAction) apply() actionResult {
-	// The client hung up between the handoff and now: applying the action
-	// would double-apply on its retry, and nobody reads this answer.
-	if a.req.Context().Err() != nil {
-		return actionResult{fail: failGone("request abandoned")}
-	}
-	// Checked here, not before the action was posted: a cookieless
-	// dispatch that passed a pre-queue check while the connection was
-	// unbound could be applied after a concurrent live login bound it. Here
-	// the compare and the run are atomic on one serialized goroutine.
-	// Resolved once, here, for both the binding check and the action. The
-	// store error is kept, not discarded: a store that could not answer
-	// yields a nil session, which used to read as "wrong session" (or "no
-	// prior session") rather than an outage.
-	sessID, sess, err := a.m.sessions.resolve(a.req)
-	if err != nil {
-		// 503, not 403: the request is well-formed and the tab is live, so a
-		// store blip must not read as a security rejection.
-		return actionResult{fail: &actionFail{status: http.StatusServiceUnavailable, body: "session store unavailable", note: ErrStoreDown}}
-	}
-	if bound := a.lc.boundSession(); bound != "" {
-		// A dispatch must carry the same session, compared by sid (a Rotate
-		// moves the cookie id, never the sid). Otherwise a leaked tab id is a
-		// bearer credential good from any request, session or none, once
-		// the origin floor is open.
-		if sess == nil || sess.sid != bound {
-			return actionResult{fail: &actionFail{status: http.StatusForbidden, body: "session mismatch"}}
-		}
-	}
-	// Also looked up here, not before the action was posted: a concurrent
-	// push replaces lc.units, so a unit read earlier could be stale. That
-	// is more than an address mismatch — Signal.bind stamps the dirty sink
-	// at render time, so acting against an older unit attributes the write
-	// to a Ctx nothing downstream reads, silently dropping the patch.
-	u := a.lc.unit(a.child)
-	if u == nil || u.unitV.ident != a.req.URL.Query().Get(unitIdentParam) {
-		return actionResult{fail: failGone("no such child")}
-	}
-	act, ok := u.actions[a.act]
-	if !ok {
-		return actionResult{fail: failGone(a.m.unknownAction(u, a.act))}
-	}
-	return liveRunAction(a.w, a.req, a.m.sessions, a.m.policy, sessID, sess, a.lc, u, a.in, act)
-}
-
-// liveRunAction hydrates unit's signals from in and runs act. unit is the bind
-// Ctx the last push produced, whose actions/hydrators table is current because
-// every push is a render — so nothing re-renders here first. It runs on the
-// connection's serialized goroutine while the POST blocks in tabStream.run, so
-// w is safe to write to exactly as on a plain action.
-//
-// The re-render + SSE push rides back in res.pushWork instead of running here:
-// run sends the result to the waiting POST first, so a stalled peer's write
-// delays only the next push item, never this response. A detached goroutine
-// doing the enqueue used to race other actions' goroutines and reorder their
-// pushes; returning it as data keeps everything on the one goroutine, in order.
-func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
-	defer lc.recoverAction(unit, act, &res)
-	// Registered before the hydrate loop so every exit unwinds it, not just the
-	// one that reaches a push: a malformed or unrendered arg returns without
-	// pushWork, and livePush's restore is the only other one — so without this
-	// the client's posted values stayed on the instance for the next
-	// Tick/Listen handler to read. Deferred rather than inline so the handler and reloadUnit still see
-	// the hydrated values; a Set inside the handler drops its own slot, so a
-	// server write still survives.
-	defer lc.rev.restore()
-	// beforeSession is resolved before the action runs, not inferred from the
-	// handle afterwards: a request already carrying a cookie and one whose
-	// action just minted look the same once the action is done.
-	//
-	// An unbound connection binds to the session the request carries: the user
-	// may have logged in from another tab after this one connected, and the tab
-	// id must stop being a bearer credential once a session reaches it. A
-	// leaked id presented with someone else's cookie binds to that cookie
-	// instead, which locks the rightful tab out (403, recovered by a reload) but
-	// grants nothing: every action still runs under its own request's session.
-	if beforeSession != nil {
-		lc.bindSession(beforeSession.sid)
-	}
-	for slot, raw := range in {
-		if hydrate, ok := unit.hydrators[slot]; ok {
-			if !hydrate.Hydrate(raw) {
-				delete(lc.client, slot)
-				continue
-			}
-			// Remembered so the next push's display render still shows what the
-			// client is holding: livePush reverts the instance to its
-			// server-authored values before the authority render, and without
-			// this the client's value would vanish from the frame that follows
-			// its own action. It never reaches the authority render (I1).
-			lc.client[slot] = raw
-		}
-	}
-	// A fresh Ctx per dispatch, not unit itself: a Tick/Listen handler holds
-	// unit for the life of the connection, so writing req/sessW/redirect onto
-	// it would rewrite what that handler sees. Signal.Set and State.Set still
-	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{reqScope: reqScope{req: req, sessions: sessions, policy: pol, sessW: w}, streamCtx: unit.streamCtx}
-	rc.adoptSession(sessID, beforeSession, nil)
-	rc.session.stream = lc
-	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
-	// push) is the only place that owns clearing it. Resetting unconditionally
-	// on every dispatch dropped an earlier action's Set the moment it panicked
-	// or reloadUnit errored — no push ran to flush it, and this line wiped it
-	// before the next action's push ever saw it.
-	act.run(rc)
-
-	// Re-load the unit the same way the plain path does: the handler mutated
-	// state this unit's OnInit had already read, and the push render below
-	// would otherwise frame the pre-action data. Skipped behind a Redirect —
-	// the tab is navigating away from this render. See reloader.
-	if rc.redirect.url == "" {
-		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
-		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{fail: &actionFail{hookErr: err}, pushWork: unit.pusher}
-		}
-		rc.redirect = rl.redirect
-	}
-
-	// A session this action minted: bind it now so the tab id stops being a
-	// bearer credential the instant this action logs it in (bindSession is a
-	// no-op once bound).
-	if beforeSession == nil && rc.session.data != nil {
-		lc.bindSession(rc.session.sid())
-	}
-	lc.shareSession(rc.session)
-
-	// Behind a Redirect the tab is navigating away, so nothing is pushed. A
-	// refused one navigates nowhere, so the push still runs.
-	if rc.redirect.url != "" && rc.redirect.refusal() == "" {
-		return actionResult{redirect: rc.redirect}
-	}
-	// The dirty set this action wrote is shipped by the push itself
-	// (tabStream.flushDirty), on the one path every server-driven signal change
-	// takes — a Tick/Listen handler's Set included.
-	return actionResult{
-		redirect: rc.redirect,
-		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
-		session:  rc.session,
-	}
-}
-
-// recoverAction turns a panic in liveRunAction into its actionResult: via's
-// sentinels get the answer the plain path gives them, anything else is logged
-// as a handler fault.
-func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
-	if rec := recover(); rec != nil {
-		if f := sentinelFail(c.mount.cfg.log, rec); f != nil {
-			*res = actionResult{fail: f}
-			// Param panics from inside the handler, which may already have
-			// Set state; as after a handler panic, the push flushes it.
-			if _, miss := rec.(paramMiss); miss {
-				res.pushWork = unit.pusher
-			}
-			return
-		}
-		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
-			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{fail: failPanic(rec), pushWork: unit.pusher}
-	}
 }
 
 // sentinelFail turns a recovered panic that is one of via's request sentinels
@@ -778,31 +581,28 @@ func noStream(mode actionMode, tab string) string {
 		": the page never opened its stream, or the id was filtered out"
 }
 
-// writePage writes a full HTML document for inst — the GET, and the full-page
-// re-render a native <form> submit answers with. Liveness is read off this
-// render rather than assumed: a plain root may carry a live child, and
+// writePage writes the full HTML document ctx rendered — the GET, and the
+// full-page re-render a native <form> submit answers with. Liveness is read off
+// this render rather than assumed: a plain root may carry a live child, and
 // hard-coding "not live" shipped that page with no data-init, leaving the child
-// dead after the first form submit.
-//
-// from non-nil already ran OnInit for this request; it carries that wiring down
-// (inheritRequestScope) instead of running OnInit twice.
-func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx, sess *Session, rootLive bool) {
-	ctx, body := inst.renderPage(w, req, m, base, from, sess)
+// dead after the first form submit. A nil ctx means the render already
+// answered.
+func (m *mount) writePage(w http.ResponseWriter, req *http.Request, ctx *Ctx, body []byte) {
 	if ctx == nil {
 		return
 	}
-	ctx.live = ctx.live || rootLive
 	tab := ""
 	if len(liveUnits(ctx)) > 0 {
 		tab = m.newTabID(pageTabCredential(ctx, m.sessions, req))
 	}
-	writeHTMLPage(w, m, body, base, tab, inst.v)
+	m.writeHTMLPage(w, body, ctx.base, tab, ctx.unitV.v)
 }
 
-func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx, sess *Session) (*Ctx, []byte) {
-	if from != nil {
-		return renderRootBase(inst, true, base, nil, nil, from, nil, from.badDecodeLogged)
-	}
+// renderFreshPage runs OnInit on a fresh instance and renders it for
+// writePage. sess non-nil is the session an action left, which the request's
+// cookie predates.
+func (m *mount) renderFreshPage(w http.ResponseWriter, req *http.Request, base string, sess *Session) (*Ctx, []byte) {
+	inst := m.newInst()
 	ctx := newRootCtx(true, base, nil)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if sess != nil {
@@ -818,233 +618,6 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 		return nil, nil
 	}
 	return ctx, renderRootWith(ctx, inst.v)
-}
-
-// dispatchPlain binds a fresh instance, runs OnInit, runs the acted-on unit's
-// action, then answers per mode.
-func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
-	inst := m.newInst()
-	auth, bind, rootBefore, ok := m.discoverPlain(w, req, inst, child, act, in, base)
-	if !ok {
-		return
-	}
-	ua, u, authAct, a, ok := m.actedUnit(w, req, auth, bind, child, act)
-	if !ok {
-		return
-	}
-	// The intersection is per (handler, arg), not per handler: a posted signal
-	// that widens an Each would otherwise widen the accepted arg set too, and
-	// an arg only the client's own body produced would dispatch. a.args is the
-	// very map action.run checks against, so pruning it in place is
-	// what fails the unauthorized arg closed.
-	pruneArgs(a, authAct)
-	if ua.live {
-		// Liveness is read off the auth render, never off bind (I1/I5): only
-		// auth ran the root's OnInit. Reaching here means the tab was missing
-		// or stale, so fail closed rather than mutating a throwaway instance.
-		noteErr(w, ErrStaleTab)
-		http.Error(w, noStream(mode, tab), http.StatusGone)
-		return
-	}
-	u.reqScope = m.scope(w, req)
-	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
-
-	// The handler mutated state the acted unit's OnInit had already read, so
-	// the response render below would frame the pre-action data — a 204 and a
-	// silently unchanged UI. Skipped behind a Redirect: nothing from this
-	// instance gets rendered. See reloader.
-	if u.redirect.url == "" {
-		rl := &Ctx{reqScope: u.reqScope, session: auth.session, base: base}
-		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
-			answerHookError(m.cfg.log, w, err, "via: OnReload after an action failed")
-			return
-		}
-		u.redirect = rl.redirect
-	}
-
-	if m.answerRedirect(w, req, mode, u.redirect) {
-		return
-	}
-	if mode == modeNative {
-		// auth ran the root's OnInit, so its verdict holds a Tick or Listen the
-		// re-render below cannot re-derive.
-		m.writePage(w, req, inst, base, u, nil, auth.live)
-		return
-	}
-	b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
-	if b == nil {
-		m.warnNoChange(act, a.name, actedViewer(inst, u))
-	}
-	writePatch(w, b)
-}
-
-// actedUnit finds the unit a plain action addresses in both discovery renders
-// and its handler in each, answering 410 when either render disagrees about
-// what lives at the address. ua and authAct are the auth render's; u and a are
-// the bind render's, the pair the action runs against.
-func (m *mount) actedUnit(w http.ResponseWriter, req *http.Request, auth, bind *Ctx, child, act string) (ua, u *Ctx, authAct, a action, ok bool) {
-	ua = auth.unit(child)
-	if ua == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	authAct, authOK := ua.actions[act]
-	if !authOK {
-		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
-		return
-	}
-	u = bind.unit(child)
-	if u == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// Same guard, same reason, as the acted-instance substitution in
-	// childViewer: a When around a Child that depends on a hydrated signal can
-	// shift ordinals, so one key may denote different types in the auth and
-	// bind renders. Child's docs forbid such a When; fail closed rather than
-	// run the handler against a unit the authorization never looked at.
-	if ua.unitV.typ != u.unitV.typ {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// A matching type is not yet the same unit: a sibling of the same type
-	// shifted onto this key carries a different identity (see childViewer).
-	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	a, ok = u.actions[act]
-	if !ok {
-		http.Error(w, m.unknownAction(u, act), http.StatusGone)
-	}
-	return
-}
-
-// discoverPlain runs OnInit and the discovery renders for a plain action;
-// rootBefore is the root markup the response render is diffed against.
-func (m *mount) discoverPlain(w http.ResponseWriter, req *http.Request, inst instance, child, act string, in map[string]json.RawMessage, base string) (auth, bind *Ctx, rootBefore []byte, ok bool) {
-	// Discovery is two-phase. auth is the render the client did not influence:
-	// it alone decides what is dispatchable (see on.Bind). Then the body is
-	// applied to the slots that render made client-writable and the tree is
-	// re-rendered, so a Bind()ed signal opening a lazy branch gets the slots
-	// inside it hydrated too — without this their posted values were silently
-	// dropped. The action must be present in both, so the executed render is an
-	// intersection with auth, never a superset.
-	auth = newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
-	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
-	// several malformed slots at once still logs one Warn, not one per slot per
-	// pass (rebindFrom copies the pointer; childViewer carries it to children).
-	auth.badDecodeLogged = new(atomic.Bool)
-	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
-	auth.passUnits = map[string]*Ctx{}
-	prebindSignals(auth, inst)
-	if runOnInit(inst.v, auth, m.scope(w, req), false) != nil {
-		return nil, nil, nil, false
-	}
-	rootBefore = renderRootWith(auth, inst.v)
-	bind = auth
-	done := map[string]bool{}
-	n := 0
-	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
-		bind = rebindFrom(auth)
-		rootBefore = renderRootWith(bind, inst.v)
-	}
-	if n == maxHydratePasses {
-		// Never expected: done grows monotonically, so a View would have to
-		// bind a fresh slot on every pass. Loud, because the alternative is a
-		// silently half-hydrated render.
-		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
-			"passes", maxHydratePasses, "act", act)
-	}
-	if child == rootAddr && n > 0 && len(auth.passUnits) > 0 {
-		// The response render re-copies every child from its field, as it must
-		// to show what the root action did to them, so the render it is
-		// compared against has to as well: the last pass shows the children's
-		// hydrated copies, and every root action would differ from it. bind is
-		// rendered again afterwards so the handler's Sets land on the Ctx the
-		// response reads.
-		fresh := rebindFrom(auth)
-		fresh.passUnits = nil
-		rootBefore = renderRootWith(fresh, inst.v)
-		bind = rebindFrom(auth)
-		renderRootWith(bind, inst.v)
-	}
-	return auth, bind, rootBefore, true
-}
-
-// actedViewer is the composition the action just mutated: the root, or the
-// child instance the discovery render bound. Re-loading the root after a child
-// action would reload the wrong unit and leave the acted one stale.
-func actedViewer(inst instance, u *Ctx) any {
-	if u.isChild {
-		return u.unitV.v
-	}
-	return inst.v
-}
-
-// rebindFrom builds the Ctx for hydration pass >= 2: a clone of the auth
-// render with only the per-render tables reset. Three separate defect rounds
-// were one field set on auth and forgotten here (req/sessions/sessW/doInit,
-// then session, then live), each patched by hand-copying one more
-// field — so the default is inverted: a new Ctx field rides along unless it
-// belongs to unitPass, and forgetting one can no longer silently drop a request
-// scope.
-//
-// unitPass holds exactly what a render produces and the next render must
-// produce again, plus the root's OnInit registrations — OnInit does not re-run
-// here and nothing on the plain path consumes them. `live` stays on Ctx: it is
-// auth's verdict, and a later pass may only widen it (I5).
-//
-// The invariants this loop must preserve:
-//
-//	I1 the authority for actions, args and liveness is the un-hydrated auth render.
-//	I2 passes >= 2 widen only hydratable slots; the executed action is auth ∩ bind
-//	   per (handler, arg).
-//	I3 one request = one *Session, resolved by runOnInit and propagated by copy;
-//	   only Session.ensure mints.
-//	I4 a Session.w is non-nil iff its response is still writable.
-//	I5 liveness is a GET/auth verdict — a bind pass cannot lower it and a
-//	   re-render cannot raise it.
-func rebindFrom(auth *Ctx) *Ctx {
-	c := *auth
-	c.unitPass = newUnitPass()
-	return &c
-}
-
-// hydrateTree applies the POST body's signals to every slot the discovery
-// render bound, page-wide, after that render finished. It records each slot it
-// reached in done and reports whether it reached a new one, which is
-// dispatchPlain's signal that another render may uncover more.
-//
-// Deliberately not done during the render, which is what decides what is
-// dispatchable (see on.Bind): hydrating from the body let a client flip a Signal
-// OnInit set from the session — via.When(p.Admin.Get(), …) opened by posting
-// {"admin":true} — and mint its own authorization. Later passes do see hydrated
-// values, but only to widen the set of hydratable slots; the action table they
-// may dispatch from stays auth's.
-func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bool {
-	fresh := false
-	for slot, raw := range in {
-		hydrate, ok := c.hydrators[slot]
-		if !ok {
-			continue
-		}
-		if !hydrate.Hydrate(raw) {
-			// Gone, so a live connection does not re-decode it on every push.
-			delete(in, slot)
-			continue
-		}
-		if !done[slot] {
-			done[slot] = true
-			fresh = true
-		}
-	}
-	for _, child := range c.children {
-		if hydrateTree(child, in, done) {
-			fresh = true
-		}
-	}
-	return fresh
 }
 
 // connectClient is the part of a connect body a live connection keeps as
@@ -1076,60 +649,6 @@ func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
 	for _, child := range c.children {
 		keepSignalValues(child, in, keep)
 	}
-}
-
-// maxHydratePasses bounds dispatchPlain's discovery loop. The loop cannot
-// oscillate — done only grows, and is bounded by |in ∩ hydrators| — so the cap
-// is a backstop against a pathological View that binds a brand-new slot name on
-// every render, not against divergence. A page whose body carries any Bind()ed
-// slot takes exactly 2 passes (2 renders), which is the floor: the handler has
-// to run on a render that already saw the posted values.
-//
-// Each pass re-renders the whole tree, but a child keeps the instance
-// its first pass made (see Ctx.passUnits), so its OnInit runs once, as a root's
-// does.
-const maxHydratePasses = 8
-
-// rerenderPlain re-renders the acted-on unit for a Datastar action's response,
-// restricted to the signals the action wrote. A plain child gets its own
-// container plus a data-signals attribute — the piece the old child-action
-// handler omitted, silently dropping a Signal.Set inside a plain child's
-// action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, auth, bind, u *Ctx, base string) []byte {
-	seen := bind.slotSet()
-	if child == rootAddr {
-		// data-signals is a plain action's only channel for a server-side Set,
-		// restricted to what it wrote since re-declaring every slot would
-		// clobber a value the user is mid-edit. dirtyAll never returns nil,
-		// which would read as "declare everything".
-		only := bind.dirtyAll()
-		afterCtx, after := renderRootBase(inst, true, base, only, seen, u, nil, u.badDecodeLogged)
-		if len(liveUnits(bind)) == 0 {
-			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
-		}
-		if bytes.Equal(rootBefore, after) {
-			return nil
-		}
-		return after
-	}
-	// u is always plain here (assertRenderInvariantLiveness below would already
-	// have fired otherwise), but the real page can still hold it beneath an
-	// already-live root — liveAncestor reads that off the discovery tree, since
-	// this re-render's own synthetic root has no ancestor Ctx to walk from.
-	// auth, not bind (I1): liveness is the un-hydrated render's verdict.
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u.dirtyAll(), seen, u, nil, u.badDecodeLogged, liveAncestor(auth, child))
-	assertRenderInvariantLiveness(afterCtx.live)
-	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
-		return nil
-	}
-	var buf bytes.Buffer
-	buf.WriteString(`<div id="via-i` + u.childKey + `"`)
-	order, initial := withWritten(afterCtx, u.dirty)
-	writeSignalsAttr(m.cfg.log, &buf, order, initial, u.dirty, seen)
-	buf.WriteString(`>`)
-	buf.Write(afterInner)
-	buf.WriteString(`</div>`)
-	return buf.Bytes()
 }
 
 // pruneToAuthority intersects a live display render's action table with the
@@ -1172,16 +691,6 @@ func pruneToAuthority(bind, auth *Ctx) {
 			ac = auth.children[i]
 		}
 		pruneToAuthority(child, ac)
-	}
-}
-
-// pruneArgs drops the args a bound handler holds that the authority render's
-// handler does not.
-func pruneArgs(a, authAct action) {
-	for k := range a.args {
-		if _, ok := authAct.args[k]; !ok {
-			delete(a.args, k)
-		}
 	}
 }
 

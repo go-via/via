@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -130,13 +131,17 @@ type unitPusher struct {
 
 func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 	if p.frameID == "" {
-		return renderRootBase(p.inst, false, p.base, nil, nil, p.from, rev, p.lc.badDecodeLogged) // push omits data-signals
+		return renderRootBase(p.inst, false, p.rerender(rev)) // push omits data-signals
 	}
 	// false: this unit's own ancestor chain is plain by construction — a live
 	// unit could never have connected otherwise (checkLiveNesting already proved
 	// it at connect). Its own children are under a live ancestor regardless,
 	// since checkLiveUnderLive folds in c.live itself.
-	return renderChildBind(p.childKey, p.inst, p.base, nil, nil, p.from, rev, p.lc.badDecodeLogged, false)
+	return renderChildBind(p.childKey, p.inst, p.rerender(rev), false)
+}
+
+func (p *unitPusher) rerender(rev *revertSet) rerender {
+	return rerender{base: p.base, from: p.from, rev: rev, badDecodeLogged: p.lc.badDecodeLogged}
 }
 
 // push renders and frames the unit. Unchanged frames are dropped (the
@@ -234,45 +239,20 @@ func (p *unitPusher) recoverFatal() {
 // connect is the SSE stream's entry point at {base}/_via/sse. Every mount gets
 // the route; a page with no live content answers 404 on it.
 func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
-	// Origin floor first: the stream opens a long-lived goroutine + timers, so
-	// reject an unprovable source before allocating any of it.
-	if !originAllowed(req, m.cfg) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	// A POST so the connect can carry the page's signals as a body.
-	m.capBody(w, req, modeDatastar)
-	connectSig, ok := m.decodeSignals(w, req, modeDatastar)
-	if !ok {
-		return
-	}
-	if !canFlush(w) {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	base := concreteBase(m.patternBase, req, m.names)
-	adm, ok := m.admit(w)
+	connectSig, adm, ok := m.openConnect(w, req)
 	if !ok {
 		return
 	}
 	defer adm.release()
+	base := concreteBase(m.patternBase, req, m.names)
 	headersSent := false
 	defer m.recoverConnect(w, req, &headersSent)
-	pv := m.newInst()
-	// A half-open peer never cancels req.Context(); a failed frame write is the
-	// only signal it's gone, so the stream needs a context it can cancel.
-	streamCtx, cancel := context.WithCancel(req.Context())
-	defer cancel()
+	stream, streamCtx := openStream(w, req.Context())
+	defer stream.cancel()
 	// Router.Close reaches the stream through here rather than through the
 	// context chain: req.Context() is net/http's, and http.Server.Shutdown does
 	// not cancel it, so nothing else would ever end this goroutine, its Tick
 	// timers or its Listen subscriptions.
-	stream := &stream{
-		w:       w,
-		rc:      http.NewResponseController(w),
-		timeout: sseWriteTimeout,
-		cancel:  cancel,
-	}
 	defer context.AfterFunc(m.ctx, stream.end)()
 
 	// The credential dispatch requires a match against, so that a leaked tab id
@@ -299,40 +279,19 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	registered := false
 	defer m.releaseUnregistered(id, stream, &registered)
 
-	bind, ok := m.discover(w, req, pv, base, sessID, sessDat)
+	bind, ok := m.discover(w, req, base, sessID, sessDat)
 	if !ok {
 		return
 	}
-	units := liveUnits(bind)
-	if len(units) == 0 {
-		http.Error(w, "no stream for this tab", http.StatusNotFound)
-		return
-	}
-
-	guard := newPushGuard(fmt.Sprintf(" [tab=%s unit=%T]", id, pv.v))
-
 	var connSID string
 	if sessDat != nil {
 		connSID = sessDat.sid
 	}
-
-	// Built before the connect loop so each pusher can register its unit as
-	// the current unit on every render — a live action always runs against the
-	// last render's actions/hydrators.
-	lc := &tabStream{
-		id:              id,
-		mount:           m,
-		pushq:           make(chan pushItem),
-		done:            streamCtx.Done(),
-		units:           map[string]*Ctx{},
-		sess:            connSID,
-		handlers:        units,
-		client:          connectClient(bind, connectSig),
-		rev:             bind.rev,
-		badDecodeLogged: bind.badDecodeLogged,
-		end:             stream.end,
-		wire:            stream,
-		guard:           guard,
+	lc := m.newTabStream(id, connSID, bind, connectSig, stream)
+	units, guard := lc.handlers, lc.guard
+	if len(units) == 0 {
+		http.Error(w, "no stream for this tab", http.StatusNotFound)
+		return
 	}
 
 	// runStream owns the disposer sweep but is not running yet: an OnConnect fn
@@ -395,7 +354,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	pushOnConnect(m.cfg.log, guard, units)
 
 	streaming = true
-	runStream(m.cfg.log, streamCtx, guard, units, listeners, wake, lc)
+	runStream(streamCtx, lc, listeners, wake)
 }
 
 func startListeners(units []*Ctx, streamCtx context.Context, wake chan struct{}) []subscription {
@@ -449,6 +408,65 @@ func pushOnConnect(log *slog.Logger, g *pushGuard, units []*Ctx) {
 	}
 }
 
+// openConnect runs the checks a connect passes before any stream state exists,
+// and counts the stream in. The origin floor goes first: the stream opens a
+// long-lived goroutine and timers, so an unprovable source is rejected before
+// any of it is allocated.
+func (m *mount) openConnect(w http.ResponseWriter, req *http.Request) (map[string]json.RawMessage, admission, bool) {
+	if !originAllowed(req, m.cfg) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return nil, admission{}, false
+	}
+	// A POST so the connect can carry the page's signals as a body.
+	m.capBody(w, req, modeDatastar)
+	connectSig, ok := m.decodeSignals(w, req, modeDatastar)
+	if !ok {
+		return nil, admission{}, false
+	}
+	if !canFlush(w) {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return nil, admission{}, false
+	}
+	adm, ok := m.admit(w)
+	return connectSig, adm, ok
+}
+
+// openStream wraps w for SSE frames. A half-open peer never cancels parent; a
+// failed frame write is the only signal it's gone, so the stream needs a
+// context it can cancel.
+func openStream(w http.ResponseWriter, parent context.Context) (*stream, context.Context) {
+	ctx, cancel := context.WithCancel(parent)
+	return &stream{
+		w:       w,
+		rc:      http.NewResponseController(w),
+		timeout: sseWriteTimeout,
+		cancel:  cancel,
+		done:    ctx.Done(),
+	}, ctx
+}
+
+// newTabStream is the connection a discovered root's live units run on. It is
+// built before the connect loop so each pusher can register its unit as the
+// current unit on every render — a live action always runs against the last
+// render's actions/hydrators.
+func (m *mount) newTabStream(id, sid string, bind *Ctx, connectSig map[string]json.RawMessage, s *stream) *tabStream {
+	return &tabStream{
+		id:              id,
+		mount:           m,
+		pushq:           make(chan pushItem),
+		done:            s.done,
+		units:           map[string]*Ctx{},
+		sess:            sid,
+		handlers:        liveUnits(bind),
+		client:          connectClient(bind, connectSig),
+		rev:             bind.rev,
+		badDecodeLogged: bind.badDecodeLogged,
+		end:             s.end,
+		wire:            s,
+		guard:           newPushGuard(fmt.Sprintf(" [tab=%s unit=%T]", id, bind.unitV.v)),
+	}
+}
+
 // discover runs the root's OnInit and the discovery render that binds it.
 // OnInit runs on the very Ctx that render binds, so a Tick/Listen it registers
 // is what makes the root a live unit.
@@ -458,7 +476,8 @@ func pushOnConnect(log *slog.Logger, g *pushGuard, units []*Ctx) {
 // and its liveness (I1). The body is kept as lc.client and applied to the
 // display render of every push instead (livePush) — which is the only place it
 // was ever visible, since connect frames no elements of its own.
-func (m *mount) discover(w http.ResponseWriter, req *http.Request, pv instance, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
+func (m *mount) discover(w http.ResponseWriter, req *http.Request, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
+	pv := m.newInst()
 	bind := newRootCtx(false, base, nil)
 	bind.rev = newRevertSet()
 	bind.badDecodeLogged = new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
@@ -523,7 +542,7 @@ func (a admission) release() {
 // help, so a mid-stream panic is caught per push item (runPushItem) instead.
 func (m *mount) recoverConnect(w http.ResponseWriter, req *http.Request, headersSent *bool) {
 	if rec := recover(); rec != nil && !*headersSent {
-		recoverToHTTP(m.cfg.log, w, req, rec, "stream", true)
+		m.recoverToHTTP(w, req, rec, "stream", true)
 	}
 }
 

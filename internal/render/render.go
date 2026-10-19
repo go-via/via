@@ -302,19 +302,8 @@ func cutDataPrefix(name string) (string, bool) {
 
 // validDataSuffix allows Datastar's plugin punctuation after a leading letter.
 func validDataSuffix(s string) bool {
-	if s == "" {
-		return false
-	}
-	for i := range len(s) {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
-		case i > 0 && (c >= '0' && c <= '9' || c == '-' || c == ':' || c == '_' || c == '.'):
-		default:
-			return false
-		}
-	}
-	return true
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	return s != "" && strings.IndexByte(letters, s[0]) >= 0 && strings.Trim(s, letters+"0123456789-:_.") == ""
 }
 
 // RawAttr builds a name="val" attribute; val is HTML-escaped at render. name
