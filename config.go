@@ -151,31 +151,42 @@ func (o trustedOriginOption) apply(c *config) {
 // silently match nothing.
 func bareOrigin(origin string) string {
 	u, err := url.Parse(origin)
-	switch {
-	case err != nil:
+	if err != nil {
 		badOrigin(origin, "does not parse: "+err.Error())
-	case u.Scheme != "http" && u.Scheme != "https":
-		badOrigin(origin, "scheme is not http or https")
-	case u.User != nil:
-		badOrigin(origin, "has userinfo")
-	case u.Host == "":
-		badOrigin(origin, "has no host")
-	case strings.Contains(u.Host, "*"):
-		badOrigin(origin, "has a wildcard; list each origin")
-	case strings.HasSuffix(u.Host, ":"):
-		badOrigin(origin, "has an empty port")
-	case u.Path != "" && u.Path != "/" || u.RawPath != "":
-		badOrigin(origin, "has a path")
-	case u.RawQuery != "" || u.ForceQuery:
-		badOrigin(origin, "has a query")
-	case u.Fragment != "" || strings.Contains(origin, "#"):
-		badOrigin(origin, "has a fragment")
+	}
+	if fault := originFault(origin, u); fault != "" {
+		badOrigin(origin, fault)
 	}
 	norm, ok := render.URLOrigin(origin)
 	if !ok || norm == "" {
 		badOrigin(origin, "is not an origin")
 	}
 	return norm
+}
+
+// originFault names the first reason a parsed origin is not a bare
+// scheme://host[:port], or "" when none applies. The order picks which
+// reason a multiply-bad value reports.
+func originFault(origin string, u *url.URL) string {
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "scheme is not http or https"
+	case u.User != nil:
+		return "has userinfo"
+	case u.Host == "":
+		return "has no host"
+	case strings.Contains(u.Host, "*"):
+		return "has a wildcard; list each origin"
+	case strings.HasSuffix(u.Host, ":"):
+		return "has an empty port"
+	case u.Path != "" && u.Path != "/" || u.RawPath != "":
+		return "has a path"
+	case u.RawQuery != "" || u.ForceQuery:
+		return "has a query"
+	case u.Fragment != "" || strings.Contains(origin, "#"):
+		return "has a fragment"
+	}
+	return ""
 }
 
 func badOrigin(origin, part string) {

@@ -289,14 +289,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	child := req.PathValue("child")
 	act := req.PathValue("act")
 
-	tab := ""
-	if mode == modeNative {
-		tab = req.PostFormValue(tabFormField)
-	} else if raw, ok := in[tabSignal]; ok {
-		// Anything that is not a JSON string leaves tab empty and falls through
-		// to the plain path — the same graceful answer a stale id gets.
-		_ = json.Unmarshal(raw, &tab)
-	}
+	tab := actionTab(req, mode, in)
 	// The tab id rides in the body, so the body is read before anything can
 	// park: a parked action holds its decoded signals. parkedCap bounds that.
 	deadline := time.Now().Add(m.cfg.pinnedDeadline)
@@ -342,6 +335,21 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		ticket.leave()
 	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
+}
+
+// actionTab reads the tab id an action POST echoes, from the form field or the
+// signal body per mode.
+func actionTab(req *http.Request, mode actionMode, in map[string]json.RawMessage) string {
+	if mode == modeNative {
+		return req.PostFormValue(tabFormField)
+	}
+	tab := ""
+	if raw, ok := in[tabSignal]; ok {
+		// Anything that is not a JSON string leaves tab empty and falls through
+		// to the plain path — the same graceful answer a stale id gets.
+		_ = json.Unmarshal(raw, &tab)
+	}
+	return tab
 }
 
 func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
@@ -831,39 +839,8 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	if !ok {
 		return
 	}
-	ua := auth.unit(child)
-	if ua == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	authAct, ok := ua.actions[act]
+	ua, u, authAct, a, ok := m.actedUnit(w, req, auth, bind, child, act)
 	if !ok {
-		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
-		return
-	}
-	u := bind.unit(child)
-	if u == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// Same guard, same reason, as the acted-instance substitution in
-	// childViewer: a When around a Child that depends on a hydrated signal can
-	// shift ordinals, so one key may denote different types in the auth and
-	// bind renders. Child's docs forbid such a When; fail closed rather than
-	// run the handler against a unit the authorization never looked at.
-	if ua.unitV.typ != u.unitV.typ {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// A matching type is not yet the same unit: a sibling of the same type
-	// shifted onto this key carries a different identity (see childViewer).
-	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	a, ok := u.actions[act]
-	if !ok {
-		http.Error(w, m.unknownAction(u, act), http.StatusGone)
 		return
 	}
 	// The intersection is per (handler, arg), not per handler: a posted signal
@@ -871,11 +848,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// an arg only the client's own body produced would dispatch. a.args is the
 	// very map action.run checks against, so pruning it in place is
 	// what fails the unauthorized arg closed.
-	for k := range a.args {
-		if _, ok := authAct.args[k]; !ok {
-			delete(a.args, k)
-		}
-	}
+	pruneArgs(a, authAct)
 	if ua.live {
 		// Liveness is read off the auth render, never off bind (I1/I5): only
 		// auth ran the root's OnInit. Reaching here means the tab was missing
@@ -917,6 +890,48 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		m.warnNoChange(act, a.name, actedViewer(inst, u))
 	}
 	writePatch(w, b)
+}
+
+// actedUnit finds the unit a plain action addresses in both discovery renders
+// and its handler in each, answering 410 when either render disagrees about
+// what lives at the address. ua and authAct are the auth render's; u and a are
+// the bind render's, the pair the action runs against.
+func (m *mount) actedUnit(w http.ResponseWriter, req *http.Request, auth, bind *Ctx, child, act string) (ua, u *Ctx, authAct, a action, ok bool) {
+	ua = auth.unit(child)
+	if ua == nil {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	authAct, authOK := ua.actions[act]
+	if !authOK {
+		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
+		return
+	}
+	u = bind.unit(child)
+	if u == nil {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	// Same guard, same reason, as the acted-instance substitution in
+	// childViewer: a When around a Child that depends on a hydrated signal can
+	// shift ordinals, so one key may denote different types in the auth and
+	// bind renders. Child's docs forbid such a When; fail closed rather than
+	// run the handler against a unit the authorization never looked at.
+	if ua.unitV.typ != u.unitV.typ {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	// A matching type is not yet the same unit: a sibling of the same type
+	// shifted onto this key carries a different identity (see childViewer).
+	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	a, ok = u.actions[act]
+	if !ok {
+		http.Error(w, m.unknownAction(u, act), http.StatusGone)
+	}
+	return
 }
 
 // discoverPlain runs OnInit and the discovery renders for a plain action;
@@ -1133,7 +1148,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, au
 
 // pruneToAuthority intersects a live display render's action table with the
 // authority render's, per handler and per arg — the same intersection
-// dispatchPlain does inline, for the same reason: a posted signal may widen
+// dispatchPlain does, for the same reason: a posted signal may widen
 // what the client sees and must never widen what it may call.
 //
 // Walked by child ordinal, since that is the dispatch address. A type mismatch
@@ -1163,11 +1178,7 @@ func pruneToAuthority(bind, auth *Ctx) {
 			delete(bind.actions, id)
 			continue
 		}
-		for k := range a.args {
-			if _, ok := authAct.args[k]; !ok {
-				delete(a.args, k)
-			}
-		}
+		pruneArgs(a, authAct)
 	}
 	for i, child := range bind.children {
 		var ac *Ctx
@@ -1175,6 +1186,16 @@ func pruneToAuthority(bind, auth *Ctx) {
 			ac = auth.children[i]
 		}
 		pruneToAuthority(child, ac)
+	}
+}
+
+// pruneArgs drops the args a bound handler holds that the authority render's
+// handler does not.
+func pruneArgs(a, authAct action) {
+	for k := range a.args {
+		if _, ok := authAct.args[k]; !ok {
+			delete(a.args, k)
+		}
 	}
 }
 

@@ -543,7 +543,7 @@ const connectWait = 2 * time.Second
 // and for the stream to register at all, until connectWait at most.
 // The ticket's leave must be called once the stream has taken the action (or
 // refused it), so the next in line gets its turn.
-func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (lc *tabStream, t *parkTicket, out enterOutcome) {
+func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (*tabStream, *parkTicket, enterOutcome) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -563,13 +563,22 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 	w := &waiter{}
 	s.queue = append(s.queue, w)
 	r.parked++
-	t = &parkTicket{r: r, id: id, s: s, w: w}
+	t := &parkTicket{r: r, id: id, s: s, w: w}
+	return t.wait(ctx, routerCtx, now, deadline)
+}
+
+// wait parks t until its turn at a ready stream, or until its slot ends, the
+// deadline passes, the client hangs up or the router closes. The caller holds
+// r.mu and holds it again on return; it is released only while blocked.
+func (t *parkTicket) wait(ctx, routerCtx context.Context, now, deadline time.Time) (*tabStream, *parkTicket, enterOutcome) {
+	r, id, s, w := t.r, t.id, t.s, t.w
 	connectBy := now.Add(connectWait)
 	if deadline.Before(connectBy) {
 		connectBy = deadline
 	}
 	timer := time.NewTimer(connectBy.Sub(now))
 	defer timer.Stop()
+	var out enterOutcome
 	for {
 		switch {
 		case !s.gone.IsZero():

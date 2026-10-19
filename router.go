@@ -792,35 +792,58 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 		return
 	}
 	pt := reflect.PointerTo(t)
-	if _, done := hookSigChecked.Load(t); !done {
-		for _, hook := range hookSpecs {
-			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
-				panic(render.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
-					withoutReceiver(m.Type) + ", not " + hook.want +
-					" — so the hook will never run"))
-			}
-		}
-		hookSigChecked.Store(t, true)
-	}
+	panicOnMisshapedHooks(t, pt)
 	if _, dup := warned.LoadOrStore(t, true); dup {
 		return
 	}
 	if !root {
-		for _, hook := range hookSpecs {
-			if hook.rootOnly && hook.implements(pt) {
-				log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the mounted root's %s names the document, "+
-					"and %s is a child. Move it to the mounted root, or fold the value into the "+
-					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
-			}
+		warnRootOnlyHooksOnChild(log, t, pt)
+	}
+	warnLeftoverTitle(log, t, pt)
+	warnMisnamedMethods(log, t, pt)
+}
+
+// panicOnMisshapedHooks panics on a method named like a hook but with the
+// wrong signature. Only a clean pass is memoized, so a type that panics
+// panics every time.
+func panicOnMisshapedHooks(t, pt reflect.Type) {
+	if _, done := hookSigChecked.Load(t); done {
+		return
+	}
+	for _, hook := range hookSpecs {
+		if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
+			panic(render.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
+				withoutReceiver(m.Type) + ", not " + hook.want +
+				" — so the hook will never run"))
 		}
 	}
-	// Title was the hook PageMeta replaced. A leftover one is dead code that
-	// still compiles and still looks like it names the page, so say so.
+	hookSigChecked.Store(t, true)
+}
+
+func warnRootOnlyHooksOnChild(log *slog.Logger, t, pt reflect.Type) {
+	for _, hook := range hookSpecs {
+		if hook.rootOnly && hook.implements(pt) {
+			log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the mounted root's %s names the document, "+
+				"and %s is a child. Move it to the mounted root, or fold the value into the "+
+				"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
+		}
+	}
+}
+
+// warnLeftoverTitle: Title was the hook PageMeta replaced. A leftover one is
+// dead code that still compiles and still looks like it names the page, so
+// say so.
+func warnLeftoverTitle(log *slog.Logger, t, pt reflect.Type) {
 	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[pageMetaer](pt) {
 		log.Warn(fmt.Sprintf("via: %s.Title is no longer a via hook — the document is named by "+
 			"PageMeta() via.Meta now, so nothing will ever call it. Return via.Meta{Title: …} instead.",
 			t.String()))
 	}
+}
+
+// warnMisnamedMethods warns on a method with a hook's exact signature under a
+// name via never calls: the v0.7 OnConnect, or a near-miss of a current hook.
+func warnMisnamedMethods(log *slog.Logger, t, pt reflect.Type) {
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
 		if v07OnConnect(m.Name) && ctxErrShaped(m.Type) {
@@ -926,33 +949,31 @@ func perturbZeroFields(v reflect.Value, pkg string, depth int) {
 		// NewAt: an unexported field is not settable through reflect, and the
 		// fields a page derives its assets from are usually unexported.
 		f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
-		switch f.Kind() {
-		case reflect.Struct:
-			if foreignStruct(f.Type(), pkg) {
-				continue
+		if f.Kind() == reflect.Struct {
+			if !foreignStruct(f.Type(), pkg) {
+				perturbZeroFields(f, pkg, depth+1)
 			}
-			perturbZeroFields(f, pkg, depth+1)
-		case reflect.String:
-			if f.IsZero() {
-				f.SetString("via-probe")
-			}
-		case reflect.Bool:
-			if f.IsZero() {
-				f.SetBool(true)
-			}
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if f.IsZero() {
-				f.SetInt(1)
-			}
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if f.IsZero() {
-				f.SetUint(1)
-			}
-		case reflect.Float32, reflect.Float64:
-			if f.IsZero() {
-				f.SetFloat(1)
-			}
+			continue
 		}
+		perturbZeroScalar(f)
+	}
+}
+
+func perturbZeroScalar(f reflect.Value) {
+	if !f.IsZero() {
+		return
+	}
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString("via-probe")
+	case reflect.Bool:
+		f.SetBool(true)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		f.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		f.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		f.SetFloat(1)
 	}
 }
 

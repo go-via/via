@@ -1430,7 +1430,7 @@ func TestChild_staleKeyNowHoldingASiblingOfTheSameTypeIsGone(t *testing.T) {
 	hide.Store(true)
 	status, body = app.ChildAction("0", 0).Fire()
 	assert.Equal(t, http.StatusGone, status, "A's stale URL must not run B's handler")
-	assert.NotContains(t, body, "B hits=1")
+	assert.Equal(t, "no such child\n", body, "a 410 ends the dispatch")
 
 	_, page := app.Get("/")
 	fresh, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "0", 0), strings.NewReader("{}"))

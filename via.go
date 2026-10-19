@@ -262,56 +262,63 @@ func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base u
 	for i := range t.NumField() {
 		f := t.Field(i)
 		name, off := prefix+lowerFirst(f.Name), base+f.Offset
-		tag, tagged := f.Tag.Lookup("via")
-		if reflect.PointerTo(f.Type).Implements(signalMarker) {
-			sf := signalField{off: off, name: name}
-			handle := reflect.New(f.Type).Interface()
-			if cs, ok := handle.(clientSignal); ok {
-				sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
-			}
-			if tagged {
-				var raw string
-				sf.seed, raw = decodeSeedTag(t, f, handle.(seeded), tag)
-				sf.declares = true
-				if !sf.cs {
-					sf.applier = handle.(seeded).seedApplier(raw)
-				}
-			}
-			slot := sf.wire("")
-			checkSlotName(t, f.Name, slot, minted)
-			minted[slot] = true
-			ts.fields = append(ts.fields, sf)
-			ts.byOff[off] = sf
-			continue
-		}
-		if reflect.PointerTo(f.Type).Implements(seededMarker) { // State, List
-			handle := reflect.New(f.Type).Interface()
-			if tagged {
-				h := handle.(seeded)
-				_, raw := decodeSeedTag(t, f, h, tag)
-				ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(raw)})
-			}
-			// Every State lands here, tracked or not: whether this instance
-			// carries a StateTrack literal is a per-instance fact the type
-			// cannot answer, so startTrack nil-checks at init.
-			if tk, ok := handle.(tracker); ok {
-				ts.tracks = append(ts.tracks, trackField{off: off, tk: tk})
-			}
-			continue
-		}
-		// Not descended: an entry here is a dead slot that also rebinds the
-		// child's handles to the root's on every root render.
-		if reflect.PointerTo(f.Type).Implements(viewerType) {
+		switch ptr := reflect.PointerTo(f.Type); {
+		case ptr.Implements(signalMarker):
+			addSignalField(ts, minted, t, f, off, name)
+		case ptr.Implements(seededMarker): // State, List
+			addSeededField(ts, t, f, off)
+		case ptr.Implements(viewerType):
+			// Not descended: an entry here is a dead slot that also rebinds the
+			// child's handles to the root's on every root render.
 			checkNoSeedTag(t, f)
-			continue
-		}
-		if f.Type.Kind() == reflect.Struct {
+		case f.Type.Kind() == reflect.Struct:
 			checkNoSeedTag(t, f)
 			walkSignals(ts, minted, f.Type, off, name+"_", depth+1)
-			continue
+		default:
+			checkNoSeedTag(t, f)
+			checkSignalReachable(t, f)
 		}
-		checkNoSeedTag(t, f)
-		checkSignalReachable(t, f)
+	}
+}
+
+// addSignalField registers f, a Signal or SignalCS field of t, under its wire
+// slot, with the seed its tag or client zero declares.
+func addSignalField(ts *typeSignals, minted map[string]bool, t reflect.Type, f reflect.StructField, off uintptr, name string) {
+	tag, tagged := f.Tag.Lookup("via")
+	sf := signalField{off: off, name: name}
+	handle := reflect.New(f.Type).Interface()
+	if cs, ok := handle.(clientSignal); ok {
+		sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
+	}
+	if tagged {
+		var raw string
+		sf.seed, raw = decodeSeedTag(t, f, handle.(seeded), tag)
+		sf.declares = true
+		if !sf.cs {
+			sf.applier = handle.(seeded).seedApplier(raw)
+		}
+	}
+	slot := sf.wire("")
+	checkSlotName(t, f.Name, slot, minted)
+	minted[slot] = true
+	ts.fields = append(ts.fields, sf)
+	ts.byOff[off] = sf
+}
+
+// addSeededField records f, a State or List field of t, for seeding and
+// tracking.
+func addSeededField(ts *typeSignals, t reflect.Type, f reflect.StructField, off uintptr) {
+	handle := reflect.New(f.Type).Interface()
+	if tag, tagged := f.Tag.Lookup("via"); tagged {
+		h := handle.(seeded)
+		_, raw := decodeSeedTag(t, f, h, tag)
+		ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(raw)})
+	}
+	// Every State lands here, tracked or not: whether this instance
+	// carries a StateTrack literal is a per-instance fact the type
+	// cannot answer, so startTrack nil-checks at init.
+	if tk, ok := handle.(tracker); ok {
+		ts.tracks = append(ts.tracks, trackField{off: off, tk: tk})
 	}
 }
 

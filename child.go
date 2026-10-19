@@ -157,95 +157,17 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	if parent == nil {
 		return
 	}
-	if parent.policy == bootPolicy {
-		// A throwaway dedupe map: the boot render must not use up the warning
-		// the first real render of this child owes the app.
-		checkHooks(bootPolicy.log, inst.typ, &sync.Map{}, false)
-	} else if parent.policy != nil {
-		checkHooks(parent.logger(), inst.typ, parent.policy.hookWarned, false)
-	} else {
-		// A bare render has no Router, so nothing outlives it to dedupe against.
-		checkHooks(slog.Default(), inst.typ, &sync.Map{}, false)
-	}
+	checkChildHooks(parent, inst)
 
 	key := parent.keyOf(len(parent.children))
-	// The key is positional, so a When that closes ahead of a child moves a
-	// sibling onto its key, and only the type guards below catch that. A
-	// child named by its field is the one field of its type, so a matching
-	// type is the same child. Two fields of one type need more: the render's
-	// call stack into via.Child (see childSite.id), composed down the tree
-	// because a shifted parent moves its children too. Child takes a copy, so
-	// the field itself is out of reach.
-	// It rides on every action URL the child renders (see actionPath).
-	name := childFieldName(parent.unitV.typ, inst.typ)
-	ident := parent.unitV.ident
-	if name == "" {
-		ident = hashID(ident + "/" + site.id())
-	}
+	name, ident := childIdentity(parent, inst, site)
+	inst, acted, prior := adoptActedOrPrior(parent, inst, key, ident)
 
-	// An action's response re-render substitutes the instance the handler
-	// mutated for this fresh copy (see inheritRequestScope); re-running its
-	// OnInit would undo the very change the handler just made — re-reading
-	// mutated data is OnReload's job, and dispatch has already run it.
-	//
-	// The type guard is not paranoia: a root View whose Child order shifts
-	// between the discovery render and the response re-render leaves the acted
-	// key pointing at a slot a different type now occupies, and splicing the
-	// instance in there renders the wrong View under the wrong slot prefix.
-	// Fall back to the fresh copy rather than render a lie.
-	acted := parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ &&
-		ident == parent.actedInst.ident
-	if acted {
-		inst = parent.actedInst
-	}
-	// Same substitution for a hydration pass >= 2, and the same type guard. Its
-	// OnInit already ran on this copy in the first pass; running it again would
-	// overwrite what the pass before hydrated.
-	var prior *Ctx
-	if !acted && parent.passUnits != nil {
-		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ && p.unitV.ident == ident {
-			prior, inst = p, p.unitV
-		}
-	}
-
-	child := newCtx()
-	child.rev = parent.rev                         // a hydrated child must be revertable with its parent (see livePush)
-	child.badDecodeLogged = parent.badDecodeLogged // one flag per tree: a malformed post hits every child's hydrator
-	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
-	child.passUnits = parent.passUnits
-	if prior != nil {
-		// That OnInit is also what registered the Tick or Listen making the unit
-		// live, and a later pass may not lower the first pass's verdict (I5).
-		child.live = prior.live
-	} else if parent.passUnits != nil {
-		parent.passUnits[key] = child
-	}
-	child.isChild = true
-	child.childKey = key
-	// The double underscore marks the scope boundary; a plain nested struct
-	// joins with a single one. Stamped onto the instance because a live
-	// child's push re-renders with no parent in scope.
+	// Stamped onto the instance because a live child's push re-renders with
+	// no parent in scope.
 	inst.ident = ident
-	if name != "" {
-		inst.slotPrefix = parent.scopePrefix() + name + "__"
-	} else {
-		// Ambiguous field: fall back to the positional key, always right if
-		// opaque. Its depth separator '-' is not a JS identifier character and
-		// Ref() hands these names straight to Datastar expressions, so it
-		// becomes '_' here. Only the slot name is respelled; the key still
-		// addresses the container and the dispatch URL with '-'.
-		inst.slotPrefix = parent.scopePrefix() + "i" + strings.ReplaceAll(key, "-", "_") + "__"
-	}
-	child.unitV = inst
-	child.base = parent.base // the mount prefix, so the child's own action URLs carry it too
-	// A child is the parent of its own children, so it passes the declaration
-	// down or a grandchild's slots never reach the client store.
-	child.declare, child.declareOnly, child.declareSeen = parent.declare, parent.declareOnly, parent.declareSeen
-	child.req = parent.req
-	child.sessions = parent.sessions
-	child.policy = parent.policy
-	child.sessW = parent.sessW
-	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
+	inst.slotPrefix = childSlotPrefix(parent, name, key)
+	child := newChildCtx(parent, key, inst, prior)
 	parent.children = append(parent.children, child)
 
 	// Only a request-scoped render inits. A live root's push inherits the
@@ -279,6 +201,116 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	r.WriteString(`>`)
 	r.WriteString(string(child.rendered))
 	r.WriteString(`</div>`)
+}
+
+// checkChildHooks warns about hooks the child type declares that never run,
+// against the dedupe map of the parent's render kind.
+func checkChildHooks(parent *Ctx, inst instance) {
+	if parent.policy == bootPolicy {
+		// A throwaway dedupe map: the boot render must not use up the warning
+		// the first real render of this child owes the app.
+		checkHooks(bootPolicy.log, inst.typ, &sync.Map{}, false)
+	} else if parent.policy != nil {
+		checkHooks(parent.logger(), inst.typ, parent.policy.hookWarned, false)
+	} else {
+		// A bare render has no Router, so nothing outlives it to dedupe against.
+		checkHooks(slog.Default(), inst.typ, &sync.Map{}, false)
+	}
+}
+
+// childIdentity returns the child's field name in the parent, or "" when the
+// parent holds several fields of its type, and the ident its slots and action
+// URLs carry.
+func childIdentity(parent *Ctx, inst instance, site childSite) (name, ident string) {
+	// The key is positional, so a When that closes ahead of a child moves a
+	// sibling onto its key, and only adoptActedOrPrior's type guards catch that. A
+	// child named by its field is the one field of its type, so a matching
+	// type is the same child. Two fields of one type need more: the render's
+	// call stack into via.Child (see childSite.id), composed down the tree
+	// because a shifted parent moves its children too. Child takes a copy, so
+	// the field itself is out of reach.
+	// The ident rides on every action URL the child renders (see actionPath).
+	name = childFieldName(parent.unitV.typ, inst.typ)
+	ident = parent.unitV.ident
+	if name == "" {
+		ident = hashID(ident + "/" + site.id())
+	}
+	return name, ident
+}
+
+// adoptActedOrPrior swaps the fresh copy for the instance an earlier render of
+// this key already holds. acted reports the action's instance; prior is the
+// earlier hydration pass's Ctx when that supplied it.
+func adoptActedOrPrior(parent *Ctx, inst instance, key, ident string) (_ instance, acted bool, prior *Ctx) {
+	// An action's response re-render substitutes the instance the handler
+	// mutated for this fresh copy (see inheritRequestScope); re-running its
+	// OnInit would undo the very change the handler just made — re-reading
+	// mutated data is OnReload's job, and dispatch has already run it.
+	//
+	// The type guard is not paranoia: a root View whose Child order shifts
+	// between the discovery render and the response re-render leaves the acted
+	// key pointing at a slot a different type now occupies, and splicing the
+	// instance in there renders the wrong View under the wrong slot prefix.
+	// Fall back to the fresh copy rather than render a lie.
+	acted = parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ &&
+		ident == parent.actedInst.ident
+	if acted {
+		return parent.actedInst, true, nil
+	}
+	// Same substitution for a hydration pass >= 2, and the same type guard. Its
+	// OnInit already ran on this copy in the first pass; running it again would
+	// overwrite what the pass before hydrated.
+	if parent.passUnits != nil {
+		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ && p.unitV.ident == ident {
+			return p.unitV, false, p
+		}
+	}
+	return inst, false, nil
+}
+
+// childSlotPrefix is the prefix a child's signal slots carry under its parent.
+// The double underscore marks the scope boundary; a plain nested struct joins
+// with a single one.
+func childSlotPrefix(parent *Ctx, name, key string) string {
+	if name != "" {
+		return parent.scopePrefix() + name + "__"
+	}
+	// Ambiguous field: fall back to the positional key, always right if
+	// opaque. Its depth separator '-' is not a JS identifier character and
+	// Ref() hands these names straight to Datastar expressions, so it
+	// becomes '_' here. Only the slot name is respelled; the key still
+	// addresses the container and the dispatch URL with '-'.
+	return parent.scopePrefix() + "i" + strings.ReplaceAll(key, "-", "_") + "__"
+}
+
+// newChildCtx builds the child's Ctx from the parent's request scope. prior is
+// the earlier hydration pass's Ctx for this key, or nil.
+func newChildCtx(parent *Ctx, key string, inst instance, prior *Ctx) *Ctx {
+	child := newCtx()
+	child.rev = parent.rev                         // a hydrated child must be revertable with its parent (see livePush)
+	child.badDecodeLogged = parent.badDecodeLogged // one flag per tree: a malformed post hits every child's hydrator
+	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
+	child.passUnits = parent.passUnits
+	if prior != nil {
+		// That OnInit is also what registered the Tick or Listen making the unit
+		// live, and a later pass may not lower the first pass's verdict (I5).
+		child.live = prior.live
+	} else if parent.passUnits != nil {
+		parent.passUnits[key] = child
+	}
+	child.isChild = true
+	child.childKey = key
+	child.unitV = inst
+	child.base = parent.base // the mount prefix, so the child's own action URLs carry it too
+	// A child is the parent of its own children, so it passes the declaration
+	// down or a grandchild's slots never reach the client store.
+	child.declare, child.declareOnly, child.declareSeen = parent.declare, parent.declareOnly, parent.declareSeen
+	child.req = parent.req
+	child.sessions = parent.sessions
+	child.policy = parent.policy
+	child.sessW = parent.sessW
+	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
+	return child
 }
 
 // initOutcome is the sentinel initChild panics with: the render is already deep

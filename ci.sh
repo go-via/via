@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CI gate for the repo, run from its root. It checks and never rewrites files:
 # gofmt over every module; vet, staticcheck, build and race tests for via and
-# the site module (internal/site); vet and staticcheck for vtbrowser; then
-# vtbrowser's real-browser tier.
+# the site module (internal/site); a complexity cap on via's non-test code; vet
+# and staticcheck for vtbrowser; then vtbrowser's real-browser tier.
 set -euo pipefail
 
 GO="${GO:-go}"
@@ -49,6 +49,13 @@ $GO vet ./...
 
 echo "== staticcheck =="
 $GO tool staticcheck ./...
+
+# go list keeps out tests, nested modules and dot-dirs, which a bare path
+# argument would walk into.
+echo "== gocyclo, gocognit (over 15) =="
+srcs="$($GO list -f '{{range .GoFiles}}{{$.Dir}}/{{.}} {{end}}' ./...)"
+$GO tool gocyclo -over 15 $srcs
+$GO tool gocognit -over 15 $srcs
 
 echo "== go build =="
 $GO build ./...

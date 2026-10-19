@@ -290,22 +290,10 @@ func attrString(attrs []Attr) string {
 // declaration site (the option, or the page type whose PageMeta returned them).
 func (a Assets) validate(where string) {
 	for _, s := range a.Scripts {
-		if (s.Src == "") == (s.Inline == "") {
-			panic(where + ": Script must set exactly one of Src and Inline")
-		}
-		if strings.Contains(strings.ToLower(s.Inline), "</script") {
-			panic(where + ": Script.Inline contains \"</script\", which would end the element early")
-		}
-		validAssetURL(where, "Script.Src", s.Src)
+		validateAssetsScript(where, s)
 	}
 	for _, s := range a.Styles {
-		if (s.Href == "") == (s.Inline == "") {
-			panic(where + ": Style must set exactly one of Href and Inline")
-		}
-		if strings.Contains(strings.ToLower(s.Inline), "</style") {
-			panic(where + ": Style.Inline contains \"</style\", which would end the element early")
-		}
-		validAssetURL(where, "Style.Href", s.Href)
+		validateAssetsStyle(where, s)
 	}
 	for _, p := range a.Preload {
 		if !slices.Contains(preloadAs, p.As) {
@@ -318,6 +306,26 @@ func (a Assets) validate(where string) {
 			panic(where + ": FontOrigin " + quote(o) + " is not an absolute http(s) origin (scheme://host[:port], no path)")
 		}
 	}
+}
+
+func validateAssetsScript(where string, s Script) {
+	if (s.Src == "") == (s.Inline == "") {
+		panic(where + ": Script must set exactly one of Src and Inline")
+	}
+	if strings.Contains(strings.ToLower(s.Inline), "</script") {
+		panic(where + ": Script.Inline contains \"</script\", which would end the element early")
+	}
+	validAssetURL(where, "Script.Src", s.Src)
+}
+
+func validateAssetsStyle(where string, s Style) {
+	if (s.Href == "") == (s.Inline == "") {
+		panic(where + ": Style must set exactly one of Href and Inline")
+	}
+	if strings.Contains(strings.ToLower(s.Inline), "</style") {
+		panic(where + ": Style.Inline contains \"</style\", which would end the element early")
+	}
+	validAssetURL(where, "Style.Href", s.Href)
 }
 
 var preloadAs = []string{"script", "style", "font", "image"}
