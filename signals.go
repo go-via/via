@@ -16,7 +16,7 @@ import (
 
 // encodeSlots writes want as one JSON object, n slots in it. Marshalled one
 // slot at a time, not as one map: a single unmarshalable value used to fail the
-// whole object and emit data-signals='', wiping the client store for every
+// whole object and emit an empty data-signals, wiping the client store for every
 // signal on the page with nothing in the log. Drop the offender, keep the rest
 // — the same treatment an unmarshalable on.Bind arg gets.
 func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw []byte, n int) {
