@@ -14,6 +14,35 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
+// encodeSlots writes want as one JSON object, n slots in it. Marshalled one
+// slot at a time, not as one map: a single unmarshalable value used to fail the
+// whole object and emit an empty data-signals, wiping the client store for every
+// signal on the page with nothing in the log. Drop the offender, keep the rest
+// — the same treatment an unmarshalable on.Bind arg gets.
+func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw []byte, n int) {
+	var obj bytes.Buffer
+	obj.WriteByte('{')
+	for _, slot := range want {
+		val, err := json.Marshal(initial[slot])
+		if err != nil {
+			log.Warn("via: a signal holds a value encoding/json cannot marshal; it is left out of "+
+				"data-signals and the client store has no value for it — make the type JSON-round-trippable",
+				"slot", slot, "err", err)
+			continue
+		}
+		if n > 0 {
+			obj.WriteByte(',')
+		}
+		n++
+		key, _ := json.Marshal(slot)
+		obj.Write(key)
+		obj.WriteByte(':')
+		obj.Write(val)
+	}
+	obj.WriteByte('}')
+	return obj.Bytes(), n
+}
+
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
 // attribute: data-signals='{...}'.
 //
@@ -25,8 +54,9 @@ import (
 // hands Datastar the same decoded value either way.
 //
 // Datastar compiles the attribute as an expression, not JSON.parse, and
-// rewrites @name( into an action call even inside a string literal, so every @
-// goes out as \u0040; JSON puts @ only inside strings, where it reads back as @.
+// rewrites @name( into an action call. v1.0.4 skips string literals, but every @
+// still goes out as \u0040 so a compiler that did not would find none; JSON
+// puts @ only inside strings, where it reads back as @.
 //
 // only nil declares every slot (the GET first paint). Non-nil declares only the
 // slots named, so a plain action patch ships what it wrote without clobbering a
@@ -49,36 +79,10 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 	}
 	sort.Strings(want) // encoding/json sorted the map this used to build; keep the bytes stable
 
-	// Marshalled one slot at a time, not as one map: a single unmarshalable
-	// value used to fail the whole object and emit data-signals='', wiping the
-	// client store for every signal on the page with nothing in the log. Drop
-	// the offender, keep the rest — the same treatment an unmarshalable on.Bind
-	// arg gets.
-	var obj bytes.Buffer
-	obj.WriteByte('{')
-	n := 0
-	for _, slot := range want {
-		val, err := json.Marshal(initial[slot])
-		if err != nil {
-			log.Warn("via: a signal holds a value encoding/json cannot marshal; it is left out of "+
-				"data-signals and the client store has no value for it — make the type JSON-round-trippable",
-				"slot", slot, "err", err)
-			continue
-		}
-		if n > 0 {
-			obj.WriteByte(',')
-		}
-		n++
-		key, _ := json.Marshal(slot)
-		obj.Write(key)
-		obj.WriteByte(':')
-		obj.Write(val)
-	}
-	obj.WriteByte('}')
+	raw, n := encodeSlots(log, want, initial)
 	if n == 0 && only != nil {
 		return
 	}
-	raw := obj.Bytes()
 
 	buf.WriteString(` data-signals='`)
 	for _, b := range raw {
@@ -110,19 +114,22 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initi
 // Signal.Set drops the slot's entry — a server write supersedes the client's
 // and must survive the revert.
 type revertSet struct {
-	undo map[string]func()
+	undo map[string]reverter
 }
 
-func newRevertSet() *revertSet { return &revertSet{undo: map[string]func(){}} }
+// reverter puts one slot's server-authored value back.
+type reverter interface{ revert() }
 
-func (r *revertSet) note(slot string, fn func()) {
+func newRevertSet() *revertSet { return &revertSet{undo: map[string]reverter{}} }
+
+func (r *revertSet) note(slot string, u reverter) {
 	if r == nil {
 		return
 	}
 	if _, dup := r.undo[slot]; dup {
 		return
 	}
-	r.undo[slot] = fn
+	r.undo[slot] = u
 }
 
 func (r *revertSet) drop(slot string) {
@@ -135,14 +142,16 @@ func (r *revertSet) restore() {
 	if r == nil {
 		return
 	}
-	for _, fn := range r.undo {
-		fn()
+	for _, u := range r.undo {
+		u.revert()
 	}
 	clear(r.undo)
 }
 
-// Signal is a client-resident value that round-trips per request and renders as
-// a Datastar text-bound span. T must be JSON-round-trippable.
+// Signal is a client-resident value: the browser holds it and posts it with
+// every action, and the server takes the posted value only for a Bind()ed
+// signal. It renders as a Datastar text-bound span. T must be
+// JSON-round-trippable.
 //
 // It starts at T's zero value, or at the JSON in a `via:"init=<json>"` field
 // tag, read once when via walks the composition type at Mount; a tagged signal
@@ -162,15 +171,16 @@ type Signal[T any] struct {
 
 func (*Signal[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
-func (*Signal[T]) seedApplier(v any) func(unsafe.Pointer) any {
-	seed := v.(T)
-	return func(handle unsafe.Pointer) any {
-		s := (*Signal[T])(handle)
-		if !s.settled {
-			s.settled, s.val = true, seed
-		}
-		return s.val
+func (*Signal[T]) seedApplier(raw string) seedApplier { return signalSeed[T]{raw} }
+
+type signalSeed[T any] struct{ raw string }
+
+func (a signalSeed[T]) apply(handle unsafe.Pointer) any {
+	s := (*Signal[T])(handle)
+	if !s.settled {
+		s.settled, s.val = true, mustSeed[T](a.raw)
 	}
+	return s.val
 }
 
 // jsonSeed decodes a via:"init=…" value into T and hands it back as any, which
@@ -182,6 +192,15 @@ func jsonSeed[T any](raw string) (any, error) {
 		return nil, err
 	}
 	return v, nil
+}
+
+// mustSeed decodes a tag decodeSeedTag already accepted at Mount.
+func mustSeed[T any](raw string) T {
+	var v T
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		panic("via: a seed that decoded at Mount failed to decode: " + err.Error())
+	}
+	return v
 }
 
 // Ref returns the signal's Datastar expression — "$count" for a field Count,
@@ -198,9 +217,11 @@ func jsonSeed[T any](raw string) (any, error) {
 // signal with no name (one behind an interface, or a local variable) — the
 // same verdict rendering it gives, moved to the call that would otherwise have
 // produced a bare "$" and a silently dead Datastar expression.
-func (s *Signal[T]) Ref() expr.Expr {
+func (s *Signal[T]) Ref() expr.Expr { return s.ref("Signal") }
+
+func (s slotID) ref(kind string) expr.Expr {
 	if s.slot == "" {
-		panic(render.Miswired("via: Signal.Ref on a signal with no wire name — a Signal must be a plain field of the " +
+		panic(render.Miswired("via: " + kind + ".Ref on a signal with no wire name — a " + kind + " must be a plain field of the " +
 			"composition (through plain nested structs if you like), not one reached through a pointer, " +
 			"slice, array or map field; \"$\" alone is not a Datastar expression"))
 	}
@@ -215,17 +236,22 @@ func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and declares the slot, which is what carries the change
 // to the client: a live action pushes a patch-signals frame, a plain action's
-// element patch carries a data-signals restricted to the slots it wrote. Only
-// the signals an action actually wrote are declared, so a signal the user is
-// mid-edit is never overwritten behind them.
+// element patch carries a data-signals restricted to the slots it wrote. Either
+// way, a slot the previous render did not carry is seeded too. A signal the action left
+// alone is not declared, so one the user is mid-edit is never overwritten
+// behind them.
 //
 // The View need not render the signal: Set declares it, so a Set in OnInit
 // seeds an island the View never binds or displays. Declaring is not
 // hydrating; only Bind makes a slot client-writable.
 //
-// A nil slice or map marshals as JSON null, which a client-side forEach or
-// index faults on. Start such a signal at an empty one with a field tag:
-// `via:"init=[]"`.
+// A map or struct value reaches the client as a JSON merge patch (RFC 7386):
+// keys the new value omits keep their old client value, and a null deletes.
+// To drop a key, Set a slice instead, or a value that marks the entry gone.
+//
+// A nil slice or map marshals as JSON null, which deletes the signal on the
+// client, and a client-side forEach or index then faults. Start such a signal
+// at an empty one with a field tag: `via:"init=[]"`.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	if s.bound == nil || s.slot == "" {
@@ -268,65 +294,81 @@ func (s *Signal[T]) bind(r *render.Renderer, writable bool) {
 		// server-authored between renders. A second path that wrote s.val
 		// straight from the request would silently re-open the escalation
 		// livePush closes.
-		b.Hydrator(s.slot, func(raw json.RawMessage) bool {
-			var v T
-			if err := json.Unmarshal(raw, &v); err != nil {
-				// s.bound may be nil outside a live render; Ctx.logger nil-guards.
-				// badDecodeLogged is a pointer shared by the whole render tree it
-				// belongs to (see Ctx.badDecodeLogged): one Warn per plain dispatch
-				// POST no matter how many slots it hydrates or how many passes
-				// dispatchPlain's rebind loop takes (both re-invoke this closure per
-				// malformed slot), and one Warn per live connection for as long as
-				// it stays open. A nil pointer (a bare render with no Ctx wiring)
-				// logs unguarded rather than silently dropping the Warn.
-				var flag *atomic.Bool
-				if c := s.bound; c != nil {
-					flag = c.badDecodeLogged
-				}
-				if flag == nil || !flag.Swap(true) {
-					s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
-						"slot", s.slot, "type", fmt.Sprintf("%T", v))
-				}
-				return false
-			}
-			if c := s.bound; c != nil {
-				prev := s.val
-				c.rev.note(s.slot, func() { s.val = prev })
-			}
-			s.val = v
-			return true
-		})
+		b.Hydrator(s.slot, signalHydrator[T]{s})
 	}
 	b.DeclareSignal(s.slot, s.val)
 }
+
+type signalHydrator[T any] struct{ s *Signal[T] }
+
+func (h signalHydrator[T]) Hydrate(raw json.RawMessage) bool {
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		// h.s.bound may be nil outside a live render; Ctx.logger nil-guards.
+		// badDecodeLogged is a pointer shared by the whole render tree it
+		// belongs to (see Ctx.badDecodeLogged): one Warn per plain dispatch
+		// POST no matter how many slots it hydrates or how many passes
+		// dispatchPlain's rebind loop takes (both re-invoke this hydrator per
+		// malformed slot), and one Warn per live connection for as long as
+		// it stays open. A nil pointer (a bare render with no Ctx wiring)
+		// logs unguarded rather than silently dropping the Warn.
+		var flag *atomic.Bool
+		if c := h.s.bound; c != nil {
+			flag = c.badDecodeLogged
+		}
+		if flag == nil || !flag.Swap(true) {
+			h.s.bound.logger().Warn("via: posted signal value did not decode, keeping the prior value",
+				"slot", h.s.slot, "type", fmt.Sprintf("%T", v))
+		}
+		return false
+	}
+	if c := h.s.bound; c != nil {
+		c.rev.note(h.s.slot, signalUndo[T]{s: h.s, prev: h.s.val})
+	}
+	h.s.val = v
+	return true
+}
+
+type signalUndo[T any] struct {
+	s    *Signal[T]
+	prev T
+}
+
+func (u signalUndo[T]) revert() { u.s.val = u.prev }
 
 // Display renders the signal as a Datastar text-bound span. Displaying the same
 // signal in several places reuses its name, so they all update together. Unlike
 // Bind it does not make the slot client-writable — an inbound value for a
 // Display-only signal is ignored (see Signal.bind).
-func (s *Signal[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		s.bind(r, false)
-		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(s.val)))
-	})
+func (s *Signal[T]) Display() h.H { return render.Dyn(signalDisplay[T]{s}) }
+
+type signalDisplay[T any] struct{ s *Signal[T] }
+
+func (d signalDisplay[T]) RenderTo(r *render.Renderer) {
+	d.s.bind(r, false)
+	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(d.s.val)))
 }
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input, sharing the
 // signal's name with Display regardless of source order. Bind is what puts the
 // slot under client control: its value is thereafter whatever the client last
 // set, so never gate an authorization decision on a Bind()ed signal.
-func (s *Signal[T]) Bind() h.Attr {
-	return render.DynAttr(func(r *render.Renderer) {
-		s.bind(r, true)
-		r.Render(h.Data("bind", s.slot))
-	})
+func (s *Signal[T]) Bind() h.Attr { return render.DynAttr(signalBind[T]{s}) }
+
+type signalBind[T any] struct{ s *Signal[T] }
+
+func (b signalBind[T]) RenderTo(r *render.Renderer) {
+	b.s.bind(r, true)
+	r.Render(h.Data("bind", b.s.slot))
 }
 
 // textHandle uses any so it can serve any signal T without appearing on a
 // public signature.
-func textHandle(v any) h.H {
-	return render.Dyn(func(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(v)) })
-}
+func textHandle(v any) h.H { return render.Dyn(anyText{v}) }
+
+type anyText struct{ v any }
+
+func (t anyText) RenderTo(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(t.v)) }
 
 // SignalCS is a client-only signal: the server never reads or writes it. Its
 // wire name is "_"-prefixed, which Datastar's fetch filter drops from every
@@ -351,19 +393,12 @@ func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw
 // seedApplier has nothing to write: a SignalCS holds no value, so its seed
 // lives in the type table and reaches the client through the declaration
 // prebindSignals makes. The nil keeps that fact in one place.
-func (*SignalCS[T]) seedApplier(any) func(unsafe.Pointer) any { return nil }
+func (*SignalCS[T]) seedApplier(string) seedApplier { return nil }
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
 // array or map field, which has no field name to be named by.
-func (s *SignalCS[T]) Ref() expr.Expr {
-	if s.slot == "" {
-		panic(render.Miswired("via: SignalCS.Ref on a signal with no wire name — a SignalCS must be a plain field of the " +
-			"composition (through plain nested structs if you like), not one reached through a pointer, " +
-			"slice, array or map field; \"$\" alone is not a Datastar expression"))
-	}
-	return expr.Expr("$" + s.slot)
-}
+func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 
 // bind declares the slot at its seed value and returns the seed, so Display
 // can render it without a second, stale zero value of its own.
@@ -386,18 +421,22 @@ func (s *SignalCS[T]) bind(r *render.Renderer) any {
 
 // Display renders the signal as a Datastar text-bound span, showing the seed
 // value until the client changes it.
-func (s *SignalCS[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		seed := s.bind(r)
-		r.Render(h.Span(h.DataText("$"+s.slot), textHandle(seed)))
-	})
+func (s *SignalCS[T]) Display() h.H { return render.Dyn(csDisplay[T]{s}) }
+
+type csDisplay[T any] struct{ s *SignalCS[T] }
+
+func (d csDisplay[T]) RenderTo(r *render.Renderer) {
+	seed := d.s.bind(r)
+	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(seed)))
 }
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input. The value
 // stays in the browser: unlike [Signal.Bind] it makes nothing server-readable.
-func (s *SignalCS[T]) Bind() h.Attr {
-	return render.DynAttr(func(r *render.Renderer) {
-		s.bind(r)
-		r.Render(h.Data("bind", s.slot))
-	})
+func (s *SignalCS[T]) Bind() h.Attr { return render.DynAttr(csBind[T]{s}) }
+
+type csBind[T any] struct{ s *SignalCS[T] }
+
+func (b csBind[T]) RenderTo(r *render.Renderer) {
+	b.s.bind(r)
+	r.Render(h.Data("bind", b.s.slot))
 }

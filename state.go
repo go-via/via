@@ -48,20 +48,19 @@ type stateTracking[T any] struct {
 }
 
 // tracker is how a StateTrack literal is started without naming T: the type
-// walk holds the handle as an any, so the closure it asks for here carries T
-// out of the generic type, exactly as seedApplier does for a seed tag.
+// walk holds a zero handle of the field's type as an any, and its method
+// carries T out of the generic type, as seedApplier does for a seed tag. The
+// receiver is that zero handle; the instance's field is handle.
 type tracker interface {
-	trackStarter() func(handle unsafe.Pointer, ctx *Ctx)
+	startTrack(handle unsafe.Pointer, ctx *Ctx)
 }
 
-func (*State[T]) trackStarter() func(unsafe.Pointer, *Ctx) {
-	return func(handle unsafe.Pointer, ctx *Ctx) {
-		s := (*State[T])(handle)
-		if s.track == nil {
-			return
-		}
-		s.Track(ctx, s.track.topic, s.track.load)
+func (*State[T]) startTrack(handle unsafe.Pointer, ctx *Ctx) {
+	s := (*State[T])(handle)
+	if s.track == nil {
+		return
 	}
+	s.Track(ctx, s.track.topic, s.track.load)
 }
 
 // StateTrack is the literal form of [State.Track]: a State that seeds from
@@ -83,19 +82,20 @@ func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
 // seedApplier writes through the handle pointer the type walk found by offset.
 // List[E] embeds State[[]E] first, so that pointer is the embedded State's
-// address too and a List seeds through this same closure.
-func (*State[T]) seedApplier(v any) func(unsafe.Pointer) any {
-	seed := v.(T)
-	return func(handle unsafe.Pointer) any {
-		s := (*State[T])(handle)
-		if !s.lit {
-			s.lit, s.val = true, seed
-		}
-		return s.val
+// address too and a List seeds through this same applier.
+func (*State[T]) seedApplier(raw string) seedApplier { return stateSeed[T]{raw} }
+
+type stateSeed[T any] struct{ raw string }
+
+func (a stateSeed[T]) apply(handle unsafe.Pointer) any {
+	s := (*State[T])(handle)
+	if !s.lit {
+		s.lit, s.val = true, mustSeed[T](a.raw)
 	}
+	return s.val
 }
 
-// StateOf seeds a State with v, so a parent can hand an embedded child its
+// StateOf seeds a State with v, so a parent can hand a child its
 // starting value from a composite literal. A unit seeding its own state wants
 // the zero [State] plus a [State.Set] in OnInit instead — that one can read the
 // request, the path params and the session; a literal cannot:
@@ -127,20 +127,26 @@ func (s *State[T]) Set(v T) { s.val = v }
 // may return one field of a larger store, in which case t carries that field's
 // type.
 func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
-	if !ctx.inInit {
-		// No partial seed: a one-shot copy that never follows is the trap this
-		// whole method exists to remove.
-		ctx.logger().Warn("via: Track called after OnInit returned — ignored; Track is valid only inside OnInit")
+	// No partial seed when refused: a one-shot copy that never follows is the
+	// trap this whole method exists to remove.
+	if !ctx.initOnly("Track") {
 		return
 	}
 	s.Set(load())
 	// The subscribe runs before any OnConnect fn, so this re-read covers every
 	// write between OnInit and it.
-	ctx.OnConnect(func() { s.Set(load()) })
+	ctx.OnConnect(stateReload[T]{s: s, load: load}.run)
 	ctx.Listen(t, s.recv)
 }
 
 func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
+
+type stateReload[T any] struct {
+	s    *State[T]
+	load func() T
+}
+
+func (r stateReload[T]) run() { r.s.Set(r.load()) }
 
 // Display renders the current value as literal, escaped server text and marks
 // its unit live, so server-held state alone earns a connection.
@@ -151,11 +157,13 @@ func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
 // connection it never opened — via fails that action loudly rather than letting
 // every action after it 410. Render the State unconditionally (put via.When
 // inside the row, not around the Display), or register a Tick/Listen in OnInit.
-func (s *State[T]) Display() h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		markLive(r)
-		r.WriteEscaped(fmt.Sprint(s.val))
-	})
+func (s *State[T]) Display() h.H { return render.Dyn(stateDisplay[T]{s}) }
+
+type stateDisplay[T any] struct{ s *State[T] }
+
+func (d stateDisplay[T]) RenderTo(r *render.Renderer) {
+	markLive(r)
+	r.WriteEscaped(fmt.Sprint(d.s.val))
 }
 
 // List is server-authoritative slice state — a chat log, a feed, a todo list.
@@ -176,25 +184,33 @@ type List[E any] struct{ State[[]E] }
 func ListOf[E any](v ...E) List[E] { return List[E]{State[[]E]{val: v, lit: true}} }
 
 // Append adds v to the end of this connection's list and schedules the push,
-// like any Set. It re-slices in place when there is capacity, so appending in a
-// tick loop does not reallocate every frame — but the whole list re-renders on
-// each push, so a list that grows without bound grows the frame without bound
-// too. Cap it, or page it.
-func (l *List[E]) Append(v E) { l.Set(append(l.Get(), v)) }
+// like any Set. It builds a new array, since the old one may be a seed or a
+// snapshot another tab holds. The whole list re-renders on each push, so a
+// list that grows without bound grows the frame without bound too. Cap it, or
+// page it.
+func (l *List[E]) Append(v E) { l.Set(append(slices.Clip(l.Get()), v)) }
 
 // Remove deletes the element at i, shifting the rest left, and panics if i is
-// out of range. The freed slot is zeroed, so a pointer element does not stay
-// reachable through the backing array.
-func (l *List[E]) Remove(i int) { l.Set(slices.Delete(l.Get(), i, i+1)) }
+// out of range. It builds a new array rather than shifting in place, since the
+// old one may be a seed other tabs still hold.
+func (l *List[E]) Remove(i int) {
+	s := l.Get()
+	l.Set(append(append(make([]E, 0, len(s)-1), s[:i]...), s[i+1:]...))
+}
 
 // Each renders row(item) for every element, in order — sugar over
 // via.Each(l.Get(), row), and like State.Display it marks the unit live. Same
 // by-position morph trap as via.Each.
-func (l *List[E]) Each(row func(E) h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		markLive(r)
-		r.Render(Each(l.Get(), row))
-	})
+func (l *List[E]) Each(row func(E) h.H) h.H { return render.Dyn(listEach[E]{l: l, row: row}) }
+
+type listEach[E any] struct {
+	l   *List[E]
+	row func(E) h.H
+}
+
+func (n listEach[E]) RenderTo(r *render.Renderer) {
+	markLive(r)
+	r.Render(Each(n.l.Get(), n.row))
 }
 
 // markLive marks the rendering unit live: rendering server-authoritative state

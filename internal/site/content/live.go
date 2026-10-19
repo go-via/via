@@ -39,10 +39,6 @@ func (p *Live) PageMeta() via.Meta {
 
 func (p *Live) View() h.H {
 	d := p.doc()
-	secondTab := func(anchor string) h.H {
-		return h.A(h.Href(d.Href("/live")+"#"+anchor), h.Target("_blank"), h.Rel("noopener"),
-			h.Str("Open in a second tab ↗"))
-	}
 	return d.Page(
 		h.P(h.Str("The server pushes to a tab when a unit on the page asks for it.")),
 
@@ -58,8 +54,9 @@ func (p *Live) View() h.H {
 
 		h.P(h.Str("Without a trigger, a page is a request and a response. With one, via opens one SSE connection "+
 			"for the tab and pushes element patches down it. One stream per tab, not per unit: every "),
-			h.A(h.Href(d.Href("/glossary#live-unit")), h.Str("live unit")), h.Str(" on the page shares one connection. "+
-				"A tab is that one connection, so \"per tab\" in these docs means per connection: a reload is a new tab.")),
+			d.Link("/glossary#live-unit", "live unit"), h.Str(" on the page shares one connection. "+
+				"A tab is one page load: a dropped connection reconnects under the same tab id, and a reload is a new tab. "+
+				"Each connection runs OnInit afresh, so state these docs call per tab lasts one connection.")),
 		h.P(h.Str("Actions do not change transport. A click still POSTs; an action on a live unit answers "+
 			"as a frame on the stream instead of in the POST's own body.")),
 		h.P(h.Str("Liveness is decided once, by the render that served the page. An action cannot turn a plain "+
@@ -86,7 +83,7 @@ func (p *Live) View() h.H {
 		d.H2("Timers"),
 		demo.Card(d.H3("Pulse"),
 			h.P(APIText("via.Ctx.Tick", "ctx.Tick(time.Second, p.beat)"), h.Str(" is the whole subscription. "+
-				"Every beat runs the handler on the unit's goroutine, re-renders this unit and patches it; the "+
+				"Every beat runs the handler on its tab's stream goroutine, re-renders this unit and patches it; the "+
 				"header, the sidebar and the other demos are not touched. Tick is valid only inside OnInit; a "+
 				"later call registers nothing and logs.")),
 			via.Child(p.Pulse), "pulse.go",
@@ -96,11 +93,11 @@ func (p *Live) View() h.H {
 		demo.Card(d.H3("Broadcast feed"),
 			h.P(h.Str("A "), API("topic.Topic"), h.Str(" is built with "), API("topic.New"),
 				h.Str(" and held for the life of the process; the zero Topic is not usable. "), API("via.Ctx.Listen"),
-				h.Str(" subscribes this unit, runs the handler on the unit's own goroutine for every value, and "+
+				h.Str(" subscribes this unit, runs the handler on its tab's stream goroutine for every value, and "+
 					"unsubscribes when the tab goes away. The list is this tab's own and keeps the newest 50; "+
 					"posting is capped at 20 a minute per client IP.")),
 			via.Child(p.Feed), "feed.go",
-			demo.Try(secondTab("broadcast-feed"),
+			demo.Try(d.SecondTabLink("/live#broadcast-feed"),
 				h.Str("Post from one tab: the event lands in both."))),
 		Callout(Caveat, "Slow subscribers",
 			h.P(API("topic.Topic.Publish"), h.Str(" never blocks. Each subscriber has its own queue; a Listen "+
@@ -125,7 +122,7 @@ func (p *Live) View() h.H {
 						"the topic, so open tabs redraw.")),
 			),
 			via.Child(p.Shared), "shared.go",
-			demo.Try(secondTab("shared-counter"),
+			demo.Try(d.SecondTabLink("/live#shared-counter"),
 				h.Str("Click +1 in one tab and watch the other follow."))),
 		h.P(APIText("via.State.Track", "Track"), h.Str(" works on a "), API("via.List"),
 			h.Str(" too. The store publishes a copy of the whole slice on every change, and each tab's list follows it:")),
@@ -140,13 +137,13 @@ func (p *Live) View() h.H {
 			via.Child(p.Ping), "ping.go",
 			demo.Try(h.Str("Ping once here. The first ping mints the session. A tab opened before then joins once it pings or "+
 				"reloads; pings from other tabs cannot reach it until it sends the cookie."),
-				secondTab("ping-me"),
+				d.SecondTabLink("/live#ping-me"),
 				h.Str("Ping from the second tab: both tabs of this browser light up."),
 				h.Str("Open this page in a different browser and ping: only the browser that pinged lights up."))),
 		Callout(Caveat, "One process",
 			h.P(h.Str("A Topic, a package-level count and every State live in this process's memory. A second replica has "+
 				"its own, and a Publish on one never reaches tabs connected to the other. See "),
-				h.A(h.Href(d.Href("/deploy")+"#state-across-pods"), h.Str("state across pods")), h.Str("."))),
+				d.Link("/deploy#state-across-pods", "state across pods"), h.Str("."))),
 
 		d.H2("Presence"),
 		demo.Card(d.H3("Tabs connected"),
@@ -156,7 +153,7 @@ func (p *Live) View() h.H {
 				API("via.StateTrack"), h.Str(" does the rest. Neither hook makes a unit live on its own; the "+
 					"tracked State does.")),
 			via.Child(p.Presence), "live_presence.go",
-			demo.Try(secondTab("tabs-connected"),
+			demo.Try(d.SecondTabLink("/live#tabs-connected"),
 				h.Str("Close that tab: the count drops as soon as its stream ends."))),
 
 		d.H2("Frame size"),
@@ -172,7 +169,7 @@ func (p *Live) View() h.H {
 		h.P(h.Str("A live State anywhere in a unit makes the whole unit the patch. At 1000 open tabs, one change is 168 MB "+
 			"against 100 KB. When a small part changes often, keep the large part plain and move the small part into its "+
 			"own live Child. A live List sends every row on every change, so cap or page one that can grow.")),
-		h.P(h.Str("Compression at the "), h.A(h.Href(d.Href("/deploy")+"#reverse-proxy"), h.Str("proxy")),
+		h.P(h.Str("Compression at the "), d.Link("/deploy#reverse-proxy", "proxy"),
 			h.Str(" or with "), API("via.WithSSECompression"), h.Str(" shrinks each frame on the wire, but via still "+
 				"renders and writes the whole unit for every tab. Size the unit either way.")),
 
@@ -183,6 +180,9 @@ func (p *Live) View() h.H {
 				API("via.WithPinnedDeadline"), h.Str(" (5 s) the tab is logged as pinned, blocked writing to a client that is not reading, and its actions answer 503."))},
 			[]h.H{h.Str("Blocked handler"), h.Span(h.Str("A Tick, Listen or action handler running past "),
 				API("via.WithPinnedDeadline"), h.Str(" is logged with its tab and unit type. Everything else on the tab waits behind it, keepalives included, and its actions answer 503."))},
+			[]h.H{h.Str("Slow session store"), h.Span(h.Str("A keepalive's session check waiting on the store past "),
+				API("via.WithPinnedDeadline"), h.Str(" is logged as pinned, and the tab's actions answer 503 until the store answers or "),
+				API("via.WithSessionStoreTimeout"), h.Str(" gives up."))},
 			[]h.H{h.Str("Click before the stream connects"), h.Str("The action waits up to 2 seconds for the stream, then runs; several run in click order. Past 2 seconds it answers 410 and the tab reloads.")},
 			[]h.H{h.Str("Session written elsewhere"), h.Str("A Put or Delete from any request reaches the Tick and Listen handlers of every open tab on the session: at once in this process, on the next keepalive from another process.")},
 			[]h.H{h.Str("Session rotated"), h.Str("Every other open tab on the session ends its stream and reloads under the new cookie. The tab whose action rotated keeps its stream.")},

@@ -48,7 +48,9 @@ func Class(names ...string) Attr {
 
 // Style is an inline style declaration. The value is HTML-escaped, so it cannot
 // break out of the attribute, but it is not parsed as CSS: this package does
-// not vet declarations. Prefer a class.
+// not vet declarations. A page via serves ignores it: via's CSP allows no
+// inline style attribute. Use a class, or [DataStyle], which Datastar applies
+// through the CSSOM.
 func Style(css string) Attr { return RawAttr("style", css) }
 
 func Type(t string) Attr { return RawAttr("type", t) }

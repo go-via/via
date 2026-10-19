@@ -33,9 +33,8 @@ func (p *Compositions) PageMeta() via.Meta {
 
 func (p *Compositions) View() h.H {
 	d := p.doc()
-	link := func(path, label string) h.H { return h.A(h.Href(d.Href(path)), h.Str(label)) }
 	return d.Page(
-		h.P(h.Str("A via page is a tree of Go structs. A struct is a component: fields hold its props and state, "+
+		h.P(h.Str("A via page is a tree of Go structs, each one a composition: fields hold its props and state, "+
 			"methods are its actions, and "), Code("View"), h.Str(" renders it.")),
 
 		d.H2("A composition is a struct"),
@@ -60,12 +59,12 @@ func (p *Compositions) View() h.H {
 			Code("OnInit"), h.Str(" and actions. The argument must be a field selector: Child copies the child at every render, "+
 				"and a composite literal there would re-seed it each time. Value fields are copied, so each connection has its own; "+
 				"pointer fields are shared, which is how two children reach one store.")),
-		h.P(h.Str("A child's "), h.A(h.Href(d.Href("/glossary#positional-child-key")), h.Str("key")), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
+		h.P(h.Str("A child's "), d.Link("/glossary#positional-child-key", "key"), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
 			h.Str(", "), Code("0-1"), h.Str(". The key is the container id ("), Code("#via-i0-1"),
 			h.Str(") and the address in the child's action URLs. Signal names come from the field path instead: the child's field name "+
 				"and a double underscore, so "), Code("Draft"), h.Str(" inside "), Code("Inbox.Chat"), h.Str(" is "),
 			Code("$chat__draft"), h.Str(". Two fields of the same type cannot be told apart by type, so their signals take the "+
-				"position: "), Code("$i0__chat__draft"), h.Str(".")),
+				"position: "), Code("$i0__chat__draft"), h.Str(". So does a child held in a nested plain struct rather than a direct field, and a direct field whose type a nested struct, slice or map also holds.")),
 
 		demo.Card(d.H3("Conditional children shift keys"),
 			h.P(h.Str("Both halves hold a banner and a clock. The first wraps the banner's Child in "), API("via.When"),
@@ -121,7 +120,7 @@ func (p *Compositions) View() h.H {
 					API("via.State.Track"), h.Str(" register only here; anywhere else they log and do nothing. Return "),
 					API("via.ErrNotFound"), h.Str(" for a 404, "), API("via.ErrForbidden"), h.Str(" for a 403."))},
 			[]h.H{Code("OnReload"), h.Str("Re-read what the action changed, before the render that answers it."),
-				h.Str("Runs on the acted unit only, and not after a Redirect. Tick and Listen are ignored here.")},
+				h.Str("Runs on the acted unit only, and not after a Redirect. Tick, Listen, OnConnect, OnDispose and Track register nothing here and log.")},
 			[]h.H{Code("View"), h.Str("Render."), h.Str("No ctx, no I/O, no side effects. It can run more than once per request.")},
 			[]h.H{Code("PageMeta"), h.Span(h.Str("Name the document: title, description, "), API("via.Meta"), h.Str(" assets, "), Code("<html>"), h.Str(" and "), Code("<body>"), h.Str(" attributes.")),
 				h.Str("Read on the mounted root only. Pure: it is read at Mount and on every document render.")},
@@ -140,7 +139,7 @@ func (p *Compositions) View() h.H {
 		h.P(APIText("via.When", "via.When(cond, build)"), h.Str(" calls build only when cond holds. "), API("via.Each"),
 			h.Str(" and "), API("via.List.Each"), h.Str(" call a row method per item. A row is markup, not a unit: "+
 				"its action is a method on the list's owner, and "), API("on.Bind"),
-			h.Str(" carries the row's id with the click. A Signal inside a slice element has no field to be named by, and rendering it panics.")),
+			h.Str(" carries the row's id with the click. A Signal inside a slice element has no field to be named by, so Mount panics on a slice field that holds one.")),
 		h.P(h.Str("Give each row a stable "), API("h.ID"), h.Str(". Datastar morphs a re-rendered list by position, "+
 			"which is right for an append-only log and wrong after a delete or a reorder: without ids, the rows after the removed one "+
 			"are patched in place from their neighbours.")),
@@ -198,7 +197,7 @@ func (p *Compositions) View() h.H {
 		h.P(h.Str("The owner holds the state and sets the child's field in its action; the push that follows copies the child "+
 			"with the new value. Cart must be the mounted root: a live child may not render children of its own. "+
 			"For state that many tabs share, keep it in a store and give each unit a "), API("via.StateTrack"),
-			h.Str(" on its topic; see "), link("/live", "Live state"), h.Str(".")),
+			h.Str(" on its topic; see "), d.Link("/live", "Live state"), h.Str(".")),
 
 		d.H3("Context and providers"),
 		Compare("React", snippet.Text("", reactContext), "via", snippet.Region("compositions/recipes.go", "context", snippet.Title(""))),
@@ -222,7 +221,7 @@ func (p *Compositions) View() h.H {
 		Compare("React / Vue", snippet.Text("", reactDerived), "via", snippet.Region("compositions/recipes.go", "derived", snippet.Title(""))),
 		h.P(h.Str("A method is a computed value: View calls it at render, and it can reach anything Go can. "+
 			"For a value that follows typing with no request, build an "), API("expr.Expr"),
-			h.Str(" over the signals; the browser re-evaluates it. See "), link("/signals", "Signals"), h.Str(".")),
+			h.Str(" over the signals; the browser re-evaluates it. See "), d.Link("/signals", "Signals"), h.Str(".")),
 
 		d.H3("Effects"),
 		Compare("React", snippet.Text("", reactEffect), "via", snippet.Region("compositions/recipes.go", "effect", snippet.Title(""))),
@@ -244,7 +243,7 @@ func (p *Compositions) View() h.H {
 		),
 		snippet.Text("panic", liveNesting),
 		h.P(h.Str("For UI whose state is mostly in the browser (a map, a chart you pan, an editor), mount a JavaScript "+
-			"island and talk to it through signals; see "), link("/islands", "Islands"), h.Str(".")),
+			"island and talk to it through signals; see "), d.Link("/islands", "Islands"), h.Str(".")),
 	)
 }
 

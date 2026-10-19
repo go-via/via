@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"maps"
 	"net/http"
 	"net/http/cookiejar"
@@ -173,7 +172,7 @@ func sessionServer(t *testing.T, opts ...via.Option) string {
 
 func TestSession_storedValueIsReadableOnALaterRequest(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t) // carries the session cookie across requests
 
 	fireAction(t, c, base, 0) // SignIn → store member{alice}
@@ -185,7 +184,7 @@ func TestSession_storedValueIsReadableOnALaterRequest(t *testing.T) {
 
 func TestSession_deleteRemovesAStoredValue(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn
@@ -197,7 +196,7 @@ func TestSession_deleteRemovesAStoredValue(t *testing.T) {
 
 func TestSession_isolatesValuesPerSession(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(counterComp{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	c1, c2 := jarClient(t), jarClient(t)
 
@@ -213,7 +212,7 @@ func TestSession_isolatesValuesPerSession(t *testing.T) {
 
 func TestSession_rotateChangesTheIdButKeepsData(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn
@@ -230,7 +229,7 @@ func TestSession_rotateChangesTheIdButKeepsData(t *testing.T) {
 
 func TestSession_rotateWithoutPriorDataIssuesAFreshCookie(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 3) // Refresh → Rotate, with no prior SignIn
@@ -240,7 +239,7 @@ func TestSession_rotateWithoutPriorDataIssuesAFreshCookie(t *testing.T) {
 
 func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn
@@ -253,7 +252,7 @@ func TestSession_rotateInvalidatesTheOldId(t *testing.T) {
 
 func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn — first write, mints the session
@@ -267,7 +266,7 @@ func TestSession_writingIntoASessionDoesNotRotateItsID(t *testing.T) {
 
 func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(counterComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(counterComp{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	c := jarClient(t)
 
@@ -312,7 +311,7 @@ func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 
 func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 
 	// Fire the first session access on a raw request so we can read the
 	// Set-Cookie attributes the cookiejar would otherwise hide.
@@ -339,7 +338,7 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 func TestSession_expiresAfterIdleTTL(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, via.Handler(loginComp{},
-			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+			testSessionKey))
 		jar, err := cookiejar.New(nil)
 		require.NoError(t, err)
 		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
@@ -377,7 +376,7 @@ func fireWithCookie(t *testing.T, c *http.Client, base string, n int, name, valu
 func TestSession_activeSessionOutlivesTheTTLCountedFromSignIn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		srv := httptest.NewTestServer(t, via.Handler(loginComp{},
-			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+			testSessionKey))
 		jar, err := cookiejar.New(nil)
 		require.NoError(t, err)
 		c := &http.Client{Jar: jar, Transport: srv.Client().Transport}
@@ -394,7 +393,7 @@ func TestSession_activeSessionOutlivesTheTTLCountedFromSignIn(t *testing.T) {
 
 func TestSession_streamConnectThatSlidesTheWindowReissuesTheCookie(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+		r := via.NewRouter(testSessionKey)
 		via.Mount(r, "/", loginComp{})
 		via.Mount(r, "/live", sessionLive{})
 		srv := httptest.NewTestServer(t, r)
@@ -421,7 +420,7 @@ func TestSession_streamConnectThatSlidesTheWindowReissuesTheCookie(t *testing.T)
 
 func TestSession_cookieIsNotReissuedOnEveryRequest(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 	fireAction(t, c, base, 0) // SignIn
 
@@ -465,7 +464,7 @@ func firstActionSessionCookie(t *testing.T, base string, headers ...map[string]s
 func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
+		testSessionKey,
 		via.WithSecureCookies()))
 	t.Cleanup(srv.Close)
 
@@ -477,7 +476,7 @@ func TestSession_secureCookieOptInForcesSecureOverPlainHTTP(t *testing.T) {
 func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewTLSServer(via.Handler(loginComp{},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	t.Cleanup(srv.Close)
 
 	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, "r", 0), strings.NewReader("{}"))
@@ -501,7 +500,7 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 func TestSession_cookieIsNotSecureOverPlainHTTPByDefault(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	t.Cleanup(srv.Close)
 
 	ck := firstActionSessionCookie(t, srv.URL)
@@ -540,7 +539,7 @@ func TestSession_cookieFollowsTheSchemeAProxyReports(t *testing.T) {
 
 func TestSession_onInitPutEstablishesTheCookieOnTheStreamConnect(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveSessStream{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveSessStream{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	ctx := t.Context() // close the stream so the child tears down
@@ -578,7 +577,7 @@ func tamperID(v string) string {
 
 func TestSession_rejectsATamperedCookie(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn → valid signed cookie
@@ -599,7 +598,7 @@ func hmacSign(key []byte, id string) string {
 
 func TestSession_rejectsACookieWithACorruptedSignature(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn → valid signed cookie
@@ -622,7 +621,7 @@ func TestSession_rejectsACookieWithACorruptedSignature(t *testing.T) {
 
 func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
 	t.Parallel()
-	base := sessionServer(t, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	base := sessionServer(t, testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, base, 0) // SignIn → valid signed cookie
@@ -642,7 +641,7 @@ func TestSession_rejectsACookieSignedUnderADifferentKey(t *testing.T) {
 func TestSession_usesACustomCookieName(t *testing.T) {
 	t.Parallel()
 	srv := httptest.NewServer(via.Handler(loginComp{},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
+		testSessionKey,
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)
 
@@ -730,7 +729,7 @@ func (s *sharedStore) lastTTL() time.Duration {
 // pod, as far as sessions are concerned.
 func storeApp(t *testing.T, opts ...via.Option) *httptest.Server {
 	t.Helper()
-	r := via.NewRouter(append([]via.Option{via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))}, opts...)...)
+	r := via.NewRouter(append([]via.Option{testSessionKey}, opts...)...)
 	via.Mount(r, "/p", profilePage{})
 	return serve(t, r)
 }
@@ -768,7 +767,7 @@ func TestSessionStore_defaultStoreLosesSessionsOnRestart(t *testing.T) {
 func TestSessionStore_rotateMovesTheBlobToTheNewIDAndDropsTheOld(t *testing.T) {
 	t.Parallel()
 	store := newSharedStore()
-	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	srv := sessionServer(t, via.WithSessionStore(store), testSessionKey)
 	c := jarClient(t)
 
 	fireAction(t, c, srv, 0) // SignIn
@@ -788,7 +787,7 @@ func TestSessionStore_handsTheConfiguredTTLToEverySave(t *testing.T) {
 	t.Parallel()
 	store := newSharedStore()
 	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionTTL(90*time.Minute),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+		testSessionKey)
 	fireAction(t, jarClient(t), srv, 0) // SignIn
 
 	assert.Equal(t, 90*time.Minute, store.lastTTL(),
@@ -801,7 +800,7 @@ func TestSessionStore_expiredBlobIsRefusedEvenWhenTheStoreIgnoresTTL(t *testing.
 	c := jarClient(t)
 
 	srv := sessionServer(t, via.WithSessionStore(store), via.WithSessionTTL(time.Hour),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+		testSessionKey)
 	fireAction(t, c, srv, 0) // SignIn
 	_, body := fireAction(t, c, srv, 1)
 	require.Contains(t, body, "hi alice")
@@ -1342,10 +1341,7 @@ func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
 	c := jarClient(t)
 	auditPost(t, c, base, acts[audPut1])
 
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	fs.set(&fs.delErr, errors.New("redis down"))
 	fs.set(&fs.plainSaveErr, errors.New("redis down"))
@@ -1587,10 +1583,7 @@ func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
 	auditPost(t, c, base, acts[audPut1])
 	old := cookieValue(t, c, base, "via_session")
 
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	store.armLoadVersion(1, func() { auditPostAs(t, base, acts[audRot], old) })
 	auditPostAs(t, base, acts[audPutTwice], old) // both writes land on a retired id
@@ -1674,7 +1667,7 @@ func (c *idComp) View() h.H {
 
 func idServer(t *testing.T) string {
 	t.Helper()
-	srv := httptest.NewServer(via.Handler(idComp{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(idComp{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -1743,7 +1736,7 @@ var ensureSID = regexp.MustCompile(`sid=([A-Za-z0-9_-]+)`)
 func ensureServer(t *testing.T) string {
 	t.Helper()
 	srv := httptest.NewServer(via.Handler(ensureComp{},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	t.Cleanup(srv.Close)
 	return srv.URL
 }
@@ -1791,13 +1784,10 @@ func (u *tickEnsurer) View() h.H { return h.Div(u.got.Display()) }
 
 func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(tickEnsurer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickEnsurer{}, testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)
@@ -1859,7 +1849,7 @@ func TestSession_aRotateElsewhereWhileTheConnectRunsItsHandlersEndsTheStream(t *
 	t.Parallel()
 	names := topic.New[string]()
 	jh := joinHolder{Names: names, held: make(chan struct{}), hold: make(chan struct{})}
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/", loginComp{})
 	via.Mount(r, "/live", jh)
 	app := vt.Serve(t, r)
@@ -1884,7 +1874,7 @@ func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *t
 	t.Parallel()
 	names := topic.New[string]()
 	np := namePutter{Names: names, held: make(chan struct{}), hold: make(chan struct{}), put: make(chan struct{})}
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/", loginComp{})
 	via.Mount(r, "/live", np)
 	app := vt.Serve(t, r)
@@ -1971,4 +1961,118 @@ func sessionActionResponse(t *testing.T, c *http.Client, base string, n int, hea
 	require.NoError(t, err)
 	resp.Body.Close()
 	return resp
+}
+
+// ctxStore fails every call whose context is done, as a database driver does.
+type ctxStore struct{ *via.MemorySessionStore }
+
+func (s ctxStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, false, err
+	}
+	return s.MemorySessionStore.Load(ctx, id)
+}
+
+func (s ctxStore) Save(ctx context.Context, id string, data []byte, ttl time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.MemorySessionStore.Save(ctx, id, data, ttl)
+}
+
+// hungUp serves every request with its context already cancelled: a client
+// that hung up mid-request.
+type hungUp struct{ next http.Handler }
+
+func (h hungUp) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	ctx, cancel := context.WithCancel(req.Context())
+	cancel()
+	h.next.ServeHTTP(w, req.WithContext(ctx))
+}
+
+func TestSession_writesLandAfterTheClientHungUp(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(loginComp{}, testSessionKey, via.WithSessionStore(ctxStore{via.NewMemorySessionStore()}))
+	srv := httptest.NewServer(hungUp{app})
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	fireAction(t, c, srv.URL, 0)            // SignIn
+	_, body := fireAction(t, c, srv.URL, 1) // Greet
+	assert.Contains(t, body, "hi alice", "store calls must not inherit the request's cancellation")
+}
+
+// liveLogin is a live page whose native form logs in; its OnInit shows who the
+// session holds, so the page a native submit answers with reveals which
+// session that OnInit saw.
+type liveLogin struct {
+	who string
+	n   via.State[int]
+}
+
+func (l *liveLogin) OnInit(ctx *via.Ctx) error {
+	if m, ok := ctx.Session().Get[member](); ok {
+		l.who = m.Name
+	}
+	return nil
+}
+
+func (l *liveLogin) LogIn(ctx *via.Ctx) {
+	ctx.Session().Put(member{Name: "alice"})
+	ctx.Session().Rotate()
+}
+
+func (l *liveLogin) View() h.H {
+	return h.Div(h.P(h.Str("who="+l.who)), l.n.Display(), via.PostForm(l.LogIn, h.Button(h.Str("in"))))
+}
+
+func TestSession_aLiveNativeSubmitsPageSeesTheSessionItsActionWrote(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(liveLogin{}, testSessionKey))
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	page := jarGet(t, c, srv.URL+"/")
+	lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", "")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+
+	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "who=alice")
+}
+
+type rotateOnInit struct{}
+
+func (rotateOnInit) OnInit(ctx *via.Ctx) error { ctx.Session().Rotate(); return nil }
+func (rotateOnInit) View() h.H                 { return h.Div() }
+
+func TestSession_anAnonymousRotateWarnsLikeAnyMint(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	srv := httptest.NewServer(via.Handler(rotateOnInit{}, via.WithSessionTTL(time.Hour), logTo(&logs)))
+	t.Cleanup(srv.Close)
+
+	resp, _ := do(t, srv, http.MethodGet, "/", "")
+	require.NotEmpty(t, resp.Cookies(), "Rotate on a cookieless request mints a session")
+	assert.Contains(t, logs.String(), "random per-process key")
+}
+
+func TestSession_VIA_SESSION_KEYSignsCookiesEveryRouterAccepts(t *testing.T) {
+	t.Setenv("VIA_SESSION_KEY", "an-env-signing-key-32-bytes-long")
+	store := via.WithSessionStore(via.NewMemorySessionStore())
+	a, b := sessionServer(t, store), sessionServer(t, store)
+	c := jarClient(t)
+
+	fireAction(t, c, a, 0)            // SignIn on one router; cookies ignore the port, so b gets it too
+	_, body := fireAction(t, c, b, 1) // Greet on the other
+
+	assert.Contains(t, body, "hi alice")
+}
+
+func TestSession_aShortVIA_SESSION_KEYPanics(t *testing.T) {
+	t.Setenv("VIA_SESSION_KEY", "short")
+	assert.PanicsWithValue(t, "via: session key must be at least 16 bytes (got 5)", func() {
+		via.Handler(loginComp{}, via.WithSessionTTL(time.Hour))
+	})
 }

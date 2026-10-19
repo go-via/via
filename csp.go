@@ -80,58 +80,79 @@ func (p cspPolicy) withNonce(nonce string) string {
 // function of the declaration — every pod serving that config serves the same
 // policy around its nonce. Called once per mount, never per request.
 func buildCSP(global, page Assets, unsafeEval bool) cspPolicy {
-	script := &srcSet{}
-	script.add(sha256Source(eventsInit), sha256Source(reconnectInit), sha256Source(redirectInit))
-	style := &srcSet{}
-	style.add("'self'")
-	font, img := &srcSet{}, &srcSet{}
-	font.add("'self'")
-	img.add("'self'")
-	base := [4]int{len(script.src), len(style.src), len(font.src), len(img.src)}
+	c := newCSPSources()
+	c.addAssets(global)
+	c.addAssets(page)
 
-	for _, a := range [2]Assets{global, page} {
-		for _, s := range a.Scripts {
-			if s.Inline != "" {
-				script.add(sha256Source(s.Inline))
-			}
-			script.addOrigin(s.Src)
-		}
-		for _, s := range a.Styles {
-			if s.Inline != "" {
-				style.add(sha256Source(s.Inline))
-			}
-			style.addOrigin(s.Href)
-		}
-		for _, p := range a.Preload {
-			switch p.As {
-			case "script":
-				script.addOrigin(p.Href)
-			case "style":
-				style.addOrigin(p.Href)
-			case "font":
-				font.addOrigin(p.Href)
-			case "image":
-				img.addOrigin(p.Href)
-			}
-		}
-		for _, o := range a.FontOrigins {
-			font.add(originOf(o))
-		}
-	}
-
-	tail := " " + script.join() + "; style-src " + style.join() + "; "
-	if len(font.src) > base[2] {
-		tail += "font-src " + font.join() + "; "
-	}
-	if len(img.src) > base[3] {
-		tail += "img-src " + img.join() + "; "
-	}
-	tail += "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 	head := "default-src 'self'; script-src 'self'"
 	if unsafeEval {
 		head += " 'unsafe-eval'"
 	}
-	return cspPolicy{head: head, tail: tail}
+	return cspPolicy{head: head, tail: c.tail()}
+}
+
+// cspSources holds the sources of each directive a mount's assets can widen.
+// fontBase and imgBase are the baseline sizes: font-src and img-src are
+// emitted only once an asset adds to them.
+type cspSources struct {
+	script, style, font, img srcSet
+	fontBase, imgBase        int
+}
+
+func newCSPSources() *cspSources {
+	c := &cspSources{}
+	c.script.add(sha256Source(eventsInit), sha256Source(reconnectInit), sha256Source(redirectInit))
+	c.style.add("'self'")
+	c.font.add("'self'")
+	c.img.add("'self'")
+	c.fontBase, c.imgBase = len(c.font.src), len(c.img.src)
+	return c
+}
+
+func (c *cspSources) addAssets(a Assets) {
+	for _, s := range a.Scripts {
+		if s.Inline != "" {
+			c.script.add(sha256Source(s.Inline))
+		}
+		c.script.addOrigin(s.Src)
+	}
+	for _, s := range a.Styles {
+		if s.Inline != "" {
+			c.style.add(sha256Source(s.Inline))
+		}
+		c.style.addOrigin(s.Href)
+	}
+	for _, p := range a.Preload {
+		c.addPreload(p)
+	}
+	for _, o := range a.FontOrigins {
+		c.font.add(originOf(o))
+	}
+}
+
+func (c *cspSources) addPreload(p Preload) {
+	switch p.As {
+	case "script":
+		c.script.addOrigin(p.Href)
+	case "style":
+		c.style.addOrigin(p.Href)
+	case "font":
+		c.font.addOrigin(p.Href)
+	case "image":
+		c.img.addOrigin(p.Href)
+	}
+}
+
+// tail is the policy after the nonce slot, directives in a fixed order.
+func (c *cspSources) tail() string {
+	t := " " + c.script.join() + "; style-src " + c.style.join() + "; "
+	if len(c.font.src) > c.fontBase {
+		t += "font-src " + c.font.join() + "; "
+	}
+	if len(c.img.src) > c.imgBase {
+		t += "img-src " + c.img.join() + "; "
+	}
+	return t + "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 }
 
 // srcSet accumulates one directive's sources in declaration order, without

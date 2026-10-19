@@ -22,7 +22,8 @@ const (
 )
 
 // Highlight is an unlabelled Go block of src. Hand-typed Go is not
-// compile-checked: it exists for callers not yet moved to Show and Region.
+// compile-checked: it is for Go this module cannot compile, such as the v0.7
+// API /migrate shows.
 func Highlight(src string) h.H { return frame("", goPre(src, nil, false)) }
 
 // Text is a plain block for shell commands and config files, labelled like a
@@ -109,7 +110,11 @@ func frame(label string, pre h.H) h.H {
 		head,
 		pre,
 		h.Button(h.Class("copy"), h.Type("button"), h.Aria("label", "Copy code"),
-			on.ClickCS(expr.Do(expr.CopyTextOf("pre"), expr.Class("copied", true))),
+			// Not CopyTextOf: it swallows a refused or impossible write, and the
+			// feedback must show only once the text is on the clipboard.
+			on.ClickCS(expr.Rawf(`navigator.clipboard?.writeText(%s).then(() => %s, () => {})`,
+				expr.Rawf(`%s.parentElement?.querySelector(%s)?.textContent ?? ""`, expr.El, expr.Val("pre")),
+				expr.Class("copied", true))),
 			on.ClickCS(expr.Class("copied", false), on.WithDebounce(1500*time.Millisecond)),
 			icon.Clipboard(), icon.Check(),
 			h.Span(h.Class("copy-done"), h.Aria("live", "polite"), h.Str("Copied"))),

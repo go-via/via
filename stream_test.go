@@ -462,7 +462,7 @@ func awaitLine(t *testing.T, lines <-chan string, want string) {
 var tabRe = regexp.MustCompile(`"viatab":"([^"]+)"`)
 
 // awaitTabID reads the SSE stream until the connect-time signals frame that
-// carries the per-connection tab id, and returns it.
+// carries the tab id, and returns it.
 func awaitTabID(t *testing.T, lines <-chan string) string {
 	t.Helper()
 	deadline := time.After(2 * time.Second)
@@ -673,7 +673,6 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID(), "the SSE must hand the client its tab id")
 
 		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
@@ -709,7 +708,6 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(flakyRender{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID())
 
 		status, _ := app.Action(0).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "the mutation applies and answers before its render panics")
@@ -958,7 +956,7 @@ func TestLive_connectsThroughAMiddlewareThatWrapsTheWriter(t *testing.T) {
 
 	lines, cancel := openStream(t, srv)
 	defer cancel()
-	require.NotNil(t, lines)
+	awaitTabID(t, lines)
 }
 
 // deadRW is a ResponseWriter and nothing more — no Flush, no Unwrap, the shape

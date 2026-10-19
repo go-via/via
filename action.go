@@ -3,6 +3,7 @@ package via
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"reflect"
@@ -16,18 +17,19 @@ import (
 )
 
 type action struct {
-	fn     func(*Ctx)
-	name   string       // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
-	handle actionHandle // runtime identity, compared to catch an id collision
+	fn     func(*Ctx)     // argless only
+	call   render.ArgCall // arg actions (on.Bind) only
+	name   string         // the Go name, so a 410 on a vanished handler reads as a name, not a bare id
+	handle actionHandle   // runtime identity, compared to catch an id collision
 	// args is the set of ?a= payloads this render bound for the handler, in the
 	// exact JSON the binding shipped. nil marks an argless action (on.Event,
 	// PostForm).
 	args map[string]struct{}
 }
 
-// actionSlot registers run under the content-addressed id of ident — for
-// bindArg that is the user's fn, not the decoding wrapper, which would name the
-// same via-internal closure for every row.
+// actionSlot registers run under the content-addressed id of run itself;
+// actionSlotArg does the same for on.Bind's fn, never its ArgCall, which is
+// the same via-internal type for every row.
 //
 // The id hashes the func's Go name plus the field path of its receiver inside
 // the unit ("A", "Stats.A", "Rows[1]"), not its code pointer or byte offset:
@@ -40,7 +42,7 @@ type action struct {
 // interface method value has no receiver address: valueMethodID keys it by its
 // type's one path in the unit, or refuses it.
 func (c *Ctx) actionSlot(run func(*Ctx)) string {
-	id, _, a := c.claimSlot(run)
+	id, a := c.claimSlot(run)
 	a.fn = run
 	c.actions[id] = a
 	return id
@@ -49,30 +51,56 @@ func (c *Ctx) actionSlot(run func(*Ctx)) string {
 // actionSlotArg is actionSlot for a value-carrying action: it records arg in
 // the slot's allowed set, so dispatch can reject a (handler, arg) pair this
 // render never produced. The set is created once per slot and mutated in place
-// as later rows claim it, so the closure stored here (the last row's) closes
-// over the finished set no matter which row wrote it.
-func (c *Ctx) actionSlotArg(ident any, run func(rc *Ctx, name string, bound map[string]struct{}), arg string) string {
-	id, name, a := c.claimSlot(ident)
+// as later rows claim it, so every row's copy of the action shares it.
+func (c *Ctx) actionSlotArg(ident any, call render.ArgCall, arg string) string {
+	id, a := c.claimSlot(ident)
 	if a.args == nil {
 		a.args = map[string]struct{}{}
 	}
 	a.args[arg] = struct{}{}
-	args := a.args
-	a.fn = func(rc *Ctx) { run(rc, name, args) }
+	a.call = call
 	c.actions[id] = a
 	return id
 }
 
+// run calls the handler on rc: directly when argless, else with the arg the
+// request carries, which must be one this render bound.
+func (a action) run(rc *Ctx) {
+	if a.call == nil {
+		a.fn(rc)
+		return
+	}
+	if rc.req == nil {
+		return
+	}
+	raw := rc.req.URL.Query().Get("a")
+	if raw == "" || raw == "null" {
+		panic(badActionArg{err: errors.New("missing action arg")})
+	}
+	v, err := a.call.Decode([]byte(raw))
+	if err != nil {
+		panic(badActionArg{err: err})
+	}
+	// The dispatchable-iff-rendered check (see on.Bind). Matching the exact
+	// bytes the binding shipped means a client echoing the URL it was served
+	// passes, while any arg it invents — even a re-spelling of a legitimate
+	// one — fails closed.
+	if _, ok := a.args[raw]; !ok {
+		panic(unrenderedArg{name: a.name, raw: strconv.Quote(raw), have: len(a.args)})
+	}
+	a.call.Call(rc, v)
+}
+
 // claimSlot resolves ident's action id and rejects a collision between two
-// handlers via cannot tell apart, returning the id, the handler name, and the
-// row to fill in (carrying any args a previous claim on this id recorded).
-func (c *Ctx) claimSlot(ident any) (string, string, action) {
+// handlers via cannot tell apart, returning the id and the row to fill in
+// (carrying any args a previous claim on this id recorded).
+func (c *Ctx) claimSlot(ident any) (string, action) {
 	id, name, ah := c.actionID(ident)
 	prev, dup := c.actions[id]
 	if dup && prev.handle != ah {
 		panic(render.Miswired(sharedID(id, prev.name, name)))
 	}
-	return id, name, action{name: name, handle: ah, args: prev.args}
+	return id, action{name: name, handle: ah, args: prev.args}
 }
 
 // sharedID leads with the likelier cause, read off the name: a func literal is
@@ -143,31 +171,31 @@ var trampolineVerified sync.Once
 // change turns every pointer-receiver handler into a "no receiver address"
 // panic, so both are proved once per process before any action id is minted.
 // Every Mount in the test suite calls this, so no dedicated test is needed.
-func verifyMethodTrampoline() {
-	trampolineVerified.Do(func() {
-		c := &trampolineCanary{}
-		fn := c.probe
-		meta := funcName(reflect.ValueOf(fn).Pointer())
-		self := funcSelf(fn)
-		recv := methodRecv(self)
-		if !meta.ptr || meta.recvType != "trampolineCanary" || recv != unsafe.Pointer(c) {
-			panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
-				"receiver %p, want a \"pkg.(*trampolineCanary).probe-fm\" name and receiver %p. via's "+
-				"action identity depends on a method value's name and runtime layout; a Go toolchain "+
-				"change broke that assumption. File a bug.",
-				runtime.Version(), meta.name, recv, c))
-		}
-		v := valueCanary{a: 0x5a5a, b: 0xa5a5}
-		vfn := v.probe
-		vmeta := funcName(reflect.ValueOf(vfn).Pointer())
-		held := (*valueCanary)(unsafe.Add(funcSelf(vfn), unsafe.Sizeof(uintptr(0))))
-		if !vmeta.method || vmeta.ptr || vmeta.recvType != "valueCanary" || *held != v {
-			panic(fmt.Sprintf("via: value-receiver method-value canary failed on %s — got name %q; "+
-				"via's action identity depends on a value receiver's copy sitting right after the "+
-				"code pointer. A Go toolchain change broke that assumption. File a bug.",
-				runtime.Version(), vmeta.name))
-		}
-	})
+func verifyMethodTrampoline() { trampolineVerified.Do(checkMethodTrampoline) }
+
+func checkMethodTrampoline() {
+	c := &trampolineCanary{}
+	fn := c.probe
+	meta := funcName(reflect.ValueOf(fn).Pointer())
+	self := funcSelf(fn)
+	recv := methodRecv(self)
+	if !meta.ptr || meta.recvType != "trampolineCanary" || recv != unsafe.Pointer(c) {
+		panic(fmt.Sprintf("via: method-value trampoline canary failed on %s — got name %q, "+
+			"receiver %p, want a \"pkg.(*trampolineCanary).probe-fm\" name and receiver %p. via's "+
+			"action identity depends on a method value's name and runtime layout; a Go toolchain "+
+			"change broke that assumption. File a bug.",
+			runtime.Version(), meta.name, recv, c))
+	}
+	v := valueCanary{a: 0x5a5a, b: 0xa5a5}
+	vfn := v.probe
+	vmeta := funcName(reflect.ValueOf(vfn).Pointer())
+	held := (*valueCanary)(unsafe.Add(funcSelf(vfn), unsafe.Sizeof(uintptr(0))))
+	if !vmeta.method || vmeta.ptr || vmeta.recvType != "valueCanary" || *held != v {
+		panic(fmt.Sprintf("via: value-receiver method-value canary failed on %s — got name %q; "+
+			"via's action identity depends on a value receiver's copy sitting right after the "+
+			"code pointer. A Go toolchain change broke that assumption. File a bug.",
+			runtime.Version(), vmeta.name))
+	}
 }
 
 // actionID content-addresses a handler by its Go name ("main.(*Poll).Vote-fm")
@@ -348,33 +376,41 @@ func isType(t reflect.Type, pkg, typ string) bool {
 // typ. An array is walked for at most two elements, which is enough to tell
 // one holder from several.
 func typePaths(unit reflect.Type, pkg, typ string) (paths []string, t reflect.Type, mixed bool) {
-	var walk func(cur reflect.Type, path string)
-	walk = func(cur reflect.Type, path string) {
-		if isType(cur, pkg, typ) {
-			mixed = mixed || t != nil && t != cur
-			paths, t = append(paths, path), cur
-			return
-		}
-		switch cur.Kind() {
-		case reflect.Struct:
-			for i := range cur.NumField() {
-				f := cur.Field(i)
-				p := f.Name
-				if path != "" {
-					p = path + "." + f.Name
-				}
-				walk(f.Type, p)
-			}
-		case reflect.Array:
-			for i := range min(cur.Len(), 2) {
-				walk(cur.Elem(), path+"["+strconv.Itoa(i)+"]")
-			}
-		}
-	}
+	w := typePathWalk{pkg: pkg, typ: typ}
 	if unit != nil {
-		walk(unit, "")
+		w.walk(unit, "")
 	}
-	return paths, t, mixed
+	return w.paths, w.t, w.mixed
+}
+
+type typePathWalk struct {
+	pkg, typ string
+	paths    []string
+	t        reflect.Type
+	mixed    bool
+}
+
+func (w *typePathWalk) walk(cur reflect.Type, path string) {
+	if isType(cur, w.pkg, w.typ) {
+		w.mixed = w.mixed || w.t != nil && w.t != cur
+		w.paths, w.t = append(w.paths, path), cur
+		return
+	}
+	switch cur.Kind() {
+	case reflect.Struct:
+		for i := range cur.NumField() {
+			f := cur.Field(i)
+			p := f.Name
+			if path != "" {
+				p = path + "." + f.Name
+			}
+			w.walk(f.Type, p)
+		}
+	case reflect.Array:
+		for i := range min(cur.Len(), 2) {
+			w.walk(cur.Elem(), path+"["+strconv.Itoa(i)+"]")
+		}
+	}
 }
 
 // funcMeta is the per-code-pointer half of the actionID memo; all of it is
@@ -530,7 +566,7 @@ const unitIdentParam = "u"
 
 // actionPath is the POST path of action id on c's unit, unescaped.
 func actionPath(c *Ctx, id string) string {
-	path := c.base + "/_via/a/" + unitAddr(c) + "/" + id
+	path := c.base + actionRoute + unitAddr(c) + "/" + id
 	if c.unitV.ident != "" {
 		path += "?" + unitIdentParam + "=" + c.unitV.ident
 	}

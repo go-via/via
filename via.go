@@ -1,6 +1,7 @@
 // Package via is a server-driven reactive UI toolkit built on the h DSL and the
-// Datastar client: plain request/response pages, SSE-backed live children,
-// server-authoritative State/List/Signal, and always-on sessions.
+// Datastar client: plain request/response pages, SSE-backed live units,
+// server-authoritative State/List, client-resident Signal, and always-on
+// sessions.
 //
 // Hard guarantees (the point of the design): no '&' at any user call site, no
 // reflection in the public API surface (inside, reflect walks each composition
@@ -22,8 +23,7 @@
 // away ("OnRelaod", "Oninit"). A leftover v0.7 OnConnect(*via.Ctx) error is
 // logged too, even next to an OnInit.
 //
-//	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any
-//	                         // embedded child
+//	OnInit(*via.Ctx) error   // before the ctx-free View, on a page or any child
 //	OnReload(*via.Ctx) error // after one of the unit's actions, before the
 //	                         // render that answers it
 //	PageMeta() via.Meta      // the mounted root's own document
@@ -34,7 +34,9 @@
 // action over an already-open stream: it ran once, at connect, so a session
 // whose authorization changes after that keeps acting on the stream until
 // the tab next acts and is denied, the stream closes, or the router shuts
-// down.
+// down. A plain child of a live root is the exception: it is a fresh copy on
+// every pushed frame, so its OnInit runs on every frame (twice on a page
+// carrying a Bind()).
 //
 // OnReload is the fix for the commonest week-one defect — OnInit loads, the
 // handler mutates the store, and the render answering the action still shows
@@ -43,8 +45,8 @@
 // session, registers Tick/Listen, and may Redirect or return [ErrNotFound],
 // all wrong to repeat once a handler has committed a mutation. It runs on
 // the plain path and the live path alike, once per action, and is skipped
-// when the handler queued a Redirect. Tick, Listen, OnConnect and Track
-// called inside it register nothing and log a warning: liveness is the
+// when the handler queued a Redirect. Tick, Listen, OnConnect, OnDispose and
+// Track called inside it register nothing and log a warning: liveness is the
 // GET/connect verdict. A non-nil error is answered like OnInit's —
 // ErrNotFound is 404, ErrForbidden 403, anything else 500.
 //
@@ -78,7 +80,7 @@
 // Not safe for concurrent use. Call them only from a via callback. To reach a
 // unit from a goroutine of your own — a background worker, a message consumer,
 // an http.Handler outside via — publish to a [topic.Topic] and have the unit
-// [Ctx.Listen] to it; the value is then delivered on the unit's own goroutine.
+// [Ctx.Listen] to it; the value is then delivered on its tab's stream goroutine.
 //
 //	go func() { prices.Publish(tick) }() // fine: Topic is concurrency-safe
 //	go func() { p.Price.Set(tick) }()    // race: Set is not
@@ -89,11 +91,9 @@ import (
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
-	"errors"
 	"log/slog"
 	"maps"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -117,10 +117,12 @@ var datastarJS []byte
 // /_via/datastar.js?v=<hash>, so the versioned URL can be cached as immutable:
 // a new client is a new URL. The bare path keeps working for anything that
 // hard-coded it, and revalidates against its ETag.
-var datastarHash = func() string {
+var datastarHash = hashDatastar()
+
+func hashDatastar() string {
 	sum := sha256.Sum256(datastarJS)
 	return hex.EncodeToString(sum[:8])
-}()
+}
 
 // viewer is the (pointer) contract a root must satisfy: a pure, ctx-free View.
 type viewer interface{ View() h.H }
@@ -165,9 +167,9 @@ type clientSignal interface {
 // seeded is the one mechanism behind via:"init=<json>", implemented by
 // *Signal[T], *SignalCS[T] and *State[T] — and by *List[E] through the State it
 // embeds first, so the pointer the applier receives is the embedded State's
-// address too. decodeSeed carries T out of the generic type, and seedApplier
-// builds the typed write once, on the Mount walk, so a seed costs a closure
-// call per unit and no reflection.
+// address too. decodeSeed carries T out of the generic type and checks the tag
+// at Mount; seedApplier builds the typed write, which decodes the tag afresh
+// for each unit so no two requests share a seeded map, slice or pointer.
 //
 // The applier writes only into a handle whose start value is not decided yet —
 // a StateOf literal wins over the tag, and a later pass over the same instance
@@ -175,7 +177,13 @@ type clientSignal interface {
 // is what a Signal's slot is declared at.
 type seeded interface {
 	decodeSeed(raw string) (any, error)
-	seedApplier(v any) func(handle unsafe.Pointer) any
+	seedApplier(raw string) seedApplier
+}
+
+// seedApplier writes a seed into the handle at its pointer and returns the
+// value the handle then holds.
+type seedApplier interface {
+	apply(handle unsafe.Pointer) any
 }
 
 var seededMarker = reflect.TypeOf((*seeded)(nil)).Elem()
@@ -183,7 +191,8 @@ var seededMarker = reflect.TypeOf((*seeded)(nil)).Elem()
 var viewerType = reflect.TypeOf((*viewer)(nil)).Elem()
 
 // typeSignals is one composition type's signal table: every Signal-typed
-// field's byte offset paired with the wire name its Go field path gives it.
+// field's byte offset, the key a render looks it up by, paired with the wire
+// name its Go field path gives it.
 type typeSignals struct {
 	fields []signalField
 	seeds  []seedField  // State/List fields carrying a via:"init=…" tag: no wire name, only a value to write
@@ -196,19 +205,19 @@ type signalField struct {
 	off      uintptr
 	name     string
 	cs       bool
-	seed     any                      // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
-	declares bool                     // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	apply    func(unsafe.Pointer) any // tagged Signal only; a SignalCS holds no value to write
+	seed     any         // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
+	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
+	applier  seedApplier // tagged Signal only; a SignalCS holds no value to write
 }
 
 type seedField struct {
-	off   uintptr
-	apply func(unsafe.Pointer) any
+	off     uintptr
+	applier seedApplier
 }
 
 type trackField struct {
-	off   uintptr
-	start func(unsafe.Pointer, *Ctx)
+	off uintptr
+	tk  tracker
 }
 
 // wire is the slot name: the "_" goes ahead of the scope prefix, because
@@ -237,80 +246,92 @@ func signalsOf(t reflect.Type) *typeSignals {
 	}
 	ts := &typeSignals{byOff: map[uintptr]signalField{}}
 	minted := map[string]bool{}
-	var walk func(t reflect.Type, base uintptr, prefix string, depth int)
-	walk = func(t reflect.Type, base uintptr, prefix string, depth int) {
-		if t == nil || t.Kind() != reflect.Struct || depth > 8 { // depth: a self-referential composition must not spin here
-			return
-		}
-		for i := range t.NumField() {
-			f := t.Field(i)
-			name, off := prefix+lowerFirst(f.Name), base+f.Offset
-			tag, tagged := f.Tag.Lookup("via")
-			if reflect.PointerTo(f.Type).Implements(signalMarker) {
-				sf := signalField{off: off, name: name}
-				handle := reflect.New(f.Type).Interface()
-				if cs, ok := handle.(clientSignal); ok {
-					sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
-				}
-				if tagged {
-					sf.seed, sf.declares = decodeSeedTag(t, f, handle.(seeded), tag), true
-					if !sf.cs {
-						sf.apply = handle.(seeded).seedApplier(sf.seed)
-					}
-				}
-				slot := sf.wire("")
-				checkSlotName(t, f.Name, slot, minted)
-				minted[slot] = true
-				ts.fields = append(ts.fields, sf)
-				ts.byOff[off] = sf
-				continue
-			}
-			if reflect.PointerTo(f.Type).Implements(seededMarker) { // State, List
-				handle := reflect.New(f.Type).Interface()
-				if tagged {
-					h := handle.(seeded)
-					v := decodeSeedTag(t, f, h, tag)
-					ts.seeds = append(ts.seeds, seedField{off: off, apply: h.seedApplier(v)})
-				}
-				// Every State lands here, tracked or not: whether this instance
-				// carries a StateTrack literal is a per-instance fact the type
-				// cannot answer, so the starter nil-checks at init.
-				if tk, ok := handle.(tracker); ok {
-					ts.tracks = append(ts.tracks, trackField{off: off, start: tk.trackStarter()})
-				}
-				continue
-			}
-			// Not descended: an entry here is a dead slot that also rebinds the
-			// child's handles to the root's on every root render.
-			if reflect.PointerTo(f.Type).Implements(viewerType) {
-				checkNoSeedTag(t, f)
-				continue
-			}
-			if f.Type.Kind() == reflect.Struct {
-				checkNoSeedTag(t, f)
-				walk(f.Type, off, name+"_", depth+1)
-				continue
-			}
-			checkNoSeedTag(t, f)
-			checkSignalReachable(t, f)
-		}
-	}
-	walk(t, 0, "", 0)
+	walkSignals(ts, minted, t, 0, "", 0)
 	ts.names = minted
 	typeSignalCache.Store(t, ts)
 	return ts
 }
 
+// walkSignals adds t's signal and State fields at base to ts, descending
+// through plain nested structs.
+func walkSignals(ts *typeSignals, minted map[string]bool, t reflect.Type, base uintptr, prefix string, depth int) {
+	if t == nil || t.Kind() != reflect.Struct || depth > 8 { // depth: a self-referential composition must not spin here
+		return
+	}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, off := prefix+lowerFirst(f.Name), base+f.Offset
+		switch ptr := reflect.PointerTo(f.Type); {
+		case ptr.Implements(signalMarker):
+			addSignalField(ts, minted, t, f, off, name)
+		case ptr.Implements(seededMarker): // State, List
+			addSeededField(ts, t, f, off)
+		case ptr.Implements(viewerType):
+			// Not descended: an entry here is a dead slot that also rebinds the
+			// child's handles to the root's on every root render.
+			checkNoSeedTag(t, f)
+		case f.Type.Kind() == reflect.Struct:
+			checkNoSeedTag(t, f)
+			walkSignals(ts, minted, f.Type, off, name+"_", depth+1)
+		default:
+			checkNoSeedTag(t, f)
+			checkSignalReachable(t, f)
+		}
+	}
+}
+
+// addSignalField registers f, a Signal or SignalCS field of t, under its wire
+// slot, with the seed its tag or client zero declares.
+func addSignalField(ts *typeSignals, minted map[string]bool, t reflect.Type, f reflect.StructField, off uintptr, name string) {
+	tag, tagged := f.Tag.Lookup("via")
+	sf := signalField{off: off, name: name}
+	handle := reflect.New(f.Type).Interface()
+	if cs, ok := handle.(clientSignal); ok {
+		sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
+	}
+	if tagged {
+		var raw string
+		sf.seed, raw = decodeSeedTag(t, f, handle.(seeded), tag)
+		sf.declares = true
+		if !sf.cs {
+			sf.applier = handle.(seeded).seedApplier(raw)
+		}
+	}
+	slot := sf.wire("")
+	checkSlotName(t, f.Name, slot, minted)
+	minted[slot] = true
+	ts.fields = append(ts.fields, sf)
+	ts.byOff[off] = sf
+}
+
+// addSeededField records f, a State or List field of t, for seeding and
+// tracking.
+func addSeededField(ts *typeSignals, t reflect.Type, f reflect.StructField, off uintptr) {
+	handle := reflect.New(f.Type).Interface()
+	if tag, tagged := f.Tag.Lookup("via"); tagged {
+		h := handle.(seeded)
+		_, raw := decodeSeedTag(t, f, h, tag)
+		ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(raw)})
+	}
+	// Every State lands here, tracked or not: whether this instance
+	// carries a StateTrack literal is a per-instance fact the type
+	// cannot answer, so startTrack nil-checks at init.
+	if tk, ok := handle.(tracker); ok {
+		ts.tracks = append(ts.tracks, trackField{off: off, tk: tk})
+	}
+}
+
 // decodeSeedTag resolves a handle field's declared start value from its tag.
 // A tag that fails to decode is a typo caught here, at Mount, rather than
 // surfacing as a handle quietly holding a value nobody wrote.
-func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) any {
-	v, err := h.decodeSeed(parseSeedTag(owner, f, tag))
+func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) (v any, raw string) {
+	raw = parseSeedTag(owner, f, tag)
+	v, err := h.decodeSeed(raw)
 	if err != nil {
 		panic("via: " + owner.String() + "." + f.Name + " has a via:\"init=…\" value that is not JSON " +
 			"for its " + f.Type.String() + " type: " + err.Error())
 	}
-	return v
+	return v, raw
 }
 
 // parseSeedTag splits the one key via knows off the tag. The value runs to the
@@ -346,8 +367,8 @@ func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 }
 
 // checkSignalReachable panics when a field hides a Signal behind an indirection.
-// A Signal is named by its byte offset in the composition, so one reached
-// through a pointer, slice, array or map has no name at all: its writes land on
+// A Signal is found by its byte offset in the composition, so one reached
+// through a pointer, slice, array or map cannot be found at all: its writes land on
 // memory the render discards. That used to surface only when the View first
 // rendered it — a per-request 500 for the life of the process — so it is caught
 // here instead, on the type walk Mount and Child do once.
@@ -364,7 +385,7 @@ func checkSignalReachable(owner reflect.Type, f reflect.StructField) {
 		return
 	}
 	panic("via: " + owner.String() + "." + f.Name + " holds a via.Signal behind a " +
-		f.Type.Kind().String() + " — a Signal is named by its field offset, so it must be a plain " +
+		f.Type.Kind().String() + " — a Signal is found by its field offset, so it must be a plain " +
 		"struct field of the composition (through plain nested structs if you like), never behind a " +
 		"pointer, slice, array, map or interface")
 }
@@ -419,13 +440,13 @@ func prebindSignals(c *Ctx, inst instance) {
 		// no Set will ever declare it, and a data-show may be its only reader,
 		// so its seed is declared on every pass.
 		v := f.seed
-		if f.apply != nil {
-			v = f.apply(unsafe.Add(inst.base, f.off))
+		if f.applier != nil {
+			v = f.applier.apply(unsafe.Add(inst.base, f.off))
 		}
 		c.declareSignal(sid.slot, v)
 	}
 	for _, s := range inst.sig.seeds {
-		s.apply(unsafe.Add(inst.base, s.off))
+		s.applier.apply(unsafe.Add(inst.base, s.off))
 	}
 }
 
@@ -439,13 +460,16 @@ func startTracks(c *Ctx, inst instance) {
 	if inst.sig == nil || inst.base == nil || len(inst.sig.tracks) == 0 {
 		return
 	}
-	was := c.inInit
+	defer c.restoreInInit(c.inInit)
 	c.inInit = true
-	defer func() { c.inInit = was }()
 	for _, t := range inst.sig.tracks {
-		t.start(unsafe.Add(inst.base, t.off), c)
+		t.tk.startTrack(unsafe.Add(inst.base, t.off), c)
 	}
 }
+
+func (c *Ctx) restoreInInit(was bool) { c.inInit = was }
+
+func (c *Ctx) endInit() { c.inInit = false }
 
 // childPrefixKey memoizes the parent-type -> child-type field-name lookup.
 type childPrefixKey struct{ parent, child reflect.Type }
@@ -454,9 +478,10 @@ var childPrefixes sync.Map // childPrefixKey -> string ("" = ambiguous)
 
 // childFieldName is the parent field a Child's child came from. Child takes
 // the child by value, so the copy's address says nothing about which field it
-// came from; the type does, as long as the parent holds exactly one field of
-// it. Two fields of that type answer "" (Child's argument order need not match
-// declaration order), and the caller falls back to the positional child key.
+// came from; the type does, as long as the parent holds exactly one value of
+// it, in a direct field. More than one place that can hold it answers ""
+// (Child's argument order need not match declaration order), and the caller
+// falls back to the positional child key.
 func childFieldName(parent, child reflect.Type) string {
 	if parent == nil || child == nil || parent.Kind() != reflect.Struct {
 		return ""
@@ -465,16 +490,19 @@ func childFieldName(parent, child reflect.Type) string {
 	if v, ok := childPrefixes.Load(k); ok {
 		return v.(string)
 	}
-	name := ""
+	name, n := "", 0
 	for i := range parent.NumField() {
-		if parent.Field(i).Type != child {
+		f := parent.Field(i)
+		if f.Type == child {
+			name, n = lowerFirst(f.Name), n+1
 			continue
 		}
-		if name != "" {
-			name = "" // more than one candidate: ambiguous
-			break
-		}
-		name = lowerFirst(parent.Field(i).Name)
+		// A nested struct, slice or map holding the type is a candidate too:
+		// Child(p.Box.B) would otherwise take the direct field's name.
+		n += holdsType(f.Type, child, map[reflect.Type]bool{})
+	}
+	if n != 1 {
+		name = "" // ambiguous, or the only candidate is nested
 	}
 	if name != "" {
 		// A child scopes its child's slots under name+"__", while a plain
@@ -491,6 +519,31 @@ func childFieldName(parent, child reflect.Type) string {
 	return name
 }
 
+// holdsType counts the places a value of type t can hold a child, with any
+// collection counted as two: its elements are as many children as it holds.
+func holdsType(t, child reflect.Type, seen map[reflect.Type]bool) int {
+	if t == child {
+		return 1
+	}
+	if seen[t] {
+		return 0
+	}
+	seen[t] = true
+	switch t.Kind() {
+	case reflect.Struct:
+		n := 0
+		for i := range t.NumField() {
+			n += holdsType(t.Field(i).Type, child, seen)
+		}
+		return n
+	case reflect.Array, reflect.Slice, reflect.Map:
+		if holdsType(t.Elem(), child, seen) > 0 {
+			return 2
+		}
+	}
+	return 0
+}
+
 // ptrViewer is the *T constraint Handler/Mount share. Exported so `go doc`
 // renders it at their signatures; an unexported alias showed up there as a
 // bare, unresolvable name.
@@ -499,7 +552,16 @@ type ptrViewer[T any] = interface {
 	viewer
 }
 
-// Ctx is the per-request binder: it names signal slots by field offset and
+// reqScope is the request a Ctx answers. Every Ctx derived for the same
+// request copies it whole, so a field added here reaches each derived Ctx.
+type reqScope struct {
+	req      *http.Request
+	sessions *sessionManager
+	policy   *routerPolicy
+	sessW    http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
+}
+
+// Ctx is the per-request binder: it keys signal slots by field offset and
 // actions by handler identity during a render pass, hydrates signals from the
 // request, and records per-slot initial values.
 //
@@ -508,42 +570,27 @@ type ptrViewer[T any] = interface {
 // [topic.Topic] the unit Listens to. See the package doc for the goroutine
 // model.
 type Ctx struct {
-	order       []string                              // slots in assignment order
-	initial     map[string]any                        // per-slot value seen at render time
-	actions     map[string]action                     // content-addressed action table, keyed by handler identity
-	hydrators   map[string]func(json.RawMessage) bool // per-slot updater, kept from the last render so a live action hydrates without re-rendering
-	ticks       []tickReg
-	subs        []subStarter
-	onConnect   []func() // run once when the stream opens
-	disposers   []func() // run on disconnect
-	live        bool     // OnInit registered a Tick/Listen, or the View rendered server State
-	dirty       map[string]any
+	unitPass
+	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
 	declareOnly map[string]any  // when non-nil, declare only these slots
 	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
-	req         *http.Request
-	sessions    *sessionManager
-	policy      *routerPolicy
-	sessW       http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I2)
-	session     *Session
-	children    []*Ctx // embedded children, in positional order (parent binder only)
-	isChild     bool
-	childKey    string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
-	unitV       instance
-	rendered    []byte // inner HTML from the discovery render (for the 204 compare)
-	push        func() // re-render this child and frame it on the stream
-	declare     bool   // this render declares page-level data-signals
-	base        string // mount path prefix for action POSTs
-	redirect    redirectTo
-	doInit      bool   // request-scoped, so every embedded child's OnInit runs before its View
-	actedKey    string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
-	actedInst   instance
+	reqScope
+	session   *Session
+	isChild   bool
+	childKey  string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
+	unitV     instance
+	declare   bool   // this render declares page-level data-signals
+	base      string // mount path prefix for action POSTs
+	doInit    bool   // request-scoped, so every child's OnInit runs before its View
+	actedKey  string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
+	actedInst instance
 	// passUnits is dispatchPlain's discovery-only record of each child key's
 	// first-pass Ctx, shared by the whole tree. Later passes render that pass's
 	// instance again instead of a fresh copy off the parent's field, so a
 	// child's hydrated values survive into the next pass the way a root's do.
 	passUnits map[string]*Ctx
 	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
-	reinit    bool            // this Ctx is OnReload's: load again, register nothing
+	inReload  bool            // this Ctx is OnReload's: load again, register nothing
 	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
 	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
 	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
@@ -562,9 +609,9 @@ type Ctx struct {
 // cookies, URL, RemoteAddr, TLS. Nil when no request is in scope (a bare
 // render).
 //
-// Read-only: the body is already consumed into the request's signals, and a
-// live action runs on the stream goroutine after the POST has acked, so the
-// request's Context may already be done.
+// Read-only: the body is already consumed into the request's signals. A live
+// action runs on the stream goroutine while the POST waits for it, and keeps
+// running if the client hangs up, so the request's Context may end mid-action.
 //
 // There is no matching writer. Ctx cannot set a header, a status or a response
 // body — [Ctx.Redirect] is the only response shaping a handler gets — because a
@@ -573,7 +620,7 @@ type Ctx struct {
 // export, an image) is a sibling net/http handler, registered next to the via
 // one and linked to like any other URL:
 //
-//	mux.Handle("/app/", viaRouter)
+//	mux.Handle("/", viaRouter)
 //	mux.HandleFunc("/files/{id}", serveAttachment) // http.ServeContent, not via
 func (c *Ctx) Request() *http.Request { return c.req }
 
@@ -590,9 +637,9 @@ func (c *Ctx) Request() *http.Request { return c.req }
 // Outside a live unit it is the request's own context, and context.Background
 // when there is no request in scope (a bare render). It is never nil.
 //
-// Note the asymmetry with [Ctx.Request]: a live action's req.Context may
-// already be done by the time the handler runs on the stream goroutine, so
-// prefer this for anything that outlives the POST.
+// Note the asymmetry with [Ctx.Request]: a live action's req.Context ends if
+// the client hangs up, while the action runs on to the end, so prefer this for
+// anything that outlives the POST.
 func (c *Ctx) Context() context.Context {
 	if c.streamCtx != nil {
 		return c.streamCtx
@@ -612,12 +659,34 @@ func (c *Ctx) logger() *slog.Logger {
 	return c.policy.log
 }
 
-func newCtx() *Ctx {
-	return &Ctx{
+func newCtx() *Ctx { return &Ctx{unitPass: newUnitPass()} }
+
+// unitPass is what one render pass of a unit records: its signal slots, the
+// actions and hydrators it bound, its children, and what OnInit registered.
+// rebindFrom copies a Ctx with a fresh unitPass, so a field added here is
+// per-pass without a reset list to keep in step.
+type unitPass struct {
+	order     []string                   // slots in assignment order
+	initial   map[string]any             // per-slot value seen at render time
+	actions   map[string]action          // content-addressed action table, keyed by handler identity
+	hydrators map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
+	dirty     map[string]any
+	children  []*Ctx      // children, in positional order (parent binder only)
+	rendered  []byte      // inner HTML from the discovery render (for the 204 compare)
+	pusher    *unitPusher // live only: re-renders this unit and frames it on the stream
+	redirect  redirectTo
+	ticks     []tickReg
+	subs      []subscription
+	onConnect []func() // run once when the stream opens
+	disposers []func() // run on disconnect
+}
+
+func newUnitPass() unitPass {
+	return unitPass{
 		initial:   map[string]any{},
 		actions:   map[string]action{},
 		dirty:     map[string]any{},
-		hydrators: map[string]func(json.RawMessage) bool{},
+		hydrators: map[string]render.Hydrator{},
 	}
 }
 
@@ -640,15 +709,15 @@ func (c *Ctx) dirtyAll() map[string]any {
 // Ctx's public surface.
 type binderCtx struct{ c *Ctx }
 
-func (b binderCtx) DeclareSignal(slot string, initial any)              { b.c.declareSignal(slot, initial) }
-func (b binderCtx) Hydrator(slot string, fn func(json.RawMessage) bool) { b.c.hydrator(slot, fn) }
+func (b binderCtx) DeclareSignal(slot string, initial any)  { b.c.declareSignal(slot, initial) }
+func (b binderCtx) Hydrator(slot string, h render.Hydrator) { b.c.hydrators[slot] = h }
 
 func (b binderCtx) Action(r *render.Renderer, event string, fn any) {
 	bind(r, b.c, event, fn.(func(*Ctx)))
 }
 
-func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, decode func([]byte) (any, error)) {
-	bindArg(r, b.c, event, fn, arg, decode)
+func (b binderCtx) ArgAction(r *render.Renderer, event string, fn, arg any, call render.ArgCall) {
+	bindArg(r, b.c, event, fn, arg, call)
 }
 
 // ctxOf unwraps the Ctx behind a renderer's binder; nil when the binder is not
@@ -660,7 +729,7 @@ func ctxOf(b render.Binder) *Ctx {
 	return nil
 }
 
-// signalSlot names the signal at field by its byte offset in the composition,
+// signalSlot finds the signal at field by its byte offset in the composition,
 // so a signal's wire identity is independent of where the View renders it.
 //
 // Anything else panics. A Signal behind a pointer, slice, array, map or interface field,
@@ -737,13 +806,6 @@ func (c *Ctx) declareSignal(slot string, initial any) {
 	c.initial[slot] = initial
 }
 
-// hydrator records slot's update function. A live unit keeps the table from
-// its last render (every push is a render), so a live action hydrates in place
-// without re-rendering. render.Binder.
-func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
-	c.hydrators[slot] = fn
-}
-
 // PostForm renders a native <form method="post"> whose submit runs handler on
 // the server — the flow for sign-up/in, file uploads, and anything ending in a
 // Redirect. Unlike on.Submit, which element-patches in place, this is a real
@@ -763,20 +825,27 @@ func (c *Ctx) hydrator(slot string, fn func(json.RawMessage) bool) {
 // submit carries neither Datastar's signal store nor its headers, so dispatch
 // routes on this field instead — under the same per-mount ownership check.
 func PostForm(handler func(*Ctx), children ...h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		ctx := ctxOf(r.Binder())
-		if ctx == nil {
-			return
-		}
-		idx := ctx.actionSlot(handler)
-		r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
-			render.EscapeString(actionPath(ctx, idx)) + `">`)
-		r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
-		for _, c := range children {
-			r.Render(c)
-		}
-		r.WriteString(`</form>`)
-	})
+	return render.Dyn(postForm{handler: handler, children: children})
+}
+
+type postForm struct {
+	handler  func(*Ctx)
+	children []h.H
+}
+
+func (f postForm) RenderTo(r *render.Renderer) {
+	ctx := ctxOf(r.Binder())
+	if ctx == nil {
+		return
+	}
+	idx := ctx.actionSlot(f.handler)
+	r.WriteString(`<form method="post" enctype="multipart/form-data" action="` +
+		render.EscapeString(actionPath(ctx, idx)) + `">`)
+	r.WriteString(`<input type="hidden" name="` + tabFormField + `" data-attr:value="$` + tabSignal + `">`)
+	for _, c := range f.children {
+		r.Render(c)
+	}
+	r.WriteString(`</form>`)
 }
 
 // paramMiss is the sentinel Param panics with when a segment cannot decode
@@ -807,7 +876,8 @@ type paramMiss struct {
 // URL, so the discovery render that decides what is dispatchable runs against
 // the unfiltered page: a row that only exists under the filter binds no action
 // in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
-// therefore readable on the GET and empty on every action.
+// therefore the page's on the GET; on an action it holds only via's own a and
+// u keys.
 //
 // So a page's list state — filter, page number, sort, tab — belongs in path
 // params or in the session, never in the query string:
@@ -881,7 +951,7 @@ func bind(r *render.Renderer, ctx *Ctx, event string, fn func(*Ctx)) {
 
 // bindArg wires event to a POST of fn carrying arg, for on.Bind, whose godoc
 // states the dispatchable-iff-rendered property this enforces.
-func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, decode func([]byte) (any, error)) {
+func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, call render.ArgCall) {
 	mustActionEvent("on.Bind", event)
 	// Marshalled before the slot is claimed: the encoded arg is both what
 	// the binding ships and what dispatch matches against, so one that
@@ -892,37 +962,19 @@ func bindArg(r *render.Renderer, ctx *Ctx, event string, fn, arg any, decode fun
 		ctx.logger().Warn("via: on.Bind arg does not encode; the binding is dropped", "event", event, "err", err)
 		return
 	}
-	idx := ctx.actionSlotArg(fn, func(rc *Ctx, name string, bound map[string]struct{}) {
-		if rc.req == nil {
-			return
-		}
-		raw := rc.req.URL.Query().Get("a")
-		if raw == "" || raw == "null" {
-			panic(badActionArg{err: errors.New("missing action arg")})
-		}
-		run, err := decode([]byte(raw))
-		if err != nil {
-			panic(badActionArg{err: err})
-		}
-		// The dispatchable-iff-rendered check (see on.Bind). Matching the
-		// exact bytes the binding shipped means a client echoing the URL it
-		// was served passes, while any arg it invents — even a re-spelling
-		// of a legitimate one — fails closed.
-		if _, ok := bound[raw]; !ok {
-			panic(unrenderedArg{name: name, raw: strconv.Quote(raw), have: len(bound)})
-		}
-		run.(func(*Ctx))(rc)
-	}, string(data))
+	// Dispatch reads null as a missing arg, so the binding would 400 on every click.
+	if string(data) == "null" {
+		ctx.logger().Warn("via: on.Bind arg is null; the binding is dropped", "event", event)
+		return
+	}
+	idx := ctx.actionSlotArg(fn, call, string(data))
 	writeActionAttr(r, ctx, event, idx, "a="+url.QueryEscape(string(data)))
 }
 
-// actionEvent is package on's event-name grammar followed by Datastar
-// modifiers. writeActionAttr splices the name into an attribute name raw, so a
-// quote, space or '=' would open an attribute of the caller's choosing.
-var actionEvent = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[:.-][a-z0-9]+)*(?:__[a-z]+(?:\.[a-z0-9]+)*)*$`)
-
+// writeActionAttr splices event into an attribute name raw, so a quote, space
+// or '=' would open an attribute of the caller's choosing.
 func mustActionEvent(fn, event string) {
-	if !actionEvent.MatchString(event) {
+	if !render.ValidEventKey(event) {
 		panic("via: " + fn + " event name " + strconv.Quote(event) +
 			` must be lower-case letters and digits, optionally joined by ':', '.' or '-', then Datastar modifiers (such as "click" or "input__debounce.250ms")`)
 	}
@@ -936,7 +988,7 @@ type badActionArg struct{ err error }
 // unrenderedArg is the sentinel for a ?a= that decodes fine but names a value
 // this request's render never bound (→ 410). A sentinel and not a dispatch-site
 // check because the distinction only exists once the arg is decoded into T:
-// dispatch has no T, the slot's own closure does.
+// dispatch has no T; the arg's ArgCall decodes it in action.run.
 type unrenderedArg struct {
 	name string
 	raw  string
@@ -956,7 +1008,7 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // claimed action slot. Written raw, not via h.Data: the value is a Datastar
 // expression whose single quotes must survive verbatim, and every byte of it is
 // via-generated or checked (fixed template, an event name bind and bindArg hold to
-// actionEvent, hashed id, url-encoded arg), so no attribute-breaking byte
+// render.ValidEventKey, hashed id, url-encoded arg), so no attribute-breaking byte
 // reaches it. The colon spelling is
 // mandatory — see h.Data.
 //
@@ -974,11 +1026,8 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // over that action's opts.headers) — no inheritance, no config hook, so a
 // header would cost 33 bytes on every binding.
 func writeActionAttr(r *render.Renderer, ctx *Ctx, event, idx, arg string) {
-	path := "/_via/a/" + rootAddr + "/" + idx
-	if ctx != nil {
-		path = actionPath(ctx, idx) // mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}
-	}
-	path, query, _ := strings.Cut(path, "?")
+	// Mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}.
+	path, query, _ := strings.Cut(actionPath(ctx, idx), "?")
 	if arg != "" && query != "" {
 		query += "&"
 	}

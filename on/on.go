@@ -22,7 +22,6 @@ package on
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -35,7 +34,9 @@ import (
 
 // Bound is an action with its argument attached, made by [Bind].
 type Bound struct {
-	bind func(event string) h.Attr
+	fn   any // the user's func(*via.Ctx, T): the action's identity
+	arg  any
+	call render.ArgCall
 }
 
 // Bind attaches arg to fn, so the row's own datum rides with the event and the
@@ -66,25 +67,54 @@ type Bound struct {
 // goes stale the moment any push re-renders the button, and the click already
 // in flight 410s. Read changing state from the composition in an argless
 // handler instead.
+//
+// An arg that does not encode as JSON, or encodes as null (a nil slice, map or
+// pointer), drops the binding and logs a warning.
 func Bind[T any](fn func(*via.Ctx, T), arg T) Bound {
-	decode := func(raw []byte) (any, error) {
-		var v T
-		if err := json.Unmarshal(raw, &v); err != nil {
-			return nil, err
-		}
-		return func(rc *via.Ctx) { fn(rc, v) }, nil
+	if fn == nil {
+		panic("on: nil handler")
 	}
-	return Bound{bind: func(event string) h.Attr {
-		return render.DynAttr(func(r *render.Renderer) {
-			if b := r.Binder(); b != nil {
-				b.ArgAction(r, event, fn, arg, decode)
-			}
-		})
-	}}
+	return Bound{fn: fn, arg: arg, call: argCall[T]{fn}}
+}
+
+type argCall[T any] struct{ fn func(*via.Ctx, T) }
+
+func (argCall[T]) Decode(raw []byte) (any, error) {
+	var v T
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+func (c argCall[T]) Call(ctx, v any) { c.fn(ctx.(*via.Ctx), v.(T)) }
+
+// boundAttr renders a Bound's binding for one event.
+type boundAttr struct {
+	event string
+	b     Bound
+}
+
+func (a boundAttr) RenderTo(r *render.Renderer) {
+	if b := r.Binder(); b != nil {
+		b.ArgAction(r, a.event, a.b.fn, a.b.arg, a.b.call)
+	}
+}
+
+// actionAttr renders an argless action's binding for one event.
+type actionAttr struct {
+	event string
+	fn    func(*via.Ctx)
+}
+
+func (a actionAttr) RenderTo(r *render.Renderer) {
+	if b := r.Binder(); b != nil {
+		b.Action(r, a.event, a.fn)
+	}
 }
 
 // Option is a Datastar event modifier.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type config struct {
 	debounce, throttle                     time.Duration
@@ -96,30 +126,72 @@ type config struct {
 // rounded up to the next millisecond.
 func WithDebounce(d time.Duration) Option {
 	mustPositive("WithDebounce", d)
-	return func(c *config) { c.debounce = setDuration("WithDebounce", c.debounce, d) }
+	return debounceOption{d}
+}
+
+type debounceOption struct {
+	d time.Duration
+}
+
+func (o debounceOption) apply(c *config) {
+	c.debounce = setDuration("WithDebounce", c.debounce, o.d)
 }
 
 // WithThrottle runs the handler at most once per d, rounded up to the next
 // millisecond.
 func WithThrottle(d time.Duration) Option {
 	mustPositive("WithThrottle", d)
-	return func(c *config) { c.throttle = setDuration("WithThrottle", c.throttle, d) }
+	return throttleOption{d}
+}
+
+type throttleOption struct {
+	d time.Duration
+}
+
+func (o throttleOption) apply(c *config) {
+	c.throttle = setDuration("WithThrottle", c.throttle, o.d)
 }
 
 // WithOnce removes the listener after its first run.
-func WithOnce() Option { return func(c *config) { c.once = true } }
+func WithOnce() Option { return optOnce }
 
 // WithPrevent calls preventDefault on the event.
-func WithPrevent() Option { return func(c *config) { c.prevent = true } }
+func WithPrevent() Option { return optPrevent }
 
 // WithStop calls stopPropagation on the event.
-func WithStop() Option { return func(c *config) { c.stop = true } }
+func WithStop() Option { return optStop }
 
 // WithOutside fires only for events whose target is outside the element.
-func WithOutside() Option { return func(c *config) { c.outside = true } }
+func WithOutside() Option { return optOutside }
 
 // WithWindow listens on window instead of the element.
-func WithWindow() Option { return func(c *config) { c.onWindow = true } }
+func WithWindow() Option { return optWindow }
+
+// flagOption sets one of config's boolean modifiers.
+type flagOption uint8
+
+const (
+	optOnce flagOption = iota
+	optPrevent
+	optStop
+	optOutside
+	optWindow
+)
+
+func (f flagOption) apply(c *config) {
+	switch f {
+	case optOnce:
+		c.once = true
+	case optPrevent:
+		c.prevent = true
+	case optStop:
+		c.stop = true
+	case optOutside:
+		c.outside = true
+	case optWindow:
+		c.onWindow = true
+	}
+}
 
 // WithModifier appends a Datastar modifier package on has no option for, such
 // as "delay.300ms", "passive" or "viewtransition". raw is the modifier name
@@ -129,16 +201,19 @@ func WithModifier(raw string) Option {
 	if typed, ok := modeled[strings.SplitN(raw, ".", 2)[0]]; ok {
 		panic(fmt.Sprintf("on: WithModifier(%q): use on.%s", raw, typed))
 	}
-	if !modifier.MatchString(raw) {
+	if !render.ValidModifier(raw) {
 		panic(fmt.Sprintf(`on: WithModifier(%q) must be a lower-case modifier name, optionally followed by '.'-separated lower-case letters and digits (such as "delay.300ms")`, raw))
 	}
-	return func(c *config) { c.raw = append(c.raw, raw) }
+	return modifierOption{raw}
 }
 
-// modifier is one segment of Datastar's "__"-split modifier list, which it
-// splits again on '.' into a name and tags. Tags are held to the modifier
-// grammar via's action binding accepts.
-var modifier = regexp.MustCompile(`^[a-z]+(?:\.[a-z0-9]+)*$`)
+type modifierOption struct {
+	raw string
+}
+
+func (o modifierOption) apply(c *config) {
+	c.raw = append(c.raw, o.raw)
+}
 
 var modeled = map[string]string{
 	"debounce": "WithDebounce", "throttle": "WithThrottle", "once": "WithOnce",
@@ -158,12 +233,8 @@ func setDuration(name string, have, d time.Duration) time.Duration {
 	return d
 }
 
-// eventName admits no quote or space, which would break out of the attribute,
-// and no "__", which Datastar would read as a modifier.
-var eventName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[:.-][a-z0-9]+)*$`)
-
 func mustEventName(name string) {
-	if !eventName.MatchString(name) {
+	if !render.ValidEventName(name) {
 		panic(fmt.Sprintf(`on: event name %q must be lower-case letters and digits, optionally joined by ':', '.' or '-' (such as "click" or "via:patch")`, name))
 	}
 }
@@ -173,7 +244,7 @@ func mustEventName(name string) {
 func key(event string, opts []Option) string {
 	var c config
 	for _, o := range opts {
-		o(&c)
+		o.apply(&c)
 	}
 	if c.debounce > 0 {
 		event += "__debounce." + millis(c.debounce)
@@ -199,7 +270,11 @@ func key(event string, opts []Option) string {
 // "1.5ms" would read as the tags "1" and "5ms", and a positive d must not
 // become 0.
 func millis(d time.Duration) string {
-	return strconv.FormatInt(int64((d+time.Millisecond-1)/time.Millisecond), 10) + "ms"
+	ms := d / time.Millisecond
+	if d%time.Millisecond != 0 {
+		ms++ // after the division, so a d near the maximum cannot overflow
+	}
+	return strconv.FormatInt(int64(ms), 10) + "ms"
 }
 
 // Event posts fn on the named DOM event, for events without their own
@@ -209,16 +284,15 @@ func Event[F func(*via.Ctx) | Bound](name string, fn F, opts ...Option) h.Attr {
 	k := key(name, opts)
 	switch f := any(fn).(type) {
 	case func(*via.Ctx):
-		return render.DynAttr(func(r *render.Renderer) {
-			if b := r.Binder(); b != nil {
-				b.Action(r, k, f)
-			}
-		})
+		if f == nil {
+			panic("on: nil handler")
+		}
+		return render.DynAttr(actionAttr{event: k, fn: f})
 	case Bound:
-		if f.bind == nil {
+		if f.call == nil {
 			panic("on: zero Bound; build one with on.Bind")
 		}
-		return f.bind(k)
+		return render.DynAttr(boundAttr{event: k, b: f})
 	}
 	panic("unreachable")
 }

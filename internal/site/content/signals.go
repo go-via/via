@@ -46,7 +46,7 @@ func (p *Signals) View() h.H {
 			[]h.H{API("topic.Topic"), h.Str("server"), h.Str("per process; fan-out to every Ctx.Listen on it")},
 		),
 		h.P(h.Str("Signal and SignalCS are covered below. The server-side handles are on "),
-			h.A(h.Href(d.Href("/live")), h.Str("Live state")), h.Str(".")),
+			d.Link("/live", "Live state"), h.Str(".")),
 
 		d.H2("Wire names"),
 		snippet.Region("signals/names.go", "names"),
@@ -98,7 +98,7 @@ func (p *Signals) View() h.H {
 		demo.Card(d.H3("Server seed"),
 			h.P(API("via.Signal.Set"), h.Str(" writes the value and declares the signal, so the View need not render it. "+
 				"A Set in OnInit puts the server clock in the first paint, and the action sets it again. "+
-				"The action's response carries only the signals it wrote, so an input the user is editing is not overwritten.")),
+				"The action's response carries the signals it wrote and any the new render added, never one it left alone, so an input the user is editing is not overwritten.")),
 			via.Child(p.Seed), "seed.go",
 			demo.Try(h.Str("Click read the clock and open the Wire pane: one POST, and a patch carrying the new signal value."))),
 		h.P(h.Str("A JavaScript island gets data from Go the same way: Set a signal the island reads, and no element has to spell the value out. "+
@@ -132,27 +132,28 @@ func (p *Signals) View() h.H {
 	)
 }
 
+func exprCode(e expr.Expr) h.H { return h.Code(h.Str(e.String())) }
+
 func exprTable() h.H {
 	n, open, name := expr.Expr("$count"), expr.Expr("$_open"), expr.Expr("$name")
 	a, b := expr.Expr("$a"), expr.Expr("$b")
-	out := func(e expr.Expr) h.H { return h.Code(h.Str(e.String())) }
 	return table([]string{"Helper", "Produces", "Notes"},
-		[]h.H{APIText("via.Signal.Ref", "Ref"), out(n), h.Str("the signal; a SignalCS ref starts with $_")},
-		[]h.H{API("expr.Val"), out(expr.Val("@post(")), h.Str("any JSON-encodable Go value as a literal, @ escaped")},
+		[]h.H{APIText("via.Signal.Ref", "Ref"), exprCode(n), h.Str("the signal; a SignalCS ref starts with $_")},
+		[]h.H{API("expr.Val"), exprCode(expr.Val("@post(")), h.Str("any JSON-encodable Go value as a literal, @ escaped")},
 		[]h.H{h.Span(APIText("expr.Expr.Eq", "Eq"), h.Str(" "), APIText("expr.Expr.Ne", "Ne"), h.Str(" "),
 			APIText("expr.Expr.Lt", "Lt"), h.Str(" "), APIText("expr.Expr.Le", "Le"), h.Str(" "),
 			APIText("expr.Expr.Gt", "Gt"), h.Str(" "), APIText("expr.Expr.Ge", "Ge")),
-			out(n.Gt(10)), h.Str("Eq and Ne are strict === and !==")},
-		[]h.H{APIText("expr.Expr.Not", "Not"), out(open.Not()), h.Str("")},
-		[]h.H{APIText("expr.Expr.Assign", "Assign"), out(name.Assign("")), h.Str("receiver must be a bare signal ref")},
-		[]h.H{APIText("expr.Expr.Add", "Add"), out(n.Add(1)), h.Str("in place; there is no a + b")},
-		[]h.H{APIText("expr.Expr.Toggle", "Toggle"), out(open.Toggle()), h.Str("in place")},
-		[]h.H{h.Span(API("expr.All"), h.Str(" "), API("expr.Any")), out(expr.All(n.Gt(0), open)), h.Str("&& and ||, operands grouped")},
-		[]h.H{API("expr.Do"), out(expr.Do(n.Add(1), open.Toggle())), h.Str("statements in sequence")},
-		[]h.H{API("expr.Call"), out(expr.Call("console.log", n)), h.Str("a function by dotted name")},
-		[]h.H{API("expr.Class"), out(expr.Class("copied", true)), h.Str("on the element the attribute sits on")},
-		[]h.H{API("expr.CopyToClipboard"), out(expr.CopyToClipboard(name)), h.Str("secure context and a click only")},
-		[]h.H{API("expr.CopyTextOf"), out(expr.CopyTextOf("pre")), h.Str("first match inside the element's parent")},
-		[]h.H{h.Span(API("expr.Raw"), h.Str(" "), API("expr.Rawf")), out(expr.Rawf("(%s + %s)", a, b)), h.Str("text unchecked, %s args spliced as-is")},
+			exprCode(n.Gt(10)), h.Str("Eq and Ne are strict === and !==")},
+		[]h.H{APIText("expr.Expr.Not", "Not"), exprCode(open.Not()), h.Str("")},
+		[]h.H{APIText("expr.Expr.Assign", "Assign"), exprCode(name.Assign("")), h.Str("receiver must be a bare signal ref")},
+		[]h.H{APIText("expr.Expr.Add", "Add"), exprCode(n.Add(1)), h.Str("in place; there is no a + b")},
+		[]h.H{APIText("expr.Expr.Toggle", "Toggle"), exprCode(open.Toggle()), h.Str("in place")},
+		[]h.H{h.Span(API("expr.All"), h.Str(" "), API("expr.Any")), exprCode(expr.All(n.Gt(0), open)), h.Str("&& and ||, operands grouped")},
+		[]h.H{API("expr.Do"), exprCode(expr.Do(n.Add(1), open.Toggle())), h.Str("statements in sequence")},
+		[]h.H{API("expr.Call"), exprCode(expr.Call("console.log", n)), h.Str("a function by dotted name")},
+		[]h.H{API("expr.Class"), exprCode(expr.Class("copied", true)), h.Str("on the element the attribute sits on")},
+		[]h.H{API("expr.CopyToClipboard"), exprCode(expr.CopyToClipboard(name)), h.Str("secure context and a click only")},
+		[]h.H{API("expr.CopyTextOf"), exprCode(expr.CopyTextOf("pre")), h.Str("first match inside the element's parent")},
+		[]h.H{h.Span(API("expr.Raw"), h.Str(" "), API("expr.Rawf")), exprCode(expr.Rawf("(%s + %s)", a, b)), h.Str("text unchecked, %s args spliced as-is")},
 	)
 }

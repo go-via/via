@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -106,7 +105,7 @@ func (m *mixedChild) View() h.H {
 	)
 }
 
-func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) {
+func TestLive_tickAndListenFramesShareOneStreamAndDisposeRuns(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		room := topic.New[string]()
 		done := make(chan struct{})
@@ -118,12 +117,7 @@ func TestLive_tickAndSubscribeShareOneChildLoopAndTearDownCleanly(t *testing.T) 
 		awaitLine(t, lines, "last: from-topic") // a sub frame flows alongside ticks
 
 		cancel() // disconnect while the ticker is running
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "OnDispose did not run when a ticking, subscribed child disconnected")
-		}
+		<-done   // OnDispose never running fails the bubble as a deadlock
 	})
 }
 
@@ -175,24 +169,17 @@ func TestLive_failedInitRunsNeitherHalfOfThePair(t *testing.T) {
 
 func TestLive_onDisposeRunsWhenClientDisconnects(t *testing.T) {
 	t.Parallel()
-	done := make(chan struct{})
 	synctest.Test(t, func(t *testing.T) {
+		done := make(chan struct{}) // made in the bubble, so a wait on it is durable
 		srv := liveServer(t, via.Handler(disposeProbe{disposed: done}))
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
-		synctest.Wait()
+		// Blocking, not a check after synctest.Wait: the client transport may
+		// hold the connection through its post-close drain window first. A
+		// disposer that never runs fails the bubble as a deadlock.
+		<-done
 	})
-
-	// The stream goroutine runs on a real httptest listener, outside the
-	// bubble: synctest.Wait() only settles bubble goroutines, so the
-	// OS delivering the close can still be in flight after it returns. This
-	// wait runs after the bubble, in real wall-clock time.
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		require.Fail(t, "OnDispose did not run on disconnect")
-	}
 }
 
 // panicThenDisposeProbe registers two disposers — the first always panics —
@@ -219,13 +206,7 @@ func TestLive_onDisposeContinuesAfterAPanickingDisposer(t *testing.T) {
 
 		_, cancel := openStream(t, srv)
 		cancel() // disconnect
-		synctest.Wait()
-
-		select {
-		case <-done:
-		default:
-			require.Fail(t, "the disposer after the panicking one did not run")
-		}
+		<-done   // a disposer that never runs fails the bubble as a deadlock; see above
 	})
 }
 
@@ -375,10 +356,7 @@ func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(reTicker{}))
@@ -412,10 +390,7 @@ func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
 
 func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	room := topic.New[string]()
 	synctest.Test(t, func(t *testing.T) {
@@ -451,10 +426,7 @@ func (r *lateRegistrar) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_onConnectAndOnDisposeAfterConnectAreLoudNoOps(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(lateRegistrar{}))
@@ -1215,13 +1187,15 @@ func (p *connectNoop) onN(ctx *via.Ctx, n int) { p.N.Set(n) }
 func (p *connectNoop) View() h.H               { return h.P(h.Str("n: "), p.N.Display()) }
 
 func TestConnect_anOnConnectThatChangesNothingShipsNoFrame(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(connectNoop{bus: topic.New[int]()}))
-	conn := app.Connect()
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(connectNoop{bus: topic.New[int]()}))
+		conn := app.Connect()
 
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: "),
-		"an OnConnect fn that changes nothing must not ship an element patch")
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: "),
+			"an OnConnect fn that changes nothing must not ship an element patch")
+	})
 }
 
 // A push whose render is byte-identical to the last one ships no frame.
@@ -1261,24 +1235,27 @@ func countFrames(c *vt.Conn, needle string) int {
 }
 
 func TestConnect_anUnchangedTickRenderShipsNoFrame(t *testing.T) {
-	t.Parallel()
-	want := &atomic.Int64{}
-	app := vt.Serve(t, via.Handler(unchangedTick{want: want}))
-	conn := app.Connect()
+	synctest.Test(t, func(t *testing.T) {
+		want := &atomic.Int64{}
+		app := vt.Serve(t, via.Handler(unchangedTick{want: want}))
+		conn := app.Connect()
 
-	require.Contains(t, conn.Await("n: "), "n: 0", "the first push always ships")
+		require.Contains(t, conn.Await("n: "), "n: 0", "the first push always ships")
 
-	// ~40 further ticks, every one of them rendering the same bytes.
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: 0"),
-		"an unchanged tick render must not ship an element patch")
+		// ~40 further ticks, every one of them rendering the same bytes.
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: 0"),
+			"an unchanged tick render must not ship an element patch")
 
-	// A real change still ships — exactly once.
-	want.Store(7)
-	require.Contains(t, conn.Await("n: 7"), "n: 7")
-	time.Sleep(200 * time.Millisecond)
-	assert.Zero(t, countFrames(conn, "n: 7"),
-		"the ticks after the change repeat the same bytes and must ship nothing")
+		// A real change still ships — exactly once.
+		want.Store(7)
+		conn.Await("n: 7")
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Zero(t, countFrames(conn, "n: 7"),
+			"the ticks after the change repeat the same bytes and must ship nothing")
+	})
 }
 
 // actionTicker is live via a Listen on a topic nothing publishes to, so its
@@ -1310,10 +1287,7 @@ func (a *actionTicker) View() h.H {
 
 func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	beats := &atomic.Int64{}
 	synctest.Test(t, func(t *testing.T) {
@@ -1356,10 +1330,7 @@ func (p *plainTicker) View() h.H {
 
 func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	beats := &atomic.Int64{}
 	app := vt.Serve(t, via.Handler(plainTicker{beats: beats}))
@@ -1405,7 +1376,10 @@ type reloadRegistrar struct {
 	hook string
 	room *topic.Topic[int]
 	n    int
+	N    via.State[int]
 }
+
+func (r *reloadRegistrar) load() int { return 0 }
 
 func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
 	switch r.hook {
@@ -1415,6 +1389,10 @@ func (r *reloadRegistrar) OnReload(ctx *via.Ctx) error {
 		ctx.Listen(r.room, r.recv)
 	case "OnConnect":
 		ctx.OnConnect(r.stop)
+	case "OnDispose":
+		ctx.OnDispose(r.stop)
+	case "Track":
+		r.N.Track(ctx, r.room, r.load)
 	}
 	return nil
 }
@@ -1456,4 +1434,87 @@ func TestOnConnect_warnsWhenCalledFromOnReload(t *testing.T) {
 	t.Parallel()
 	assert.Contains(t, fireReloadRegistrar(t, "OnConnect"), "via: OnConnect called from OnReload — ignored",
 		"an OnConnect from OnReload registers nothing, and must say so like a late Track does")
+}
+
+func TestTrack_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "Track"), "via: Track called from OnReload — ignored",
+		"a Track from OnReload registers nothing, and must say so by name")
+}
+
+func TestOnDispose_warnsWhenCalledFromOnReload(t *testing.T) {
+	t.Parallel()
+	assert.Contains(t, fireReloadRegistrar(t, "OnDispose"), "via: OnDispose called from OnReload — ignored",
+		"an OnDispose from OnReload registers nothing, and must say so like a late Track does")
+}
+
+// nilTick registers a Tick with no handler, a wiring slip the beat surfaces as
+// a logged panic rather than a silent no-op.
+type nilTick struct{ N via.State[int] }
+
+func (p *nilTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, nil)
+	return nil
+}
+func (p *nilTick) View() h.H { return h.P(p.N.Display()) }
+
+func TestTick_aNilHandlerPanicsOnTheBeatAndSaysSo(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		srv := liveServer(t, via.Handler(nilTick{}, logTo(&out)))
+		_, cancel := openStream(t, srv)
+		defer cancel()
+		time.Sleep(20 * time.Millisecond)
+		synctest.Wait()
+		assert.Contains(t, out.String(), "live push panic", "a nil Tick handler must not run silently")
+	})
+}
+
+type ctxKeeper struct {
+	n   via.State[int]
+	got chan context.Context
+}
+
+func (p *ctxKeeper) Keep(ctx *via.Ctx) { p.n.Set(p.n.Get() + 1); p.got <- ctx.Context() }
+
+func (p *ctxKeeper) View() h.H { return h.Div(p.n.Display(), h.Button(on.Click(p.Keep))) }
+
+func TestLive_anActionsContextIsTheStreamsNotThePOSTs(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		got := make(chan context.Context, 1)
+		app := vt.Serve(t, via.Handler(ctxKeeper{got: got}))
+		conn := app.Connect()
+		code, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		<-got
+		conn.Await(">1<")
+		// The second action runs on the unit the first one's push rebuilt.
+		code, _ = app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		actx := <-got
+
+		require.NoError(t, actx.Err(), "the context must outlive the POST that ran the action")
+		conn.Close()
+		synctest.Wait()
+		assert.Error(t, actx.Err(), "and end with the tab's stream")
+	})
+}
+
+type connectSetsSignal struct {
+	S via.Signal[int]
+	n via.State[int]
+}
+
+func (p *connectSetsSignal) OnInit(ctx *via.Ctx) error {
+	ctx.OnConnect(func() { p.S.Set(7) })
+	return nil
+}
+
+func (p *connectSetsSignal) View() h.H { return h.Div(h.Input(p.S.Bind()), p.n.Display()) }
+
+func TestLive_aSignalSetInOnConnectReachesTheClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(connectSetsSignal{}))
+		app.Connect().Await(`"s":7`)
+	})
 }

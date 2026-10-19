@@ -24,6 +24,7 @@ const tsForbidden = `403 forbidden origin`
 const tsGoneBodies = `410 no such action cGAmF8Xg; this render does not bind it
 410 this render does not bind that action for that argument
 410 no such child
+410 stream closed
 410 this tab id has no open stream for this page: the connection closed, or the id belongs to a page that is gone — reload
 410 this action needs the page's tab id and the request carried no viatab signal: the page never opened its stream, or the id was filtered out`
 
@@ -52,7 +53,11 @@ const tsUnavailable = `503 stream capacity reached
 level=WARN msg="via: refusing an SSE connect with 503: the router is at its live-stream cap. There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it." open=10000 cap=10000
 
 503 stream busy
-level=WARN msg="via: tab pinned — its stream goroutine is inside a Tick, Listen, OnConnect or action handler, so its keepalives have stopped too and every action on this tab answers 503 until it returns. Move blocking work off the handler."`
+level=WARN msg="via: tab pinned — its stream goroutine is inside a Tick, Listen or action handler, so its keepalives have stopped too and every action on this tab answers 503 until it returns. Move blocking work off the handler."
+
+503 server shutting down
+
+503 too many actions waiting for their stream`
 
 const tsBlocked = `Executing inline script violates the following Content Security Policy directive 'script-src 'self''. Either the 'unsafe-inline' keyword, a hash ('sha256-…'), or a nonce ('nonce-...') is required to enable inline execution.
 Uncaught Error: Blocked by CSP.`
@@ -60,7 +65,7 @@ Uncaught Error: Blocked by CSP.`
 const tsEval = `EvalError: Refused to evaluate a string as JavaScript because 'unsafe-eval' is not an allowed source of script`
 
 func tsSee(d *shell.Doc, path, label string) h.H {
-	return h.P(h.Str("See "), h.A(h.Href(d.Href(path)), h.Str(label)), h.Str("."))
+	return h.P(h.Str("See "), d.Link(path, label), h.Str("."))
 }
 
 func (p *Troubleshooting) View() h.H {
@@ -80,8 +85,6 @@ func (p *Troubleshooting) View() h.H {
 				h.Str(", which fails. List it.")),
 			h.Li(h.Str("A proxy that strips "), Code("Sec-Fetch-*"), h.Str(" or rewrites "), Code("Host"),
 				h.Str(" to the upstream address. nginx needs "), Code("proxy_set_header Host $host;"), h.Str(".")),
-			h.Li(h.Str("An empty origin read from the environment, like the "), Code("VIA_ORIGIN"),
-				h.Str(" the Deploy page's main.go reads, so the listed value is not the site's.")),
 		),
 		snippet.Region("troubleshooting/limits.go", "origin", snippet.Title("main.go"), snippet.Mark("app.example.com")),
 		h.P(h.Str("A 403 with the body "), Code("session mismatch"), h.Str(" is a different check: a live action carried a "+
@@ -119,7 +122,8 @@ func (p *Troubleshooting) View() h.H {
 			"child. A 410 means the render the server last ran no longer contains what the client clicked: the button "+
 			"sits inside a "), API("via.When"), h.Str(" that is now closed, the "), API("on.Bind"),
 			h.Str(" argument changed since the page was drawn, or the "), API("via.Child"),
-			h.Str(" moved. The two stream messages are a live unit's action with no open stream behind it.")),
+			h.Str(" moved. The three stream messages are a live unit's action with no open stream behind it; "),
+			Code("stream closed"), h.Str(" means via itself ended that tab's stream.")),
 		h.Ul(
 			h.Li(h.Str("Bind a stable key as the argument, a row's primary key, never a position, count or cursor.")),
 			h.Li(h.Str("Gate "), API("via.When"), h.Str(" on session or database state, and keep any When around a "),
@@ -127,14 +131,15 @@ func (p *Troubleshooting) View() h.H {
 			h.Li(h.Str("On a plain page, a handler that exists only inside a branch opened by a bound Signal always 410s: "+
 				"the render that authorises runs before the posted signals apply. Move the handler outside the branch.")),
 		),
-		h.P(h.Str("The browser reloads the tab on its own after a 410, with a \"Page is out of date - reloading…\" banner. "+
+		h.P(h.Str("On a page with a live unit the browser reloads the tab on its own after a 410, with a \"Page is out of date - reloading…\" banner; "+
+			"a plain page ships no reconnect script, so nothing shows until the user reloads. "+
 			"An action for a live tab whose stream is still connecting, or reconnecting, waits up to 2 seconds (less if "),
 			API("via.WithPinnedDeadline"), h.Str(" is shorter) for it, and answers 410 only if the stream has not come by then. "+
 				"When via ended the stream itself, the 410 comes at once.")),
 		tsSee(d, "/actions#arguments", "Actions: Arguments"),
 
 		d.H2("A Disconnected banner, or the tab keeps reloading"),
-		h.P(h.Str("via's reconnect script shows a banner at the top of the page. What each state means:")),
+		h.P(h.Str("On a page with a live unit, via's reconnect script shows a banner at the top of the page. What each state means:")),
 		table([]string{"Banner", "Cause", "What happens next"},
 			[]h.H{h.Str("Reconnecting…"), h.Str("The network dropped the stream."), h.Str("The browser retries; the banner clears on the next patch.")},
 			[]h.H{h.Str("Disconnected."), h.Str("The stream ended cleanly: a deploy, a restart, Router.Close."),
@@ -148,7 +153,7 @@ func (p *Troubleshooting) View() h.H {
 			Code("data-via-connection"), h.Str(" alone; Datastar fires a "), Code("datastar-fetch"),
 			h.Str(" error event on the element that made the request, for a message of your own.")),
 		h.P(h.Str("A banner right after every deploy is expected; state that lives only in a "), API("via.State"),
-			h.Str(" starts over, since a reconnect is a new connection. A Disconnected banner that stays on first load is a stream "+
+			h.Str(" starts over, since the page reloads into a new tab. A Disconnected banner that stays on first load is a stream "+
 				"connect answering 403, or a 5xx on every reload: read the Network tab for the status and find it on this page. The reload count clears 5 seconds after a "+
 				"load, so a server that fails straight after every reload stops at two.")),
 		tsSee(d, "/live#connection-lifecycle", "Live state: Connection lifecycle"),
@@ -224,8 +229,14 @@ func (p *Troubleshooting) View() h.H {
 				"rest. Do slow work in a goroutine and publish the result back through a topic. When the line says "),
 			Code("blocked writing a frame to a client that is not reading"),
 			h.Str(" instead, no handler is at fault: the browser stopped reading, and the stream closes once the 10 s "+
-				"write deadline passes. A 503 with "),
+				"write deadline passes. When it says "),
+			Code("waiting on the session store"), h.Str(", the keepalive's session check is stuck on a slow "), API("via.SessionStore"),
+			h.Str("; "), API("via.WithSessionStoreTimeout"), h.Str(" bounds it. A 503 with "),
 			Code("session store unavailable"), h.Str(" is a "), API("via.SessionStore"), h.Str(" that failed to load.")),
+		h.P(Code("server shutting down"), h.Str(" answers a connect or a waiting action once "), API("via.Router.Close"),
+			h.Str(" has run. "), Code("too many actions waiting for their stream"),
+			h.Str(" is the router-wide cap on actions waiting for a tab's stream to connect, which follows "),
+			API("via.WithMaxSSEConn"), h.Str(" up to 1,024; the log line says so once a minute.")),
 		tsSee(d, "/security#request-limits", "Sessions & security › Request limits"),
 
 		d.H2("Error: Blocked by CSP"),
@@ -246,10 +257,10 @@ func (p *Troubleshooting) View() h.H {
 
 		d.H2("Copy to clipboard does nothing"),
 		h.P(API("expr.CopyToClipboard"), h.Str(" and "), API("expr.CopyTextOf"), h.Str(" call "),
-			Code("navigator.clipboard.writeText"), h.Str(" and swallow a refused write, so it fails with nothing in the "+
+			Code("navigator.clipboard?.writeText"), h.Str(" and swallow a refused write, so it fails with nothing in the "+
 				"console. Browsers allow it in a secure context (HTTPS, or "), Code("localhost"),
 			h.Str("), from a user gesture, in a focused document. Over plain HTTP on a LAN address "),
-			Code("navigator.clipboard"), h.Str(" is undefined and the call throws; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
+			Code("navigator.clipboard"), h.Str(" is undefined and the call does nothing; from "), API("on.LoadCS"), h.Str(" or a background tab the write "+
 				"is refused. Bind it to "), API("on.ClickCS"), h.Str(" and serve over HTTPS.")),
 		tsSee(d, "/signals#expressions", "Signals: Expressions"),
 	)

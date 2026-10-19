@@ -19,37 +19,40 @@ const (
 // site.css names relative to its own fingerprinted URL) gets the current file
 // on the revalidating tier.
 func staticHandler() http.Handler {
-	files := http.StripPrefix("/static/", http.FileServerFS(static.FS))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		path, cache := r.URL.Path, revalidate
-		if fp, rest, ok := fingerprint(path); ok {
-			path = "/static/" + rest
-			if d, ok := shell.Digest(path); ok && d[:8] == fp {
-				cache = immutable
-			}
+	return staticFiles{http.StripPrefix("/static/", http.FileServerFS(static.FS))}
+}
+
+type staticFiles struct{ files http.Handler }
+
+func (sf staticFiles) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	path, cache := r.URL.Path, revalidate
+	if fp, rest, ok := fingerprint(path); ok {
+		path = "/static/" + rest
+		if d, ok := shell.Digest(path); ok && d[:8] == fp {
+			cache = immutable
 		}
-		digest, ok := shell.Digest(path)
-		if !ok {
-			// Every file is in the map, so a miss is a directory or an alias
-			// spelling of a file; FileServerFS would list the one and serve
-			// the other with no ETag or Cache-Control.
-			http.NotFound(w, r)
-			return
-		}
-		etag := `"` + digest + `"`
-		w.Header().Set("ETag", etag)
-		w.Header().Set("Cache-Control", cache)
-		if noneMatch(r.Header.Get("If-None-Match"), etag) {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
-		r2 := *r
-		u := *r.URL
-		u.Path, u.RawPath = path, ""
-		r2.URL = &u
-		files.ServeHTTP(w, &r2)
-	})
+	}
+	digest, ok := shell.Digest(path)
+	if !ok {
+		// Every file is in the map, so a miss is a directory or an alias
+		// spelling of a file; FileServerFS would list the one and serve
+		// the other with no ETag or Cache-Control.
+		http.NotFound(w, r)
+		return
+	}
+	etag := `"` + digest + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", cache)
+	if noneMatch(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	r2 := *r
+	u := *r.URL
+	u.Path, u.RawPath = path, ""
+	r2.URL = &u
+	sf.files.ServeHTTP(w, &r2)
 }
 
 // fingerprint splits "/static/<8 hex>/rest".

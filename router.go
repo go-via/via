@@ -43,14 +43,18 @@ type initer interface{ OnInit(*Ctx) error }
 // committed a mutation. The contract callers read is in the package doc.
 type reloader interface{ OnReload(*Ctx) error }
 
-// ErrNotFound is the sentinel an OnInit returns when the data the page needs no
-// longer exists — the request is honest, so the answer is 404, not 500. Wrap it
+// ErrNotFound is the sentinel an OnInit or OnReload returns when the data the
+// page needs no longer exists — the request is honest, so the answer is 404, not 500. Wrap it
 // freely; errors.Is matches.
 var ErrNotFound = errors.New("via: not found")
 
 // errRedirected means runOnInit already answered with a 303 from a queued
 // Redirect; the caller must stop, like any other non-nil return.
 var errRedirected = errors.New("via: redirected")
+
+func (m *mount) scope(w http.ResponseWriter, req *http.Request) reqScope {
+	return reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
+}
 
 // runOnInit calls v.OnInit on ctx — the same Ctx the render then binds, so a
 // Tick or Listen it registers marks the unit live. The response is still open,
@@ -61,12 +65,10 @@ var errRedirected = errors.New("via: redirected")
 // sse marks the SSE connect, the one transport a Redirect cannot navigate:
 // fetch follows a 303 and would deliver the target page's HTML as the stream
 // body, so a redirect there answers a plain 403 instead.
-func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sse bool) (err error) {
-	ctx.req = req
-	ctx.sessions = sessions
-	ctx.policy = pol
-	ctx.sessW = w
-	ctx.doInit = true // every embedded child's OnInit runs too, inside Child
+func runOnInit(v any, ctx *Ctx, scope reqScope, sse bool) (err error) {
+	ctx.reqScope = scope
+	w, req := scope.sessW, scope.req
+	ctx.doInit = true // every child's OnInit runs too, inside Child
 	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint
 	// its own id — two sibling children writing the session sent two Set-Cookie
@@ -85,47 +87,49 @@ func runOnInit(v any, ctx *Ctx, w http.ResponseWriter, req *http.Request, sessio
 	// page that doesn't exist. Any other panic keeps propagating. One defer with
 	// the redirect below, so a Redirect queued before the miss is never written
 	// ahead of the 404.
-	defer func() {
-		if rec := recover(); rec != nil {
-			if _, isMiss := rec.(paramMiss); !isMiss {
-				panic(rec)
-			}
-			http.Error(w, "not found", http.StatusNotFound)
-			err = ErrNotFound
-			return
-		}
-		if err == nil && ctx.redirect.url != "" {
-			switch refused := ctx.redirect.refusal(); {
-			case sse:
-				http.Error(w, "forbidden", http.StatusForbidden)
-			case refused != "":
-				ctx.logger().Warn("via: OnInit redirect dropped", "redirect", ctx.redirect, "reason", refused)
-				http.Error(w, "init failed", http.StatusInternalServerError)
-			default:
-				http.Redirect(w, req, ctx.redirect.url, http.StatusSeeOther)
-			}
-			err = errRedirected
-		}
-	}()
+	defer answerInit(w, req, ctx, sse, &err)
 	// Deferred rather than cleared after the call so a paramMiss panic unwinds
 	// it too: ticks/subs are snapshotted when OnInit returns — see Tick/Listen.
-	defer func() { ctx.inInit = false }()
+	defer ctx.endInit()
 	ctx.inInit = true
 	oerr := ic.OnInit(ctx)
 	if oerr != nil {
-		noteErr(w, oerr)
-		switch {
-		case errors.Is(oerr, ErrNotFound):
-			http.Error(w, "not found", http.StatusNotFound)
-		case errors.Is(oerr, ErrForbidden):
-			http.Error(w, "forbidden", http.StatusForbidden)
-		default:
-			ctx.logger().Error("via: OnInit failed", "err", oerr)
-			http.Error(w, "init failed", http.StatusInternalServerError)
-		}
-		return oerr
+		answerHookError(ctx.logger(), w, oerr, "via: OnInit failed")
 	}
-	return nil
+	return oerr
+}
+
+// answerInit is runOnInit's deferred answer: a recovered paramMiss becomes a
+// 404, and a Redirect queued by a successful OnInit is written for the
+// transport.
+func answerInit(w http.ResponseWriter, req *http.Request, ctx *Ctx, sse bool, err *error) {
+	if rec := recover(); rec != nil {
+		if _, isMiss := rec.(paramMiss); !isMiss {
+			panic(rec)
+		}
+		noteErr(w, ErrNotFound)
+		http.Error(w, "not found", http.StatusNotFound)
+		*err = ErrNotFound
+		return
+	}
+	if *err == nil && ctx.redirect.url != "" {
+		answerInitRedirect(ctx.logger(), w, req, ctx.redirect, sse)
+		*err = errRedirected
+	}
+}
+
+// answerInitRedirect writes a Redirect queued by OnInit. A stream cannot
+// navigate, so on sse it is refused outright.
+func answerInitRedirect(log *slog.Logger, w http.ResponseWriter, req *http.Request, r redirectTo, sse bool) {
+	switch refused := r.refusal(); {
+	case sse:
+		http.Error(w, "forbidden", http.StatusForbidden)
+	case refused != "":
+		log.Warn("via: OnInit redirect dropped", "redirect", r, "reason", refused)
+		http.Error(w, "init failed", http.StatusInternalServerError)
+	default:
+		http.Redirect(w, req, r.url, http.StatusSeeOther)
+	}
 }
 
 // reloadUnit runs v's OnReload after an action, on a Ctx that registers nothing
@@ -139,24 +143,28 @@ func reloadUnit(v any, ctx *Ctx) (err error) {
 	if !ok {
 		return nil
 	}
-	ctx.reinit = true
+	ctx.inReload = true
 	// A paramMiss means the URL segment no longer decodes — the same 404 the
 	// first OnInit would have answered.
-	defer func() {
-		if rec := recover(); rec != nil {
-			if _, isMiss := rec.(paramMiss); !isMiss {
-				panic(rec)
-			}
-			err = ErrNotFound
-		}
-	}()
+	defer recoverParamMiss(&err)
 	return ic.OnReload(ctx)
 }
 
-// answerReloadFailure answers a failed OnReload the way runOnInit answers a
-// failed OnInit. A queued Redirect is not handled here: the caller
-// routes it through respond, which knows the transport.
-func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
+// recoverParamMiss turns a recovered paramMiss into ErrNotFound and lets any
+// other panic keep propagating.
+func recoverParamMiss(err *error) {
+	if rec := recover(); rec != nil {
+		if _, isMiss := rec.(paramMiss); !isMiss {
+			panic(rec)
+		}
+		*err = ErrNotFound
+	}
+}
+
+// answerHookError answers an error from OnInit or OnReload: ErrNotFound and
+// ErrForbidden by their status, anything else logged under failed and
+// answered 500. A queued Redirect is not handled here.
+func answerHookError(log *slog.Logger, w http.ResponseWriter, err error, failed string) {
 	noteErr(w, err)
 	switch {
 	case errors.Is(err, ErrNotFound):
@@ -164,7 +172,7 @@ func answerReloadFailure(log *slog.Logger, w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrForbidden):
 		http.Error(w, "forbidden", http.StatusForbidden)
 	default:
-		log.Error("via: OnReload after an action failed", "err", err)
+		log.Error(failed, "err", err)
 		http.Error(w, "init failed", http.StatusInternalServerError)
 	}
 }
@@ -196,20 +204,12 @@ var logLineEscaper = strings.NewReplacer("\n", `\n`, "\r", `\r`)
 // sentinel gets the status it means, anything else is a server fault — logged
 // with its stack, answered 500. sse is runOnInit's flag of the same name.
 func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, rec any, what string, sse bool) {
-	if _, ok := rec.(paramMiss); ok {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
 	if ci, ok := rec.(initOutcome); ok {
 		answerInitFailure(log, w, req, ci, sse)
 		return
 	}
-	if bad, ok := rec.(badActionArg); ok {
-		http.Error(w, "bad action arg: "+bad.err.Error(), http.StatusBadRequest)
-		return
-	}
-	if un, ok := rec.(unrenderedArg); ok {
-		http.Error(w, un.body(log), http.StatusGone)
+	if f := sentinelFail(log, rec); f != nil {
+		f.answer(log, w)
 		return
 	}
 	attrs := []any{"err", rec, "stack", string(debug.Stack())}
@@ -221,30 +221,14 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 	http.Error(w, what+" failed", http.StatusInternalServerError)
 }
 
-// answerInitFailure gives an embedded child's failed OnInit the same answers
+// answerInitFailure gives a child's failed OnInit the same answers
 // the root's gets in runOnInit.
 func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Request, ci initOutcome, sse bool) {
-	switch {
-	case ci.redirect.url != "" && sse:
-		http.Error(w, "forbidden", http.StatusForbidden)
-	case ci.redirect.url != "":
-		if refused := ci.redirect.refusal(); refused != "" {
-			log.Warn("via: OnInit redirect dropped", "redirect", ci.redirect, "reason", refused)
-			http.Error(w, "init failed", http.StatusInternalServerError)
-			return
-		}
-		http.Redirect(w, req, ci.redirect.url, http.StatusSeeOther)
-	case errors.Is(ci.err, ErrNotFound):
-		noteErr(w, ci.err)
-		http.Error(w, "not found", http.StatusNotFound)
-	case errors.Is(ci.err, ErrForbidden):
-		noteErr(w, ci.err)
-		http.Error(w, "forbidden", http.StatusForbidden)
-	default:
-		noteErr(w, ci.err)
-		log.Error("via: OnInit failed", "err", ci.err)
-		http.Error(w, "init failed", http.StatusInternalServerError)
+	if ci.redirect.url != "" {
+		answerInitRedirect(log, w, req, ci.redirect, sse)
+		return
 	}
+	answerHookError(log, w, ci.err, "via: OnInit failed")
 }
 
 // Router serves several via pages, each Mounted at its own path, behind one
@@ -259,42 +243,23 @@ func answerInitFailure(log *slog.Logger, w http.ResponseWriter, req *http.Reques
 // The zero Router is usable and configures itself on first use, like
 // http.ServeMux; reach for [NewRouter] whenever you have options to pass.
 type Router struct {
-	once      sync.Once
-	mux       *http.ServeMux
-	cfg       *config
-	sessions  *sessionManager
-	policy    *routerPolicy
-	reg       *registry // tab id → stream goroutine, app-wide
-	liveCount *atomic.Int64
-	maxLive   int
-	capWarn   atomic.Int64 // see mount.warnAtCapacity
-	// ctx bounds every stream this router opens; Close cancels it and waits on
-	// live, so a stream's own goroutine, its tickers and its disposers are all
-	// finished by the time Close returns.
-	ctx    context.Context
+	routerShared
+	once   sync.Once
+	opts   []Option // NewRouter's, held until build reads them
+	mux    *http.ServeMux
 	cancel context.CancelFunc
-	live   sync.WaitGroup
-	// liveMu orders a stream's live.Add against Close's Wait. Without it a
-	// connect that has passed the ctx.Done check can Add while Close is parked
-	// in Wait, which is a WaitGroup misuse throw.
-	liveMu sync.RWMutex
 	// drained closes once live has drained. One waiter for every Shutdown, so
 	// a call that gives up at its deadline leaves one goroutine behind, not one
 	// per call.
 	drainOnce sync.Once
 	drained   chan struct{}
-	// noChange dedupes the dead-click warning per action (see warnNoChange).
-	// Per Router, not per process, so a second app in the same binary — or a
-	// second test — still gets told.
-	noChange    sync.Map
-	unknownActs idDedupe // see mount.unknownAction
 	// hookWarned dedupes the near-miss hook warning, root's and children's,
 	// per Router for the same reason noChange is.
 	hookWarned sync.Map
 	// errCSP is the router-wide floor an error page renders under; see
 	// WithErrorPage for why it is never a mount's own, wider policy.
-	errCSP      string
-	errPageWarn sync.Once
+	errCSP        string
+	errPageWarned atomic.Bool
 	// datastarEnc caches the Datastar client per Content-Encoding token.
 	datastarEnc sync.Map
 }
@@ -311,24 +276,61 @@ func NewRouter(opts ...Option) *Router {
 // init builds the router's state exactly once, so `new(Router)` works like the
 // zero http.ServeMux instead of nil-dereferencing at the first Mount.
 func (r *Router) init(opts []Option) {
-	r.once.Do(func() {
-		r.cfg = newConfig(opts)
-		r.sessions = newSessionManager(r.cfg)
-		r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
-		r.mux = http.NewServeMux()
-		r.reg = newRegistry(r.cfg.maxSSEConn)
-		r.liveCount = &atomic.Int64{}
-		r.maxLive = r.cfg.maxSSEConn
-		r.ctx, r.cancel = context.WithCancel(context.Background())
-		r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
-		r.mux.HandleFunc("GET /_via/datastar.js", r.serveDatastar)
-	})
+	if opts != nil {
+		r.opts = opts // NewRouter only, before the Router is shared
+	}
+	r.once.Do(r.build)
+}
+
+// via's own routes sit under the mount base. Each path is spelled once here:
+// the mux registers it, rendered markup posts to it, and the error-page
+// wrapper must recognise the stream route to stay out of its way.
+const (
+	streamRoute   = "/_via/sse"
+	actionRoute   = "/_via/a/"
+	datastarRoute = "/_via/datastar.js"
+)
+
+// routerShared is the Router state every mount reads and writes. A mount holds
+// a pointer to it rather than copies of its fields.
+type routerShared struct {
+	cfg       *config
+	sessions  *sessionManager
+	policy    *routerPolicy
+	reg       *registry    // tab id → stream goroutine, app-wide
+	liveCount atomic.Int64 // concurrent SSE streams across the whole router, capped at cfg.maxSSEConn
+	capWarn   perMinute    // see mount.warnAtCapacity
+	// ctx bounds every stream this router opens; Close cancels it and waits on
+	// live, so a stream's own goroutine, its tickers and its disposers are all
+	// finished by the time Close returns.
+	ctx  context.Context
+	live sync.WaitGroup
+	// liveMu orders a stream's live.Add against Close's Wait. Without it a
+	// connect that has passed the ctx.Done check can Add while Close is parked
+	// in Wait, which is a WaitGroup misuse throw.
+	liveMu sync.RWMutex
+	// noChange dedupes the dead-click warning per action (see warnNoChange).
+	// Per Router, not per process, so a second app in the same binary — or a
+	// second test — still gets told.
+	noChange    sync.Map
+	unknownActs idDedupe // see mount.unknownAction
+}
+
+func (r *Router) build() {
+	r.cfg = newConfig(r.opts)
+	r.opts = nil
+	r.sessions = newSessionManager(r.cfg)
+	r.policy = &routerPolicy{trustedOrigins: r.cfg.trustedOrigins, log: r.cfg.log, hookWarned: &r.hookWarned}
+	r.mux = http.NewServeMux()
+	r.reg = newRegistry(r.cfg.maxSSEConn)
+	r.ctx, r.cancel = context.WithCancel(context.Background())
+	r.errCSP = buildCSP(r.cfg.head.Assets, Assets{}, r.cfg.unsafeEval).bare()
+	r.mux.HandleFunc("GET "+datastarRoute, r.serveDatastar)
 }
 
 func (r *Router) serveDatastar(w http.ResponseWriter, req *http.Request) {
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/javascript")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/javascript")
 	body, etag := datastarJS, datastarHash
 	if e, ok := negotiate(req.Header.Get("Accept-Encoding"), r.cfg.pageEnc); ok {
 		body, etag = r.datastarEncoded(e)
@@ -402,7 +404,8 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // normally, so the response terminates cleanly rather than truncating, and
 // each unit's OnDispose runs. An action POST in flight against a closing tab
 // resolves either as its normal response or as 410 Gone, the same answer it
-// gets against a tab that has just disconnected — never silently dropped.
+// gets against a tab that has just disconnected — never silently dropped. One
+// still waiting for its tab's stream to connect answers 503.
 //
 // A goroutine cannot be stopped from outside, so a stream whose Tick, Listen
 // or action handler is blocked ends only when that handler returns. If ctx
@@ -424,13 +427,7 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	r.liveMu.Lock()
 	//lint:ignore SA2001 see above
 	r.liveMu.Unlock()
-	r.drainOnce.Do(func() {
-		r.drained = make(chan struct{})
-		go func() {
-			r.live.Wait()
-			close(r.drained)
-		}()
-	})
+	r.drainOnce.Do(r.startDrain)
 	// select picks at random when both are ready; a drained router with a
 	// done ctx must still answer nil.
 	select {
@@ -447,19 +444,30 @@ func (r *Router) Shutdown(ctx context.Context) error {
 	}
 }
 
+// startDrain closes r.drained once every stream has ended.
+func (r *Router) startDrain() {
+	r.drained = make(chan struct{})
+	go r.awaitDrain()
+}
+
+func (r *Router) awaitDrain() {
+	r.live.Wait()
+	close(r.drained)
+}
+
 // maxUndrainedNamed caps the per-tab lines a Shutdown that timed out writes;
 // ten thousand stuck tabs are one bug, not ten thousand.
 const maxUndrainedNamed = 20
 
 func (r *Router) logUndrained() {
 	named := 0
-	r.reg.each(func(c *tabStream) {
+	for _, c := range r.reg.streams() {
 		named++
 		if named <= maxUndrainedNamed {
 			r.cfg.log.Error("via: Router.Shutdown deadline passed with this tab's stream still running",
 				"tab", c.id, "unit", c.unitType(), "blocked", c.wire.blockedOn())
 		}
-	})
+	}
 	r.cfg.log.Error("via: Router.Shutdown returned before every stream ended; each ends when its handler returns",
 		"open", r.liveCount.Load(), "named", min(named, maxUndrainedNamed))
 }
@@ -478,7 +486,8 @@ func (r *Router) Close() {
 // A page serves its own path only, never a subtree: "/" serves "/", and
 // "/docs/" serves "/docs/" but not "/docs/intro", and ServeMux redirects a GET
 // of "/docs" to it. "/docs" and "/docs/" share one action route, so only one
-// of the two can be mounted. {name} wildcards are allowed; {name...} and {$}
+// of the two can be mounted; mounting both panics with ServeMux's route
+// conflict. {name} wildcards are allowed; {name...} and {$}
 // are not, since the page's action and stream routes live under its path, and
 // {child} and {act} are reserved for the action route. Mount panics on either.
 //
@@ -494,30 +503,22 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	verifyMethodTrampoline()
 	mc := &mountConfig{}
 	for _, opt := range opts {
-		opt(mc)
+		opt.applyMount(mc)
 	}
 	patternBase, names := mountBase(path) // "" / "/profile" / "/thread/{id}"
-	getPattern := patternBase
+	getPattern, pageSuffix := patternBase, ""
 	if patternBase == "" || strings.HasSuffix(path, "/") {
 		// Without the anchor ServeMux would read a trailing slash as a subtree.
 		getPattern += "/{$}"
+		pageSuffix = "/"
 	}
 	rootType := reflect.TypeOf(root)
 	checkViewReceiver(rootType)
 	checkHooks(r.cfg.log, rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
-	// newInst gives every non-generic internal a fresh, correctly-typed root
-	// without carrying T/PT past this function.
-	newInst := func() instance {
-		inst := root
-		return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst),
-			typ: rootType, sig: signalsOf(rootType)}
-	}
 	m := &mount{
-		cfg: r.cfg, sessions: r.sessions, policy: r.policy, reg: r.reg, newInst: newInst,
-		patternBase: patternBase, names: names,
-		liveCount: r.liveCount, maxLive: r.maxLive, noChange: &r.noChange, unknownActs: &r.unknownActs, capWarn: &r.capWarn,
-		routerCtx: r.ctx, live: &r.live, liveMu: &r.liveMu,
+		routerShared: &r.routerShared, root: rootOf[T, PT]{root: root, typ: rootType},
+		patternBase: patternBase, pageSuffix: pageSuffix, names: names,
 	}
 	// The CSP is derived from the root's declaration once, here, off the
 	// zero-data literal: one string per mount, none per request. writeHTMLPage
@@ -535,7 +536,7 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	// would otherwise boot fine and 500 every request.
 	probe := root
 	perturbZeroFields(reflect.ValueOf(&probe).Elem(), rootType.PkgPath(), 0)
-	fp, read := probeAssets(func() Assets { return pageMetaOf(PT(&probe)).Assets })
+	fp, read := probeAssets(PT(&probe))
 	switch {
 	case !read:
 		r.cfg.log.Warn(fmt.Sprintf("via: %s.PageMeta() panicked on synthetic data, so the boot check that "+
@@ -552,29 +553,21 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 			"router-wide with WithHead, or hold it in a package-level var.")
 	}
 
-	if msg := bootRender(newInst()); msg != "" {
+	if msg := bootRender(m.newInst()); msg != "" {
 		panic("via: found at Mount, rendering " + reflect.PointerTo(rootType).String() + " as mounted: " + msg)
 	}
 
-	r.mux.HandleFunc("GET "+getPattern, func(w http.ResponseWriter, req *http.Request) {
-		defer func() {
-			if rec := recover(); rec != nil {
-				recoverToHTTP(r.cfg.log, w, req, rec, "render", false)
-			}
-		}()
-		// concreteBase, not patternBase: a page at /job/{id} must advertise
-		// /job/7/_via/sse. The pattern would be POSTed literally and 404,
-		// leaving every live child under a parametrised mount dead.
-		base := concreteBase(patternBase, req, names)
-		m.writePage(w, req, newInst(), base, nil)
-	})
-	r.mux.HandleFunc("POST "+patternBase+"/_via/a/{child}/{act}", m.dispatch)
-	r.mux.HandleFunc("POST "+patternBase+"/_via/sse", m.connect)
+	r.mux.HandleFunc("GET "+getPattern, m.serveGet)
+	r.mux.HandleFunc("POST "+patternBase+actionRoute+"{child}/{act}", m.dispatch)
+	r.mux.HandleFunc("POST "+patternBase+streamRoute, m.connect)
 }
 
 // mountBase turns a mount path into a ServeMux base plus its {name} segments,
 // in declaration order. "/" → "".
 func mountBase(path string) (base string, names []string) {
+	if !strings.HasPrefix(path, "/") {
+		panic(fmt.Sprintf(`via: Mount path %q must start with "/"; a host or method prefix is not supported`, path))
+	}
 	if path == "/" {
 		return "", nil
 	}
@@ -630,8 +623,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 			" depends on request data; assets must be a constant of the type")
 	}
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/html; charset=utf-8")
 	// Fresh per document, never per mount: a nonce shared across responses is
 	// a token an injection could learn from one page and replay in the next.
 	nonce := randomToken()
@@ -650,32 +642,32 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	// sent (see tabSignal for why the name must stay underscore-free). On a
 	// plain page it stays "" and dispatch falls through to the plain path. A
 	// live page carries its id from the first byte, so a click before the
-	// stream connects already names the tab it will reach. tab is base64url:
-	// nothing in it needs JSON or attribute escaping.
-	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}'`
+	// stream connects already names the tab it will reach.
+	bodyOpen := `<body data-signals='` + tabSignals(tab) + `'`
 	if hasLive {
 		// data-signals first: Datastar applies an element's attributes in
 		// document order, and a data-init ahead of it would post the connect
 		// body before the id is in the store. Attribute-escaped here,
 		// path-escaped in concreteBase — both layers are needed; see
 		// concreteBase.
-		bodyOpen += ` data-init="@post('` + render.EscapeString(base+"/_via/sse") + `')"`
+		bodyOpen += ` data-init="@post('` + render.EscapeString(base+streamRoute) + `')"`
 	}
 	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))
 	bodyOpen += attrString(mergeAttrs(m.cfg.head.BodyAttrs, pageAttrs(m.cfg.log, root, "BodyAttrs", meta.BodyAttrs))) + ">"
-	var head strings.Builder
-	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce, htmlAttrs) + `<head><meta charset="utf-8">`)
-	meta.render(&head)
-	head.WriteString(m.cfg.head.Raw)
-	m.cfg.head.Assets.render(&head)
-	meta.Assets.render(&head)
-	head.WriteString(`<script type="module" src="/_via/datastar.js?v=` + datastarHash + `"></script>` +
+	var pageHead, tail strings.Builder
+	meta.render(&pageHead)
+	meta.Assets.render(&tail)
+	tail.WriteString(`<script type="module" src="` + datastarRoute + `?v=` + datastarHash + `"></script>` +
 		eventsScript() +
-		reconnectScript(hasLive) +
-		bodyOpen)
-	w.Write([]byte(head.String()))
-	w.Write(body)
-	w.Write([]byte(`</body></html>`))
+		reconnectScript(hasLive))
+	m.cfg.head.writeDocument(w, document{
+		nonce:     nonce,
+		htmlAttrs: htmlAttrs,
+		pageHead:  pageHead.String(),
+		tail:      tail.String(),
+		bodyOpen:  bodyOpen,
+		body:      body,
+	})
 }
 
 // pageAttrs rechecks a page's attributes per render, because Mount saw only
@@ -802,7 +794,7 @@ var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
 // also only warns.
 //
 // root says whether t is being mounted. Only the root's PageMeta is read, so a
-// correctly-shaped one on an embedded child is reported: it is a warning and
+// correctly-shaped one on a child is reported: it is a warning and
 // not a panic because the very same type may legitimately be a mounted page
 // elsewhere in the app, and panicking would outlaw that.
 func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
@@ -810,35 +802,58 @@ func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 		return
 	}
 	pt := reflect.PointerTo(t)
-	if _, done := hookSigChecked.Load(t); !done {
-		for _, hook := range hookSpecs {
-			if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
-				panic(render.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
-					withoutReceiver(m.Type) + ", not " + hook.want +
-					" — so the hook will never run"))
-			}
-		}
-		hookSigChecked.Store(t, true)
-	}
+	panicOnMisshapedHooks(t, pt)
 	if _, dup := warned.LoadOrStore(t, true); dup {
 		return
 	}
 	if !root {
-		for _, hook := range hookSpecs {
-			if hook.rootOnly && hook.implements(pt) {
-				log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the MOUNTED page's %s names the document, "+
-					"and %s is embedded. Move it to the root composition, or fold the value into the "+
-					"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
-			}
+		warnRootOnlyHooksOnChild(log, t, pt)
+	}
+	warnLeftoverTitle(log, t, pt)
+	warnMisnamedMethods(log, t, pt)
+}
+
+// panicOnMisshapedHooks panics on a method named like a hook but with the
+// wrong signature. Only a clean pass is memoized, so a type that panics
+// panics every time.
+func panicOnMisshapedHooks(t, pt reflect.Type) {
+	if _, done := hookSigChecked.Load(t); done {
+		return
+	}
+	for _, hook := range hookSpecs {
+		if m, ok := pt.MethodByName(hook.name); ok && !hook.shaped(m.Type) {
+			panic(render.Miswired("via: " + t.String() + "." + hook.name + " has signature " +
+				withoutReceiver(m.Type) + ", not " + hook.want +
+				" — so the hook will never run"))
 		}
 	}
-	// Title was the hook PageMeta replaced. A leftover one is dead code that
-	// still compiles and still looks like it names the page, so say so.
+	hookSigChecked.Store(t, true)
+}
+
+func warnRootOnlyHooksOnChild(log *slog.Logger, t, pt reflect.Type) {
+	for _, hook := range hookSpecs {
+		if hook.rootOnly && hook.implements(pt) {
+			log.Warn(fmt.Sprintf("via: %s.%s is ignored — only the mounted root's %s names the document, "+
+				"and %s is a child. Move it to the mounted root, or fold the value into the "+
+				"root's own %s.", t.String(), hook.name, hook.name, t.String(), hook.name))
+		}
+	}
+}
+
+// warnLeftoverTitle: Title was the hook PageMeta replaced. A leftover one is
+// dead code that still compiles and still looks like it names the page, so
+// say so.
+func warnLeftoverTitle(log *slog.Logger, t, pt reflect.Type) {
 	if m, ok := pt.MethodByName("Title"); ok && stringShaped(m.Type) && !implementsAs[pageMetaer](pt) {
 		log.Warn(fmt.Sprintf("via: %s.Title is no longer a via hook — the document is named by "+
 			"PageMeta() via.Meta now, so nothing will ever call it. Return via.Meta{Title: …} instead.",
 			t.String()))
 	}
+}
+
+// warnMisnamedMethods warns on a method with a hook's exact signature under a
+// name via never calls: the v0.7 OnConnect, or a near-miss of a current hook.
+func warnMisnamedMethods(log *slog.Logger, t, pt reflect.Type) {
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
 		if v07OnConnect(m.Name) && ctxErrShaped(m.Type) {
@@ -908,13 +923,15 @@ func withoutReceiver(mt reflect.Type) string {
 // probeAssets reads the probe copy's assets, reporting read=false if PageMeta
 // refuses the synthetic data. The probe fills fields with values no author
 // promised to accept, so a panic there is the probe's fault, not the page's.
-func probeAssets(read func() Assets) (fp string, ok bool) {
-	defer func() {
-		if recover() != nil {
-			fp, ok = "", false
-		}
-	}()
-	return read().fingerprint(), true
+func probeAssets(probe any) (fp string, ok bool) {
+	defer recoverProbe(&fp, &ok)
+	return pageMetaOf(probe).Assets.fingerprint(), true
+}
+
+func recoverProbe(fp *string, ok *bool) {
+	if recover() != nil {
+		*fp, *ok = "", false
+	}
 }
 
 // perturbZeroFields fills v's zero scalar fields with non-zero values in place,
@@ -942,33 +959,31 @@ func perturbZeroFields(v reflect.Value, pkg string, depth int) {
 		// NewAt: an unexported field is not settable through reflect, and the
 		// fields a page derives its assets from are usually unexported.
 		f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
-		switch f.Kind() {
-		case reflect.Struct:
-			if foreignStruct(f.Type(), pkg) {
-				continue
+		if f.Kind() == reflect.Struct {
+			if !foreignStruct(f.Type(), pkg) {
+				perturbZeroFields(f, pkg, depth+1)
 			}
-			perturbZeroFields(f, pkg, depth+1)
-		case reflect.String:
-			if f.IsZero() {
-				f.SetString("via-probe")
-			}
-		case reflect.Bool:
-			if f.IsZero() {
-				f.SetBool(true)
-			}
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			if f.IsZero() {
-				f.SetInt(1)
-			}
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			if f.IsZero() {
-				f.SetUint(1)
-			}
-		case reflect.Float32, reflect.Float64:
-			if f.IsZero() {
-				f.SetFloat(1)
-			}
+			continue
 		}
+		perturbZeroScalar(f)
+	}
+}
+
+func perturbZeroScalar(f reflect.Value) {
+	if !f.IsZero() {
+		return
+	}
+	switch f.Kind() {
+	case reflect.String:
+		f.SetString("via-probe")
+	case reflect.Bool:
+		f.SetBool(true)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		f.SetInt(1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		f.SetUint(1)
+	case reflect.Float32, reflect.Float64:
+		f.SetFloat(1)
 	}
 }
 
@@ -985,4 +1000,17 @@ func foreignStruct(t reflect.Type, pkg string) bool {
 	// An anonymous struct (PkgPath "") is written in the page's own source, so
 	// it is the author's to perturb.
 	return t.PkgPath() != ""
+}
+
+// rootOf gives every non-generic internal a fresh, correctly-typed root
+// without carrying T/PT past Mount.
+type rootOf[T any, PT ptrViewer[T]] struct {
+	root T
+	typ  reflect.Type
+}
+
+func (f rootOf[T, PT]) newInst() instance {
+	inst := f.root
+	return instance{v: PT(&inst), base: unsafe.Pointer(&inst), size: unsafe.Sizeof(inst),
+		typ: f.typ, sig: signalsOf(f.typ)}
 }

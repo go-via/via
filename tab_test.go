@@ -107,7 +107,7 @@ func liveActionRequest(t *testing.T, srv *httptest.Server, page, tab, child stri
 
 func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})  // plain — establishes the session cookie
 	via.Mount(r, "/live", sessionLive{}) // Live root, shares the router-wide session manager
 	srv := httptest.NewServer(r)
@@ -160,7 +160,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 
 func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -221,7 +221,7 @@ func (w *whoLive) View() h.H {
 
 func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/as-victim", namedLogin{name: "vicky"})
 	via.Mount(r, "/as-attacker", namedLogin{name: "mallory"})
 	via.Mount(r, "/live", whoLive{})
@@ -264,7 +264,7 @@ func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.
 
 func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLive{})
 	srv := httptest.NewServer(r)
@@ -301,7 +301,7 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 
 func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(sessionLive{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(sessionLive{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -352,7 +352,7 @@ func (p *liveLoginer) View() h.H {
 
 func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispatch(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -396,7 +396,7 @@ func (o *onConnectLoginer) View() h.H {
 
 func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(onConnectLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -419,7 +419,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 
 func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	linesA, cancelA := openStreamAt(t, srv, "/_via/sse")
@@ -456,7 +456,7 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 
 func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginer{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginer{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 
@@ -528,7 +528,7 @@ func (p *raceLoginer) View() h.H {
 func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedStale(t *testing.T) {
 	t.Parallel()
 	root := raceLoginer{started: make(chan struct{}), proceed: make(chan struct{})}
-	srv := httptest.NewServer(via.Handler(root, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(root, testSessionKey))
 	t.Cleanup(srv.Close)
 
 	lines, cancel := openStreamAt(t, srv, "/_via/sse")
@@ -590,7 +590,7 @@ func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p
 
 func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLiveChild{})
 	srv := httptest.NewServer(r)
@@ -643,7 +643,7 @@ func (p *liveLoginerChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p
 
 func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
-	srv := httptest.NewServer(via.Handler(liveLoginerChild{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+	srv := httptest.NewServer(via.Handler(liveLoginerChild{}, testSessionKey))
 	t.Cleanup(srv.Close)
 	owner := jarClient(t)
 
@@ -841,7 +841,10 @@ func (p *bigFrames) View() h.H {
 func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T) {
 	t.Parallel()
 	var out lockedBuf
-	r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(300*time.Millisecond))
+	// Well above a 256KiB tick's render under -race and a loaded package run
+	// (up to ~1s): a render past the deadline is reported as a blocked handler,
+	// which is right, but is not the stall this test is about.
+	r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
 	via.Mount(r, "/", bigFrames{})
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
@@ -865,13 +868,13 @@ func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T)
 	}
 	// From here nothing reads: the stream fills the socket and blocks in a write.
 
-	require.Eventually(t, func() bool { return strings.Contains(out.String(), "tab pinned") }, 5*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "not reading") }, 10*time.Second, 20*time.Millisecond,
+		"the warning must say the stream is stuck writing to its client")
 	resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
 		"Sec-Fetch-Site": "same-origin", "Datastar-Request": "true",
 	})
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
-	assert.Contains(t, out.String(), "not reading", "the warning must say the stream is stuck writing to its client")
 	assert.NotContains(t, out.String(), "inside a Tick", "a stalled write is not a blocked handler")
 }
 
@@ -1335,6 +1338,26 @@ func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
 	})
 }
 
+func TestDispatch_aServerEndedTabThatReconnectsUnderItsIdTakesActionsAgain(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		store := via.NewMemorySessionStore()
+		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
+		code, _ := app.Action(0).Over(app.Connect()).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		b := app.Connect()
+		b.Await("who:alice")
+		require.NoError(t, store.Delete(context.Background(), sessionCookieID(t, app)))
+		time.Sleep(25 * time.Second)
+		require.NoError(t, b.AwaitClose())
+
+		again := app.ConnectWith(`{"viatab":"` + b.TabID() + `"}`)
+		require.Equal(t, b.TabID(), again.TabID())
+		code, _ = app.Action(0).Over(again).Fire()
+
+		assert.Equal(t, http.StatusNoContent, code, "the reclaimed id must drop its tombstone")
+	})
+}
+
 func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
@@ -1355,9 +1378,11 @@ func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T
 		default:
 		}
 
+		start := time.Now()
 		again := app.ConnectWith(`{"viatab":"` + id + `"}`)
 		require.Equal(t, id, again.TabID())
 		assert.Equal(t, http.StatusNoContent, <-got, "a network drop's retry reconnects under the same id")
+		assert.Zero(t, time.Since(start), "the reconnect wakes the parked action")
 		again.Await("count: 1")
 	})
 }
@@ -1410,4 +1435,54 @@ func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(
 		}
 		close(p.release)
 	})
+}
+
+type plainBlockedHost struct{ B blockedTick }
+
+func (p *plainBlockedHost) View() h.H { return h.Div(via.Child(p.B)) }
+
+func TestLive_aPinnedTabUnderAPlainRootIsLoggedWithTheRootType(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		p := plainBlockedHost{B: newBlockedTick()}
+		r := via.NewRouter(logTo(&out), via.WithPinnedDeadline(2*time.Second))
+		via.Mount(r, "/", p)
+		app := vt.Serve(t, r)
+		app.Connect()
+		<-p.B.entered
+
+		time.Sleep(3 * time.Second)
+
+		assert.Contains(t, out.String(), "unit=*via_test.plainBlockedHost")
+		close(p.B.release)
+	})
+}
+
+type mixedTick struct {
+	Good via.Signal[string]
+	Bad  via.Signal[unmarshalable]
+}
+
+func (m *mixedTick) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(10*time.Millisecond, m.tick)
+	return nil
+}
+
+func (m *mixedTick) tick(*via.Ctx) {
+	m.Good.Set("ticked")
+	m.Bad.Set(unmarshalable{})
+}
+
+func (m *mixedTick) View() h.H {
+	return h.Div(h.Input(m.Good.Bind()), h.Input(m.Bad.Bind()))
+}
+
+func TestTab_aPushedUnmarshalableSignalDropsOnlyItsOwnSlot(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mixedTick{}))
+	app.Get("/")
+	c := app.Connect()
+	defer c.Close()
+	line := c.Await(`"ticked"`)
+	assert.True(t, strings.HasPrefix(line, "data: signals "), "the good slot rides in a patch-signals frame: %s", line)
 }

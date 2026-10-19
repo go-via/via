@@ -836,12 +836,6 @@ button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
   word-break: break-all;
   color: var(--text);
 }
-.insp-req { border-left-color: var(--amber); }
-.insp-req > summary { color: var(--amber); }
-.insp-res { border-left-color: #4b8; }
-.insp-res > summary { color: #7cc; }
-.insp-frame { border-left-color: #58f; }
-.insp-frame > summary { color: #8ab4ff; }
 
 /* A labelled block: the name bar shares the block's border, and the copy
    button sits in the bar so it never covers the first line of code. */

@@ -1,7 +1,9 @@
 package vt_test
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -149,11 +151,48 @@ func TestLogger_dropsARecordLoggedAfterTheTestEnded(t *testing.T) {
 	via.Mount(r, "/", misnamed{})
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	require.Len(t, f.logs, 1, "only the startup warning, logged before the end")
-	assert.NotContains(t, f.logs[0], "Oninit")
+	assert.Len(t, f.logs, 1, "only the startup warning, logged before the end")
 }
 
 type misnamed struct{}
 
 func (misnamed) View() h.H              { return h.Div() }
 func (*misnamed) Oninit(*via.Ctx) error { return nil }
+
+func TestConnAwait_findsAFrameLargerThanAScannerToken(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(tally{Tail: strings.Repeat("x", 100<<10)}, via.WithLogger(vt.Logger(t))))
+		conn := app.Connect()
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+		conn.Await("n=1")
+	})
+}
+
+func TestConnAwait_timeoutCountsTheFramesThisWaitRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rec := &recorder{TB: t}
+		app := vt.Serve(rec, via.Handler(tally{}, via.WithLogger(vt.Logger(t))))
+		conn := app.Connect()
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		msg := rec.failure(func() { conn.Await("never") })
+		assert.Contains(t, msg, "1 read by this wait")
+	})
+}
+
+func TestAction_aNullBodyWithATabIsPostedVerbatim(t *testing.T) {
+	t.Parallel()
+	inner := via.Handler(tally{})
+	var posted []byte
+	app := vt.Serve(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			posted, _ = io.ReadAll(r.Body)
+			r.Body = io.NopCloser(bytes.NewReader(posted))
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	app.Action(0).Body("null").Tab("x").Fire()
+	assert.Equal(t, "null", string(posted))
+}

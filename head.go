@@ -2,6 +2,7 @@ package via
 
 import (
 	"html"
+	"io"
 	"maps"
 	"net/url"
 	"slices"
@@ -142,7 +143,7 @@ type Preload struct {
 // literal you mounted, before any request, because the CSP is built there — one
 // string per mount, none per request. See [Meta].
 //
-// Only the root's counts. An embedded child's PageMeta is ignored — a nested
+// Only the root's counts. A child's PageMeta is ignored — a nested
 // unit may not rename the page it happens to sit in — and Child logs one line
 // naming the type when it sees one, because the method looks like it works.
 //
@@ -168,7 +169,15 @@ func pageMetaOf(root any) Meta {
 // that isn't a language tag, a Raw carrying a script or style, an attribute
 // [Attr] refuses, or an asset that fails [Assets] validation.
 func WithHead(head Head) Option {
-	return func(c *config) { c.head = head }
+	return headOption{head}
+}
+
+type headOption struct {
+	head Head
+}
+
+func (o headOption) apply(c *config) {
+	c.head = o.head
 }
 
 // validate rejects a malformed Head at startup; each of these would otherwise
@@ -240,11 +249,22 @@ func isAttrName(s string) bool {
 	return true
 }
 
+// attrIndex is the index of the attribute named name, compared as HTML does,
+// or -1.
+func attrIndex(attrs []Attr, name string) int {
+	for i, a := range attrs {
+		if strings.EqualFold(a.Name, name) {
+			return i
+		}
+	}
+	return -1
+}
+
 // mergeAttrs lays a page's attributes over the router's: see [Meta].
 func mergeAttrs(router, page []Attr) []Attr {
 	out := slices.Clone(router)
 	for _, p := range page {
-		i := slices.IndexFunc(out, func(a Attr) bool { return strings.EqualFold(a.Name, p.Name) })
+		i := attrIndex(out, p.Name)
 		switch {
 		case i < 0:
 			out = append(out, p)
@@ -271,22 +291,10 @@ func attrString(attrs []Attr) string {
 // declaration site (the option, or the page type whose PageMeta returned them).
 func (a Assets) validate(where string) {
 	for _, s := range a.Scripts {
-		if (s.Src == "") == (s.Inline == "") {
-			panic(where + ": Script must set exactly one of Src and Inline")
-		}
-		if strings.Contains(strings.ToLower(s.Inline), "</script") {
-			panic(where + ": Script.Inline contains \"</script\", which would end the element early")
-		}
-		validAssetURL(where, "Script.Src", s.Src)
+		validateAssetsScript(where, s)
 	}
 	for _, s := range a.Styles {
-		if (s.Href == "") == (s.Inline == "") {
-			panic(where + ": Style must set exactly one of Href and Inline")
-		}
-		if strings.Contains(strings.ToLower(s.Inline), "</style") {
-			panic(where + ": Style.Inline contains \"</style\", which would end the element early")
-		}
-		validAssetURL(where, "Style.Href", s.Href)
+		validateAssetsStyle(where, s)
 	}
 	for _, p := range a.Preload {
 		if !slices.Contains(preloadAs, p.As) {
@@ -299,6 +307,26 @@ func (a Assets) validate(where string) {
 			panic(where + ": FontOrigin " + quote(o) + " is not an absolute http(s) origin (scheme://host[:port], no path)")
 		}
 	}
+}
+
+func validateAssetsScript(where string, s Script) {
+	if (s.Src == "") == (s.Inline == "") {
+		panic(where + ": Script must set exactly one of Src and Inline")
+	}
+	if strings.Contains(strings.ToLower(s.Inline), "</script") {
+		panic(where + ": Script.Inline contains \"</script\", which would end the element early")
+	}
+	validAssetURL(where, "Script.Src", s.Src)
+}
+
+func validateAssetsStyle(where string, s Style) {
+	if (s.Href == "") == (s.Inline == "") {
+		panic(where + ": Style must set exactly one of Href and Inline")
+	}
+	if strings.Contains(strings.ToLower(s.Inline), "</style") {
+		panic(where + ": Style.Inline contains \"</style\", which would end the element early")
+	}
+	validAssetURL(where, "Style.Href", s.Href)
 }
 
 var preloadAs = []string{"script", "style", "font", "image"}
@@ -442,6 +470,29 @@ func (a Assets) render(b *strings.Builder) {
 		}
 		b.WriteString("<script" + attrs + ">" + s.Inline + "</script>")
 	}
+}
+
+// document is an HTML response via renders whole: a page or an error page.
+// Head contributes the parts every document shares; the fields carry the rest.
+type document struct {
+	nonce     string
+	htmlAttrs []Attr
+	pageHead  string // ahead of the router-wide head: title and meta tags
+	tail      string // after the router-wide head: page assets and via's scripts
+	bodyOpen  string // the <body> tag
+	body      []byte
+}
+
+func (hd Head) writeDocument(w io.Writer, d document) {
+	var b strings.Builder
+	b.WriteString(`<!doctype html>` + hd.htmlOpen(d.nonce, d.htmlAttrs) + `<head><meta charset="utf-8">`)
+	b.WriteString(d.pageHead)
+	b.WriteString(hd.Raw)
+	hd.Assets.render(&b)
+	b.WriteString(d.tail + `</head>` + d.bodyOpen)
+	w.Write([]byte(b.String()))
+	w.Write(d.body)
+	w.Write([]byte(`</body></html>`))
 }
 
 // htmlOpen renders <html>, carrying nonce for Datastar to compile expressions

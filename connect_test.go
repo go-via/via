@@ -1,8 +1,6 @@
 package via_test
 
 import (
-	"bytes"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
@@ -35,13 +33,10 @@ func (t *tickSessionWriter) View() h.H { return h.Div(t.n.Display()) }
 
 func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(tickSessionWriter{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickSessionWriter{}, testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)
@@ -70,13 +65,10 @@ func (t *tickSessionWriterOnConnectRead) beat(ctx *via.Ctx) {
 func (t *tickSessionWriterOnConnectRead) View() h.H { return h.Div(t.n.Display()) }
 
 func TestConnectUnit_tickSessionWriteWarnsEvenAfterOnInitReadTheSession(t *testing.T) {
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
-		srv := liveServer(t, via.Handler(tickSessionWriterOnConnectRead{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		srv := liveServer(t, via.Handler(tickSessionWriterOnConnectRead{}, testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		_ = awaitTabID(t, lines)

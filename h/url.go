@@ -79,7 +79,7 @@ func safeURL(u, where string) string {
 
 // Href is the typed href attribute: http, https, mailto, tel and relative URLs
 // pass through, any other scheme is neutralized to "#" and logged — a link must
-// never become a script gadget.
+// never become a script gadget. An empty URL is neutralized and logged too.
 //
 // Href, [Src] and [Action] each run the URL gate exactly once, so an unsafe
 // value is logged once rather than per layer.

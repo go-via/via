@@ -28,7 +28,7 @@ type store struct {
 func (s *store) Value() int { s.mu.Lock(); defer s.mu.Unlock(); return s.n }
 func (s *store) Add(d int)  { s.mu.Lock(); s.n += d; s.mu.Unlock() }
 
-// counter is the slice-1 component under test, exercised through the public via
+// counter is the composition under test, exercised through the public via
 // API. It mirrors the counter example: server-authoritative state in an injected
 // dependency, element-patched on each action.
 type counter struct{ count *store }
@@ -338,7 +338,7 @@ func TestEvent_panicsOnAnEventNameThatBreaksOutOfTheAttribute(t *testing.T) {
 	}
 }
 
-// reqEchoer is a plain component whose action copies a header off the
+// reqEchoer is a plain composition whose action copies a header off the
 // triggering request into a rendered field.
 type reqEchoer struct{ echo string }
 
@@ -382,7 +382,7 @@ func TestAction_nulInUserTextRendersAsTheReplacementCharacter(t *testing.T) {
 	_, body := post(t, srv, actionURL(t, page, "r", 0), string(reqBody), sameOrigin())
 	p := regexp.MustCompile(`<p>(.*?)</p>`).FindStringSubmatch(body)
 	require.Len(t, p, 2, "rendered paragraph not found:\n%s", body)
-	assert.Equal(t, "a&#65533;b&#65533;", p[1], "a NUL must render as the U+FFFD the HTML parser would build")
+	assert.Equal(t, "a&#65533;b&#65533;", p[1], "a NUL must render as a visible U+FFFD")
 	assert.NotContains(t, body, nul, "a raw NUL reached the response")
 }
 

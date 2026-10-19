@@ -12,7 +12,7 @@ type Examples struct{ page }
 func NewExamples(env Env) Examples { return Examples{page: newPage("/examples", env)} }
 
 func (p *Examples) PageMeta() via.Meta {
-	return p.meta("Four runnable via programs, from a one-action counter to a multi-page forum, each with its source and the command to run it.")
+	return p.meta("Four runnable via programs, from a two-button counter to a multi-page forum, each with its source and the command to run it.")
 }
 
 // exampleTree is the directory view on GitHub, since forum spans two files.
@@ -24,22 +24,23 @@ type example struct {
 	demo    string // "/page#anchor" of the demo showing the same idea, or ""
 }
 
+func exampleRows(d *shell.Doc, exs ...example) h.H {
+	cells := make([][]h.H, 0, len(exs))
+	for _, e := range exs {
+		links := []h.H{shell.ExtLink(exampleTree+e.name, h.Str("source"))}
+		if e.demo != "" {
+			links = append(links, h.Str(" · "), d.Link(e.demo, "demo"))
+		}
+		cells = append(cells, []h.H{
+			h.Span(h.Strong(h.Str(e.name)), h.Br(), h.Small(append([]h.H{h.Class("ex-links")}, links...)...)),
+			h.Div(h.Div(e.teaches), h.Div(Code("go run ./snippet/src/examples/"+e.name))),
+		})
+	}
+	return table([]string{"Example", "What it teaches"}, cells...)
+}
+
 func (p *Examples) View() h.H {
 	d := p.doc()
-	rows := func(exs ...example) h.H {
-		cells := make([][]h.H, 0, len(exs))
-		for _, e := range exs {
-			links := []h.H{shell.ExtLink(exampleTree+e.name, h.Str("source"))}
-			if e.demo != "" {
-				links = append(links, h.Str(" · "), h.A(h.Href(d.Href(e.demo)), h.Str("demo")))
-			}
-			cells = append(cells, []h.H{
-				h.Span(h.Strong(h.Str(e.name)), h.Br(), h.Small(append([]h.H{h.Class("ex-links")}, links...)...)),
-				h.Div(h.Div(e.teaches), h.Div(Code("go run ./snippet/src/examples/"+e.name))),
-			})
-		}
-		return table([]string{"Example", "What it teaches"}, cells...)
-	}
 	s := h.Str[string]
 	return d.Page(
 		h.P(s("Four programs under "), Code("internal/site/snippet/src/examples"), s(", each one "), Code("main"),
@@ -50,7 +51,7 @@ func (p *Examples) View() h.H {
 
 		d.H2("First steps"),
 		h.P(s("Read these two in order. The second adds what the first leaves out: state the server pushes.")),
-		rows(
+		exampleRows(d,
 			example{name: "counter", demo: "/", teaches: h.Span(
 				s("The whole model with nothing live: a struct, a "), Code("View"), s(" method, handler methods, and "),
 				API("on.Click"), s(" wiring them. A click POSTs, the handler mutates a store, the page morphs.")),
@@ -70,7 +71,7 @@ func (p *Examples) View() h.H {
 			API("via.Assets"), s(", so its sha256 is in the page's CSP.")),
 
 		d.H2("Live"),
-		rows(
+		exampleRows(d,
 			example{name: "chat", demo: "/tutorial#live-chat", teaches: h.Span(
 				s("Both topic shapes: "), API("via.Ctx.Listen"), s(" appends each message to a "), API("via.List"),
 				s(", "), API("via.State.Track"), s(" follows the head-count. "), API("via.Ctx.OnConnect"), s(" and "),
@@ -84,7 +85,7 @@ func (p *Examples) View() h.H {
 			"starts empty and sees only what is published after its stream subscribes.")),
 
 		d.H2("Apps"),
-		rows(
+		exampleRows(d,
 			example{name: "forum", demo: "/security#sign-in-sign-out",
 				teaches: h.Span(
 					API("via.NewRouter"), s(" and "), API("via.Mount"), s(" across five pages: sessions, "),

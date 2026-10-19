@@ -49,7 +49,7 @@ func (f *Feed) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-// recv runs on this unit's own goroutine, serialized with its ticks, so it may
+// recv runs on this tab's stream goroutine, serialized with its ticks, so it may
 // touch unit state without a lock.
 func (f *Feed) recv(ctx *via.Ctx, p FeedPost) {
 	f.Posts.Append(p)

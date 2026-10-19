@@ -7,7 +7,7 @@ import (
 )
 
 const testingAwaitFailure = `--- FAIL: TestBoard_pushesOverTheStream (2.00s)
-    board_test.go:27: vt.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
+    board_test.go:27: vt.Conn.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
           #1 datastar-patch-signals: signals {"viatab":"eVelnHi8QTPIgFoyF8h8lwM3keTgszM2nqGXa7d_ee4w"}
           #2 datastar-patch-elements: elements <div id="root"><div><p>msg: hello</p><button data-on:click="@post('/_via/a/r/n4Ip3BxF')">post</button></div></div>`
 
@@ -123,7 +123,7 @@ func (p *Testing) View() h.H {
 			h.Li(h.Strong(h.Str("GET the page. ")), h.Str("Action URLs are in its markup: "),
 				Code("@post('/_via/a/<child>/<id>')"), h.Str(" in a "), Code("data-on:"), h.Str(" attribute, or a "),
 				API("via.PostForm"), h.Str("'s "), Code("action"), h.Str(". The id is a hash of the handler, so read it off "+
-					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and a child's instance as "), Code("?u="),
+					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and which Child call site rendered a child as "), Code("?u="),
 				h.Str(". A binding with a query carries it in a "), Code("data-via-q-<event>"),
 				h.Str(" attribute on the same element, and the expression appends it to the path: "),
 				Code(`data-via-q-click="?a=2" data-on:click="@post('/_via/a/r/<id>' + (el.getAttribute('data-via-q-click') ?? ''))"`),
@@ -147,10 +147,10 @@ func (p *Testing) View() h.H {
 			h.Str(". Echo it as the "), Code("viatab"),
 			h.Str(" signal in every action body and the action routes to that stream. A live page's action without it answers 410, "+
 				"and so does one whose stream has closed and not come back; see "),
-			h.A(h.Href(d.Href("/live")+"#connection-lifecycle"), h.Str("Connection lifecycle")), h.Str(".")),
+			d.Link("/live#connection-lifecycle", "Connection lifecycle"), h.Str(".")),
 		h.P(h.Str("Every POST passes the origin check first; a browser's same-origin fetch sends "),
 			Code("Sec-Fetch-Site: same-origin"), h.Str(", so send it too. See "),
-			h.A(h.Href(d.Href("/security")+"#origin-checks-and-csrf"), h.Str("Origin checks and CSRF")), h.Str(".")),
+			d.Link("/security#origin-checks-and-csrf", "Origin checks and CSRF"), h.Str(".")),
 		snippet.Text("shell", testingWire),
 
 		d.H2("Real browser tests"),

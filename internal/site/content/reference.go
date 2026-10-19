@@ -30,19 +30,19 @@ var overrides = map[string]string{
 	"via.PostForm":        "A native multipart form whose submit is a real navigation, read back with ctx.Request().FormValue.",
 	"via.State":           "Server-authoritative per-tab state, rendered as text and morphed when it changes. Rendering one makes its unit live.",
 	"via.List":            "A State over a slice, with Append, Remove and Each.",
-	"via.Signal":          "Client-resident state that round-trips per request.",
+	"via.Signal":          "Client-resident state, posted with every action. Get returns the posted value only for a Bind()ed signal.",
 	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never sees it.",
 	"via.StateOf":         "Seeds a State from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.ListOf":          "Seeds a List from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.StateTrack":      "A State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, then follows the topic. For a source fixed at mount; State.Track in OnInit is for one that depends on the request.",
 
-	"via.Ctx":                  "The per-request binder, handed to every callback but View. It is not safe for concurrent use: call it only from the via callback it was given to.",
+	"via.Ctx":                  "The per-request binder, handed to OnInit, OnReload, actions, Tick and Listen handlers and the error page. It is not safe for concurrent use: call it only from the via callback it was given to.",
 	"via.Ctx.Param":            "The mount pattern's named segment, decoded into T. A segment that will not decode answers 404 rather than a zero value, and naming a segment the pattern does not have panics.",
-	"via.Ctx.Request":          "The request behind this render. Its query string is populated on the GET and empty on every action, because an action's URL is the mount pattern and nothing else.",
+	"via.Ctx.Request":          "The request behind this render. Its query string is the page's on the GET. An action's URL is the mount pattern plus via's own ?a= and ?u=, so none of the page's query reaches it.",
 	"via.Ctx.Context":          "The context bounding this unit's work: the stream's on a live unit, the request's otherwise. Never nil. Watch it in a Tick or Listen handler to abandon a slow call against a dead socket.",
 	"via.Ctx.Session":          "The browser session — one value, Get/Put/Delete, ID and Rotate — resolved from the signed cookie and created lazily on the first write.",
 	"via.Ctx.Tick":             "Runs the handler every d for the life of the connection and re-renders the unit after each run; a d of 0 or less runs every second, with one warning. Makes the unit live. OnInit only.",
-	"via.Ctx.Listen":           "Subscribes the unit to a topic and runs the handler on the unit's own goroutine for every value, unsubscribing on disconnect. Makes the unit live. OnInit only.",
+	"via.Ctx.Listen":           "Subscribes the unit to a topic and runs the handler on its tab's stream goroutine for every value, unsubscribing on disconnect. Makes the unit live. OnInit only.",
 	"via.Ctx.OnConnect":        "Runs once, when this unit's stream opens, after every Listen has subscribed. OnInit only; on a unit nothing made live it never runs.",
 	"via.Ctx.OnDispose":        "Runs when the unit's connection closes — stop subscriptions, release producers. OnInit only, and only meaningful on a unit something has made live.",
 	"via.Ctx.Redirect":         "Navigates the browser after the current handler returns, from OnInit, OnReload, a PostForm submit or an action alike. The render that called it ships nothing. Only a relative path or a URL on this site's host or a trusted origin is followed; anything else is dropped and logged.",
@@ -50,7 +50,7 @@ var overrides = map[string]string{
 
 	"via.WithHead":                "The router-wide document shell: lang, raw head markup, the <html> and <body> attributes, and the assets every page carries. An invalid head panics at startup.",
 	"via.WithErrorPage":           "Renders via's failures as HTML documents instead of plain text. It applies to document responses only.",
-	"via.WithTrustedOrigin":       "Turns on origin enforcement for the action endpoint and the stream connect and allowlists one origin. Without any set, every action and the stream connect accept any origin and via logs a warning at startup — set this in production. Host case, a default port and a trailing \"/\" don't matter; a value with a path, query, fragment or userinfo panics.",
+	"via.WithTrustedOrigin":       "Turns on origin enforcement for the action endpoint and the stream connect and allowlists one origin. Without any set, every action and the stream connect accept any origin and via logs a warning at startup — set this in production. Host case, a default port and a trailing \"/\" don't matter; a value with a path, query, fragment, userinfo, wildcard or empty port panics.",
 	"via.WithSessionKey":          "The HMAC key signing the session cookie id; at least 16 bytes, or it panics, as an empty key or a second WithSessionKey does. Without the option, via falls back to the VIA_SESSION_KEY environment variable, and failing that mints a random per-process key, so those cookies survive neither a restart nor a second process.",
 	"via.WithSessionStore":        "Points sessions at a shared, durable store instead of the default process-local map. Pair it with WithSessionKey; both are required past one pod, see Deploy. A second WithSessionStore panics.",
 	"via.WithSessionStoreTimeout": "Caps one session store round-trip (default 5s); 0 or less panics. Without it a hung backend pins the request goroutine, since session calls survive client cancellation.",
@@ -59,19 +59,19 @@ var overrides = map[string]string{
 	"via.WithSecureCookies":       "Forces Secure on the session cookie. Without it Secure follows TLS or the proxy's X-Forwarded-Proto / Forwarded header, so it is for a proxy that sends neither.",
 	"via.WithMaxSSEConn":          "Caps how many live streams this router serves at once (default 10000; 0 or less panics); past the cap a connect is refused 503. The same number, up to 1024, caps actions parked waiting for their tab's stream; past it an action answers 503.",
 	"via.WithPinnedDeadline":      "How long an action POST waits for the tab's stream goroutine to pick it up before answering 503 and logging the tab as pinned (default 5s; 0 or less panics). An action that has started is waited for, since it writes the POST's own response. The same deadline covers the wait for a tab's stream that has not connected yet, capped at 2s: 410 if it has not come by then, and at once if via itself ended it.",
-	"via.WithMaxBody":             "Caps an action POST body, and how much of a form submit stays in RAM before spilling to a temp file (default 1 MiB). Over the cap answers 413.",
+	"via.WithMaxBody":             "Caps an action POST body, and how much of a form submit's file parts stays in RAM before spilling to a temp file (default 1 MiB). Text fields stay in RAM up to this plus 10 MiB. Over the cap answers 413.",
 	"via.WithMaxUpload":           "Caps a native form submit's whole multipart body (default 8 MiB). Over the cap answers 413.",
 	"via.WithPageCompression":     "Compresses every response but the stream with the first of encs the client accepts, in the order given; none means gzip. Off by default. An Encoder plugs in any other coding, such as brotli. A duplicate token or a second WithPageCompression panics.",
 	"via.WithSSECompression":      "Compresses the stream the same way, flushing after every frame. The encoder lives as long as the tab, so its memory counts against WithMaxSSEConn.",
 	"via.WithLogger":              "Routes via's own diagnostics to l. Default is slog.Default().",
 	"via.WithUnsafeEval":          "Adds 'unsafe-eval' to every page's script-src, for a library that compiles code from strings. The nonce and hashes stay. While set, via logs a warning at startup: a string that reaches eval, Function or setTimeout(string) runs as script.",
 
-	"via.ErrNotFound":  "Return it from OnInit when the data the page needs no longer exists: the request was honest, so the answer is 404, not 500. Wrap it freely; errors.Is matches.",
+	"via.ErrNotFound":  "Return it from OnInit or OnReload when the data the page needs no longer exists: the request was honest, so the answer is 404, not 500. Wrap it freely; errors.Is matches.",
 	"via.ErrForbidden": "Denies with a 403. For \"you may not do this\"; queue a ctx.Redirect instead for \"please sign in\".",
 	"via.ErrStoreDown": "The session store could not be read for this request. The request was fine, a dependency is not; answer it like an outage.",
 	"via.ErrStaleTab":  "The tab that would have bound this action is gone: its stream closed, or the id belongs to a render that no longer exists. The one failure a reload fixes.",
 	"via.PageError":    "Everything via knows about a failure it is about to answer, handed to the WithErrorPage handler. Status and Reason are the contract; Detail and Err are for logs and dev builds.",
-	"via.Reason":       "The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status class, so a switch with a default is exhaustive.",
+	"via.Reason":       "The stable code an error page switches on: bad_request, forbidden, not_found, method_not_allowed, gone, too_large, internal, unavailable. One per status via answers with; give the switch a default.",
 
 	"on.Click":        "Binds a DOM event to a method: the click posts to the method, not to a URL you invented. Takes a method value or an on.Bind, then options.",
 	"on.Bind":         "Attaches a typed value to the method, so the row's own datum rides with the event. Only an argument the render bound is dispatchable.",
@@ -88,7 +88,7 @@ var overrides = map[string]string{
 	"on.WithModifier": "Appends a Datastar modifier the typed options do not cover, such as \"delay.300ms\". A malformed or covered one panics.",
 
 	"expr.El":              "The element the attribute is written on.",
-	"expr.Val":             "Encodes v as a JavaScript literal; an Expr passes through unchanged. An @ is escaped so Datastar does not read an @name( in it as an action call.",
+	"expr.Val":             "Encodes v as a JavaScript literal; an Expr is parenthesized unless it is already one group or a bare name or literal. An @ is escaped as \\u0040, so no @name( in it can read as an action call.",
 	"expr.All":             "Joins the expressions with &&. A single one is returned unchanged; none panics.",
 	"expr.Any":             "Joins the expressions with ||. A single one is returned unchanged; none panics.",
 	"expr.Do":              "Sequences statements, for an attribute that runs more than one.",
@@ -148,61 +148,52 @@ func (p *Reference) PageMeta() via.Meta {
 
 type refPackage struct {
 	name  string
-	intro func(d *shell.Doc) h.H
+	intro h.H
 	extra func(d *shell.Doc) h.H
 }
 
 var refPackages = []refPackage{
-	{name: "via", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("The router, the pages mounted on it, the state handles a page renders, "),
-			API("via.Ctx"), h.Str(", sessions and the error surface. Router options are policy passed to "),
-			API("via.NewRouter"), h.Str(" or "), API("via.Handler"),
-			h.Str(": a page cannot change them, which is why none of them is a method on a composition. "+
-				"Match a sentinel error with errors.Is and switch on "), APIText("via.PageError", "PageError.Reason"),
-			h.Str(" with a default: a status via does not emit today maps to ReasonInternal or ReasonBadRequest."))
-	}, extra: func(d *shell.Doc) h.H {
-		return h.Div(
-			d.H3("Lifecycle hooks"),
-			h.P(h.Str("Four methods on your own type, duck-typed: a unit opts in by having one. A hook-named "+
-				"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
-				"signature is logged once.")),
-			refTable("Method", hooks),
-		)
-	}},
-	{name: "h", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Markup as Go calls: one function per HTML element and one per attribute, all returning "),
-			API("h.H"), h.Str(". Text and attribute values are escaped at render time, and URL attributes are "+
-				"scheme-checked."))
-	}, extra: func(d *shell.Doc) h.H {
-		return h.Div(
-			d.H3("Datastar attributes"),
-			h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. The helpers take "+
-				"an expr.Expr, and "), API("h.Data"), h.Str(" writes a plugin attribute h has no helper for.")),
-			helperTable(),
-		)
-	}},
-	{name: "on", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. " +
-			"Each has a server form that posts a method and a CS twin that runs an expression in the browser."))
-	}},
-	{name: "expr", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("The small JavaScript expressions Datastar evaluates in the browser. "),
-			APIText("via.Signal.Ref", "Signal.Ref()"), h.Str(" is where one starts: it returns the signal's $name as an "),
-			API("expr.Expr"), h.Str(". Everything is checked except "), API("expr.Raw"), h.Str(" and the text of "),
-			API("expr.Rawf"), h.Str("."))
-	}},
-	{name: "topic", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("An in-process fan-out broker: one Publish reaches every subscriber. It is one process's " +
-			"memory, with no durability, replay or cross-pod delivery; put a real bus behind a Topic for those."))
-	}},
-	{name: "vt", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("A black-box test harness: drives a handler over real HTTP through via's public surface, " +
-			"so a test can fire an action or read a live stream without request plumbing."))
-	}},
-	{name: "vtbrowser", intro: func(*shell.Doc) h.H {
-		return h.P(h.Str("Drives a handler in a real headless Chromium, for the bugs httptest cannot see. A separate " +
-			"module, so chromedp stays out of via's dependency graph; a test skips when no browser is found."))
-	}},
+	{name: "via", extra: viaExtra, intro: h.P(h.Str("The router, the pages mounted on it, the state handles a page renders, "),
+		API("via.Ctx"), h.Str(", sessions and the error surface. Router options are policy passed to "),
+		API("via.NewRouter"), h.Str(" or "), API("via.Handler"),
+		h.Str(": a page cannot change them, which is why none of them is a method on a composition. "+
+			"Match a sentinel error with errors.Is and switch on "), APIText("via.PageError", "PageError.Reason"),
+		h.Str(" with a default: a status via does not emit today maps to ReasonInternal or ReasonBadRequest."))},
+	{name: "h", extra: hExtra, intro: h.P(h.Str("Markup as Go calls: one function per HTML element and one per attribute, all returning "),
+		API("h.H"), h.Str(". Text and attribute values are escaped at render time, and URL attributes are "+
+			"scheme-checked."))},
+	{name: "on", intro: h.P(h.Str("Each DOM event as a function, so a misspelled event or modifier does not compile. " +
+		"Each has a server form that posts a method and a CS twin that runs an expression in the browser."))},
+	{name: "expr", intro: h.P(h.Str("The small JavaScript expressions Datastar evaluates in the browser. "),
+		APIText("via.Signal.Ref", "Signal.Ref()"), h.Str(" is where one starts: it returns the signal's $name as an "),
+		API("expr.Expr"), h.Str(". Everything is checked except "), API("expr.Raw"), h.Str(" and the text of "),
+		API("expr.Rawf"), h.Str("."))},
+	{name: "topic", intro: h.P(h.Str("An in-process fan-out broker: one Publish reaches every subscriber. It is one process's " +
+		"memory, with no durability, replay or cross-pod delivery; put a real bus behind a Topic for those."))},
+	{name: "vt", intro: h.P(h.Str("A black-box test harness: drives a handler over real HTTP through via's public surface, " +
+		"so a test can fire an action or read a live stream without request plumbing."))},
+	{name: "vtbrowser", intro: h.P(h.Str("Drives a handler in a real headless Chromium, for the bugs httptest cannot see. A separate " +
+		"module, so chromedp stays out of via's dependency graph; a test skips when no browser is found."))},
+}
+
+func viaExtra(d *shell.Doc) h.H {
+	return h.Div(
+		d.H3("Lifecycle hooks"),
+		h.P(h.Str("View is required. OnInit, OnReload and PageMeta are duck-typed: a unit opts in by having one. A hook-named "+
+			"method with the wrong signature panics at Mount, and a near-miss name carrying a hook's exact "+
+			"signature is logged once.")),
+		refTable("Method", hooks),
+	)
+}
+
+func hExtra(d *shell.Doc) h.H {
+	return h.Div(
+		d.H3("Datastar attributes"),
+		h.P(h.Str("One typed helper per Datastar plugin, so the attribute key is spelled once. Each takes its "+
+			"expression as any string type, so an "), API("expr.Expr"), h.Str(" passes as it is, and "), API("h.Data"),
+			h.Str(" writes a plugin attribute h has no helper for.")),
+		helperTable(),
+	)
 }
 
 func (p *Reference) View() h.H {
@@ -219,11 +210,11 @@ func (p *Reference) View() h.H {
 		h.P(h.Str("Every exported name, generated from the source by go generate; a test fails when this page "+
 			"and the code disagree. Each name links to its pkg.go.dev entry, and each row has an anchor: "),
 			h.Code(h.Str("/reference#via.WithSessionTTL")), h.Str(". To install, see "),
-			h.A(h.Href(d.Href("/start")), h.Str("Getting started")), h.Str(".")),
+			d.Link("/start", "Getting started"), h.Str(".")),
 		h.P(jumps...),
 	}
 	for _, rp := range refPackages {
-		body = append(body, d.H2(rp.name), rp.intro(d))
+		body = append(body, d.H2(rp.name), rp.intro)
 		body = append(body, pkgGroups(rp.name)...)
 		if rp.extra != nil {
 			body = append(body, rp.extra(d))

@@ -23,7 +23,7 @@ func testIndex() *search.Index {
 	return idx
 }
 
-func TestIndex_ranksHeadingAboveText(t *testing.T) {
+func TestIndex_ranksTitleAboveText(t *testing.T) {
 	t.Parallel()
 
 	hits := testIndex().Find("session", 8)

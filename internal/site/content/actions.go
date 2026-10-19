@@ -54,7 +54,7 @@ func (p *Actions) View() h.H {
 		h.P(h.Str("Every DOM event binds the same way: "), API("on.Change"), h.Str(", "), API("on.Keydown"), h.Str(", "),
 			API("on.Submit"), h.Str(", and "), API("on.Event"), h.Str(" for an event without its own function. The "),
 			Code("…CS"), h.Str(" twins, such as "), API("on.ClickCS"), h.Str(", run an expression in the browser and post nothing; they are on "),
-			h.A(h.Href(d.Href("/signals")), h.Str("Signals")), h.Str(".")),
+			d.Link("/signals", "Signals"), h.Str(".")),
 
 		d.H2("Action signatures"),
 		snippet.Region("actions/signatures.go", "signatures", snippet.Mark("Clear(ctx *via.Ctx)", "Delete(ctx *via.Ctx, id int)")),
@@ -67,7 +67,7 @@ func (p *Actions) View() h.H {
 		),
 		h.P(h.Str("An action returns nothing. Report a failure the user can fix by setting state, such as an error Signal; a panic is a 500. "+
 			"Mount checks the lifecycle hooks' signatures, not actions': the two rows above are the only action checks, and a render has to reach the binding to run them.")),
-		h.P(h.Str("An action's id is the method's Go name plus the path of the field it was called on, such as "), Code("Stats.A"),
+		h.P(h.Str("An action's id is an 8-character hash of the method's Go name plus the path of the field it was called on, such as "), Code("Stats.A"),
 			h.Str(". A deploy that reorders fields keeps every button's id; one that renames a field answers 410 to a tab still holding the old name.")),
 
 		d.H2("What an action body can do"),
@@ -75,7 +75,7 @@ func (p *Actions) View() h.H {
 		table([]string{"Call", "Gives you"},
 			[]h.H{API("via.Ctx.Request"), h.Str("The POST's headers, cookies and RemoteAddr. Read-only: the body is already decoded. On a PostForm submit, FormValue and FormFile.")},
 			[]h.H{API("via.Ctx.Session"), h.Span(h.Str("The browser session: "), API("via.Session.Get"), h.Str(", "), API("via.Session.Put"), h.Str(", and "), API("via.Session.Rotate"), h.Str(" after a login."))},
-			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. The query string is empty on every action.")},
+			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. An action's URL carries none of the page's query string, only via's own ?a= and ?u=.")},
 			[]h.H{API("via.Ctx.Context"), h.Str("A context to pass to slow calls. On a live unit it is cancelled when the tab disconnects.")},
 			[]h.H{API("via.Ctx.Redirect"), h.Str("Navigate once the handler returns, on this site only. The answer skips OnReload and the render.")},
 			[]h.H{API("via.Ctx.RedirectExternal"), h.Str("The same, to another site: an OAuth provider, a payment page.")},
@@ -85,7 +85,7 @@ func (p *Actions) View() h.H {
 				"There is no response writer; a download is a separate net/http handler that the page links to. "),
 			API("via.Ctx.Tick"), h.Str(" and "), API("via.Ctx.Listen"), h.Str(" register only in OnInit; in an action they log and do nothing. "+
 				"To re-read a store after the action wrote to it, implement OnReload, which is covered on "),
-			h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")), h.Str(".")),
+			d.Link("/compositions", "Compositions"), h.Str(".")),
 
 		d.H2("Arguments"),
 		demo.Card(d.H3("Vote"),
@@ -145,7 +145,7 @@ func (p *Actions) View() h.H {
 			h.Str(" the Signal from it. The answer renders those values, with the error beside them.")),
 		Callout(Caveat, "Plain units only",
 			h.P(h.Str("In a plain unit the submit answers with the instance the handler changed. "+
-				"In a live unit it answers with a fresh page, as a reconnect would, and what the handler set is gone. "+
+				"In a live unit it answers with a fresh page: its OnInit sees the session the handler wrote, but what the handler set on the unit is gone. "+
 				"Keep the form in a plain unit, or end the handler with a Redirect."))),
 
 		d.H2("File uploads"),
@@ -161,7 +161,7 @@ func (p *Actions) View() h.H {
 		snippet.Region("actions/upload.go", "upload", snippet.Mark("FormFile", "DetectContentType", "CreateTemp")),
 		snippet.Region("actions/upload.go", "router", snippet.Mark("WithMaxUpload", "WithMaxBody")),
 		h.P(API("via.WithMaxUpload"), h.Str(" caps the whole multipart body (default 8 MiB), and a larger one answers 413 before the handler runs. "),
-			API("via.WithMaxBody"), h.Str(" caps how much of it is held in memory (default 1 MiB); via spills the rest to temp files and removes them after the handler returns.")),
+			API("via.WithMaxBody"), h.Str(" caps how much of its file parts is held in memory (default 1 MiB); via spills the rest to temp files and removes them after the handler returns. Text fields stay in memory, up to WithMaxBody plus 10 MiB.")),
 		Callout(Warning, "Filename and Content-Type are client input",
 			h.P(h.Str("The header's Filename can hold "), Code("../"), h.Str(" and its Content-Type is whatever the browser claims. "+
 				"Name the file yourself and sniff the bytes."))),
@@ -203,10 +203,10 @@ func (p *Actions) View() h.H {
 		table([]string{"Status", "When"},
 			[]h.H{h.Str("400"), h.Str("The ?a= argument does not decode into the handler's type, or the body is malformed. A JSON body without Datastar-Request: true is read as a form, and the 400 names the header.")},
 			[]h.H{h.Str("403"), h.Span(h.Str("The Origin is not trusted (see "), API("via.WithTrustedOrigin"), h.Str("), the tab's stream is bound to another session, or OnInit or OnReload returned "), API("via.ErrForbidden"), h.Str("."))},
-			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
+			[]h.H{h.Str("404"), h.Span(h.Str("A path segment does not decode for ctx.Param, or OnInit or OnReload returned "), API("via.ErrNotFound"), h.Str("."))},
 			[]h.H{h.Str("410"), h.Str("The render does not bind this action, or not with this argument, or the tab's stream is gone.")},
 			[]h.H{h.Str("413"), h.Str("The body is over WithMaxBody, or a native submit is over WithMaxUpload.")},
-			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
+			[]h.H{h.Str("500"), h.Str("The handler panicked, or OnInit or OnReload returned any other error. The panic is logged with its stack, and the process keeps serving.")},
 			[]h.H{h.Str("503"), h.Str("The session store did not answer, a live tab's goroutine did not pick the action up in time, too many actions are already waiting for their streams, or the router is shutting down.")},
 		),
 		h.P(h.Str("An action posted by Datastar leaves the page as it was. On a page with a live unit, a 410 shows "+

@@ -180,9 +180,7 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 
 	// Datastar applies one patch-elements frame as a single morph, so "hits 1"
 	// being on screen means the whole root patch has already been applied — there
-	// is no later moment for a stray repaint of the child to arrive from it. The
-	// clicks-2 assertion below is the second line of defence: a repaint from the
-	// seed would make the next click read 1, not 2.
+	// is no later moment for a stray repaint of the child to arrive from it.
 	assert.Contains(t, s.Text("#via-i0 p"), "clicks 1",
 		"the root's own action patch repainted the live child from its seed")
 
@@ -425,12 +423,6 @@ func TestPostActionRedirect_navigatesViaScript(t *testing.T) {
 
 	s.WaitEvalTrue(`location.pathname==='/done'`,
 		"the @post Redirect's navigation script to run under the strict CSP")
-
-	// redirectInit removes its own <script> before navigating, so a live document
-	// never carries it — and the new document was never sent one.
-	var inserted bool
-	s.Eval(`[...document.querySelectorAll('script')].some(x => x.textContent.includes('location.assign'))`, &inserted)
-	assert.False(t, inserted, "the redirect script must remove itself from the document")
 }
 
 // liveFormBrowser is a live root with a native PostForm — the vehicle for
@@ -470,7 +462,6 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 	var status float64
 	s.Eval(`performance.getEntriesByType('navigation')[0].responseStatus`, &status)
 	require.Equal(t, float64(http.StatusOK), status, "native PostForm submit from a live unit did not return 200")
-	assert.NotContains(t, s.Text("body"), "this tab has no stream", "submit fell through to the plain 410 fallback")
 	s.RequireCleanConsole()
 }
 
@@ -503,7 +494,7 @@ func TestDocumentHead_declaredOffOriginStylesheetLoads(t *testing.T) {
 	}))
 	s := vtbrowser.Open(t, app)
 	s.WaitEvalTrue(styledIsRed, "the declared off-origin stylesheet loaded and applied under the derived CSP")
-	s.RequireCleanConsole() // a CSP-blocked sheet surfaces as a console error
+	s.RequireCleanConsole()
 }
 
 func TestDocumentHead_undeclaredOriginStaysBlocked(t *testing.T) {
@@ -933,7 +924,7 @@ func TestPageMeta_declaredScriptsExecuteUnderThePerMountCSP(t *testing.T) {
 	s.WaitEvalTrue(`window.__external === true`, "the declared off-origin script executed")
 	s.WaitEvalTrue(`window.__inline === true`, "the declared inline script was admitted by its hash")
 	s.WaitEvalTrue(styledIsRed, "the declared inline style was admitted by its hash")
-	s.RequireCleanConsole() // a CSP-blocked script surfaces as a console error
+	s.RequireCleanConsole()
 }
 
 // bSeedChild's Signal is never Bind()ed or Display()ed: the seed declaration

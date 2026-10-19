@@ -13,8 +13,8 @@ import (
 )
 
 // Reason is the stable code a [WithErrorPage] handler switches on, so an app
-// never has to parse via's plain-text bodies. One reason per status class:
-// the status is the contract, the body text is not.
+// never has to parse via's plain-text bodies. One reason per status via
+// answers with: the status is the contract, the body text is not.
 type Reason string
 
 // The reasons via reports. A status via does not currently emit maps to
@@ -33,8 +33,8 @@ const (
 
 // The errors via reports through [PageError].Err for the failures an app can
 // reasonably answer differently from the rest of their status class. Match
-// with errors.Is; Err is nil for every other failure, so a switch must have a
-// default.
+// with errors.Is. Err otherwise carries a failed OnInit/OnReload's error or a
+// recovered panic, or is nil, so a switch must have a default.
 //
 // There is deliberately no sentinel for the 503s the SSE connect raises (at
 // capacity, shutting down): that route is client-consumed and never renders an
@@ -55,8 +55,8 @@ var (
 	// one failure a reload actually fixes.
 	ErrStaleTab = errors.New("via: stale tab")
 
-	// ErrForbidden denies with a 403. Return it from OnInit for "you may not
-	// do this"; queue a Ctx.Redirect instead for "please sign in".
+	// ErrForbidden denies with a 403. Return it from OnInit or OnReload for
+	// "you may not do this"; queue a Ctx.Redirect instead for "please sign in".
 	ErrForbidden = errors.New("via: forbidden")
 )
 
@@ -123,16 +123,20 @@ type PageError struct {
 //		}
 //		return h.Div(h.H1(h.Str("Something broke")))
 //	}))
-func WithErrorPage(fn func(*Ctx, PageError) h.H) Option {
-	return func(c *config) {
-		if fn == nil {
-			panic("via: WithErrorPage(nil)")
-		}
-		if c.errorPage != nil {
-			panic("via: conflicting WithErrorPage options")
-		}
-		c.errorPage = fn
+func WithErrorPage(fn func(*Ctx, PageError) h.H) Option { return errorPageOption{fn} }
+
+type errorPageOption struct {
+	fn func(*Ctx, PageError) h.H
+}
+
+func (o errorPageOption) apply(c *config) {
+	if o.fn == nil {
+		panic("via: WithErrorPage(nil)")
 	}
+	if c.errorPage != nil {
+		panic("via: conflicting WithErrorPage options")
+	}
+	c.errorPage = o.fn
 }
 
 func reasonFor(status int) Reason {
@@ -263,8 +267,8 @@ func noteErr(w http.ResponseWriter, err error) {
 // would commit a bare 200 ahead of the error page.
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {
 	if r.cfg.errorPage == nil ||
-		req.Header.Get("Datastar-Request") == "true" ||
-		strings.HasSuffix(req.URL.Path, "/_via/sse") {
+		isDatastarRequest(req) ||
+		strings.HasSuffix(req.URL.Path, streamRoute) {
 		return nil
 	}
 	return &errPageWriter{ResponseWriter: w, r: r, req: req}
@@ -274,53 +278,49 @@ func (r *Router) writeErrorPage(w http.ResponseWriter, req *http.Request, pe Pag
 	body, ok := r.renderErrorPage(req, pe)
 	hdr := w.Header()
 	hdr.Del("Content-Length")
-	hdr.Set("X-Content-Type-Options", "nosniff")
 	if !ok {
-		hdr.Set("Content-Type", "text/plain; charset=utf-8")
+		setContentType(hdr, "text/plain; charset=utf-8")
 		w.WriteHeader(pe.Status)
 		w.Write([]byte(pe.Detail + "\n"))
 		return
 	}
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
+	setContentType(hdr, "text/html; charset=utf-8")
 	hdr.Set("Content-Security-Policy", r.errCSP)
-	var head strings.Builder
-	head.WriteString(`<!doctype html>` + r.cfg.head.htmlOpen("", r.cfg.head.HTMLAttrs) + `<head><meta charset="utf-8">`)
-	head.WriteString(`<title>` + html.EscapeString(strconv.Itoa(pe.Status)+" "+http.StatusText(pe.Status)) + `</title>`)
-	head.WriteString(r.cfg.head.Raw)
-	r.cfg.head.Assets.render(&head)
-	head.WriteString(`</head><body` + attrString(r.cfg.head.BodyAttrs) + `>`)
 	w.WriteHeader(pe.Status)
-	w.Write([]byte(head.String()))
-	w.Write(body)
-	w.Write([]byte(`</body></html>`))
+	r.cfg.head.writeDocument(w, document{
+		htmlAttrs: r.cfg.head.HTMLAttrs,
+		pageHead:  `<title>` + html.EscapeString(strconv.Itoa(pe.Status)+" "+http.StatusText(pe.Status)) + `</title>`,
+		bodyOpen:  `<body` + attrString(r.cfg.head.BodyAttrs) + `>`,
+		body:      body,
+	})
 }
 
 // renderErrorPage runs the app's handler behind a recover: an error page that
 // panics while answering a 500 is the worst outcome this feature could have, so
 // it degrades to the plain text via would have sent and says so once.
 func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, ok bool) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			r.errPageWarn.Do(func() {
-				r.cfg.log.Error("via: the WithErrorPage handler panicked — falling back to via's plain-text errors", "err", rec)
-			})
-			body, ok = nil, false
-		}
-	}()
+	defer r.recoverErrorPage(&body, &ok)
 	ctx := newRootCtx(false, "", nil)
 	ctx.errPage = true
-	ctx.req = req
-	ctx.sessions = r.sessions
-	ctx.policy = r.policy
+	ctx.reqScope = reqScope{req: req, sessions: r.sessions, policy: r.policy}
 	node := r.cfg.errorPage(ctx, pe)
 	if node == nil {
-		r.errPageWarn.Do(func() {
+		if r.errPageWarned.CompareAndSwap(false, true) {
 			r.cfg.log.Warn("via: the WithErrorPage handler returned nil — falling back to via's plain-text errors",
 				"status", pe.Status, "reason", pe.Reason)
-		})
+		}
 		return nil, false
 	}
 	rr := render.NewRenderer(binderCtx{ctx})
 	rr.Render(node)
 	return rr.Bytes(), true
+}
+
+func (r *Router) recoverErrorPage(body *[]byte, ok *bool) {
+	if rec := recover(); rec != nil {
+		if r.errPageWarned.CompareAndSwap(false, true) {
+			r.cfg.log.Error("via: the WithErrorPage handler panicked — falling back to via's plain-text errors", "err", rec)
+		}
+		*body, *ok = nil, false
+	}
 }

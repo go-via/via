@@ -22,8 +22,8 @@ type Expr string
 // String returns the expression source.
 func (e Expr) String() string { return string(e) }
 
-// Not is JavaScript's !, parenthesized.
-func (e Expr) Not() Expr { return "(!" + e + ")" }
+// Not is JavaScript's !, parenthesized, with a composite operand grouped.
+func (e Expr) Not() Expr { return Expr("(!" + grouped(e) + ")") }
 
 // Eq compares with JavaScript's strict ===.
 func (e Expr) Eq(v any) Expr { return e.binary("===", v) }
@@ -62,7 +62,7 @@ func (e Expr) Add(v any) Expr {
 }
 
 func (e Expr) binary(op string, v any) Expr {
-	return "(" + e + " " + Expr(op) + " " + Expr(operand(v)) + ")"
+	return Expr("(" + grouped(e) + " " + op + " " + operand(v) + ")")
 }
 
 var bareRef = regexp.MustCompile(`^\$[A-Za-z_][A-Za-z0-9_]*$`)
@@ -77,19 +77,21 @@ func (e Expr) mustBeRef(op string) {
 // which is also a JavaScript literal for every type json can reach.
 func operand(v any) string {
 	if e, ok := v.(Expr); ok {
-		return string(e)
+		return grouped(e)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(fmt.Sprintf("expr: %T does not encode as a JSON literal", v))
 	}
-	// Datastar rewrites @name( into an action call even inside a string
-	// literal. JSON puts @ only inside strings, where \u0040 reads back as @.
+	// Datastar rewrites @name( into an action call. v1.0.4 skips string
+	// literals; escaping keeps that true whatever its compiler does. JSON puts
+	// @ only inside strings, where \u0040 reads back as @.
 	return strings.ReplaceAll(string(b), "@", `\u0040`)
 }
 
-// All joins the expressions with &&, parenthesizing any operand that is not
-// already a group. A single one is returned unchanged; none panics.
+// All joins the expressions with &&, parenthesizing any operand that is
+// neither a bare name or literal nor already a group. A single one is
+// returned unchanged; none panics.
 func All(es ...Expr) Expr { return join("All", "&&", es) }
 
 // Any joins the expressions with ||, with the same single/none rule as [All].
@@ -156,7 +158,8 @@ func oneGroup(s string) bool {
 // Do sequences statements, for an attribute that runs more than one.
 func Do(es ...Expr) Expr { return Expr(strings.Join(sources(es), "; ")) }
 
-// Val encodes v as a JavaScript literal; an Expr passes through unchanged. An @
+// Val encodes v as a JavaScript literal; an Expr is parenthesized unless it is
+// already one group or a bare name or literal. An @
 // is escaped so Datastar does not read an @name( in a string as an action call.
 func Val(v any) Expr { return Expr(operand(v)) }
 
@@ -174,9 +177,10 @@ func Call(name string, args ...Expr) Expr {
 // CopyToClipboard writes text to the clipboard. Browsers allow that only in a
 // secure context and from a user gesture, so bind it to a click. A refused
 // write is swallowed rather than logged as an uncaught rejection: the handler
-// has no way to report it.
+// has no way to report it. Outside a secure context navigator.clipboard is
+// undefined, so the call is optional-chained to do nothing there too.
 func CopyToClipboard(text Expr) Expr {
-	return Call("navigator.clipboard.writeText", text) + ".catch(() => {})"
+	return Rawf("navigator.clipboard?.writeText(%s).catch(() => {})", text)
 }
 
 // CopyTextOf copies the text of the first element matching sel inside the

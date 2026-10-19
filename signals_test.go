@@ -1,9 +1,7 @@
 package via_test
 
 import (
-	"bytes"
 	"errors"
-	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -437,8 +435,8 @@ func TestSignal_childFieldPrefixSurvivesALivePush(t *testing.T) {
 
 	conn := app.Connect()
 	defer conn.Close()
-	assert.Contains(t, conn.Await(`data-bind="room__draft"`), `data-bind="room__draft"`,
-		"the push must mint the same field-path slot the first paint did")
+	// The push must mint the same field-path slot the first paint did.
+	conn.Await(`data-bind="room__draft"`)
 }
 
 // gatedFlag is the shape the writable-slot rule exists for: a Signal an OnInit
@@ -589,10 +587,7 @@ func TestSignal_undecodableValueIsDroppedAndLogged(t *testing.T) {
 	_, page := app.Get("/")
 	slot := bindSlots(page)[0]
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	status, frag := app.Action(0).Body(`{"` + slot + `":"not-a-number"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
@@ -626,10 +621,7 @@ func TestSignal_undecodableValueIsLoggedOncePerConnection(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	for range 3 {
 		status, _ := app.Action(0).Over(conn).Body(`{"n":"not-a-number"}`).Fire()
@@ -665,10 +657,7 @@ func TestSignal_undecodableValuesAreLoggedOncePerRequest(t *testing.T) {
 	_, page := app.Get("/")
 	slots := bindSlots(page)[:4] // A, B, C, D — Bump stays well-formed
 
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	body := `{"` + strings.Join(slots, `":"x","`) + `":"x"}`
 	status, _ := app.Action(0).Body(body).Fire()
@@ -953,4 +942,44 @@ func TestSignal_panicsAtMountOnAMalformedSeedTag(t *testing.T) {
 	t.Parallel()
 	assertMountPanic(t, `seedTagSignalMalformed.Count has a via:"init=…" value that is not JSON for its `+
 		`via.Signal[int] type`, func() { via.Handler(seedTagSignalMalformed{}) })
+}
+
+func TestSignal_aLivePushDeclaresASlotItsBranchJustOpened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(wizard{}))
+		conn := app.Connect()
+		defer conn.Close()
+		_, step0 := app.Get("/")
+		require.NotContains(t, step0, `"email"`, "step 0 must not declare the email slot")
+
+		app.Action(0).Over(conn).Fire()
+		conn.Await(`"email":""`) // the client store has no value for it, so a Display would read undefined
+	})
+}
+
+type noteKid struct{ Note via.Signal[string] }
+
+func (k *noteKid) View() h.H { return h.Div(k.Note.Display()) }
+
+// kidOpener is live through its State and opens a child holding a signal.
+type kidOpener struct {
+	open via.State[bool]
+	Kid  noteKid
+}
+
+func (p *kidOpener) Open(*via.Ctx) { p.open.Set(true) }
+func (p *kidOpener) kid() h.H      { return via.Child(p.Kid) }
+func (p *kidOpener) View() h.H {
+	return h.Div(p.open.Display(), h.Button(on.Click(p.Open)), via.When(p.open.Get(), p.kid))
+}
+
+func TestSignal_aLivePushDeclaresASlotInAChildItJustOpened(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(kidOpener{}))
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.Action(0).Over(conn).Fire()
+		conn.Await(`"kid__note":""`)
+	})
 }

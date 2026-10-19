@@ -110,7 +110,7 @@ func TestSSE_disconnectFreesACapSlot(t *testing.T) {
 	}, 2*time.Second, 20*time.Millisecond, "a freed slot must admit a new connection")
 }
 
-func TestSSE_capIsPerRegister(t *testing.T) {
+func TestSSE_capIsPerRouter(t *testing.T) {
 	t.Parallel()
 	a := serve(t, via.Handler(quietChild{}, via.WithMaxSSEConn(1)))
 	b := serve(t, via.Handler(quietChild{}, via.WithMaxSSEConn(1)))
@@ -385,7 +385,7 @@ func TestSSE_refusesToConnectWhileTheSessionStoreIsDown(t *testing.T) {
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
 	srv := serve(t, via.Handler(liveSessStream{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 
 	ck := sseSessionCookie(t, srv)
 	require.NotNil(t, ck, "precondition: a healthy connect establishes the session cookie")
@@ -941,6 +941,8 @@ func TestWithTrustedOrigin_panicsOnAValueThatIsNotABareOrigin(t *testing.T) {
 		{"non-http scheme", "ftp://auth.example", "scheme"},
 		{"no scheme", "auth.example", "scheme"},
 		{"no host", "https://", "host"},
+		{"wildcard", "https://*.example.com", "wildcard"},
+		{"empty port", "https://example.com:", "empty port"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

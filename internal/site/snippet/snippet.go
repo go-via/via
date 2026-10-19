@@ -30,18 +30,7 @@ type file struct {
 var files = map[string]*file{}
 
 func init() {
-	err := fs.WalkDir(srcFS, "src", func(p string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !embeddable(p) {
-			return err
-		}
-		b, err := srcFS.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		add(strings.TrimPrefix(p, "src/"), string(b))
-		return nil
-	})
-	if err != nil {
+	if err := fs.WalkDir(srcFS, "src", addSrc); err != nil {
 		panic(err)
 	}
 	entries, err := demos.FS.ReadDir(".")
@@ -58,6 +47,18 @@ func init() {
 		}
 		add("demos/"+e.Name(), string(b))
 	}
+}
+
+func addSrc(p string, d fs.DirEntry, err error) error {
+	if err != nil || d.IsDir() || !embeddable(p) {
+		return err
+	}
+	b, err := srcFS.ReadFile(p)
+	if err != nil {
+		return err
+	}
+	add(strings.TrimPrefix(p, "src/"), string(b))
+	return nil
 }
 
 // A _test.go is compiled only by go test, so what it shows could have stopped
@@ -114,7 +115,7 @@ func add(name, src string) {
 }
 
 // Option adjusts one rendered block.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type config struct {
 	title  string
@@ -124,40 +125,37 @@ type config struct {
 
 // Title replaces the block's label, which defaults to the file's base name.
 // An empty label leaves the header out.
-func Title(label string) Option {
-	return func(c *config) {
-		if c.titled {
-			panic("snippet: Title given twice")
-		}
-		c.title, c.titled = label, true
+func Title(label string) Option { return titleOption{label} }
+
+type titleOption struct{ label string }
+
+func (o titleOption) apply(c *config) {
+	if c.titled {
+		panic("snippet: Title given twice")
 	}
+	c.title, c.titled = o.label, true
 }
 
 // Mark highlights every line containing any of substrs. It matches text
 // rather than line numbers, so an edit to the file cannot move the highlight
 // onto the wrong line; a substr that matches no line panics.
-func Mark(substrs ...string) Option {
-	return func(c *config) { c.marks = append(c.marks, substrs...) }
-}
+func Mark(substrs ...string) Option { return markOption{substrs} }
+
+type markOption struct{ substrs []string }
+
+func (o markOption) apply(c *config) { c.marks = append(c.marks, o.substrs...) }
 
 // Show renders the whole file name, a path under src/ ("counter/main.go") or
 // "demos/<file>". An unknown name panics, which fails site startup, since
 // every page renders once to build the search index.
 func Show(name string, opts ...Option) h.H {
-	return cached(name, "", opts, func() []string { return lookup(name).lines })
+	return cached(name, "", opts)
 }
 
 // Region renders one named region of a file, dedented. An unknown file or
 // region panics, as with Show.
 func Region(name, region string, opts ...Option) h.H {
-	return cached(name, region, opts, func() []string {
-		f := lookup(name)
-		span, ok := f.regions[region]
-		if !ok {
-			panic("snippet: " + name + " has no region " + `"` + region + `"`)
-		}
-		return dedent(f.lines[span[0]:span[1]])
-	})
+	return cached(name, region, opts)
 }
 
 // Sources is the shown text of every file, which snippet/gen scans for the token
@@ -168,6 +166,19 @@ func Sources() []string {
 		out = append(out, strings.Join(f.lines, "\n")+"\n")
 	}
 	return out
+}
+
+// shown is the lines name shows, or region's dedented when region is set.
+func shown(name, region string) []string {
+	f := lookup(name)
+	if region == "" {
+		return f.lines
+	}
+	span, ok := f.regions[region]
+	if !ok {
+		panic("snippet: " + name + " has no region " + `"` + region + `"`)
+	}
+	return dedent(f.lines[span[0]:span[1]])
 }
 
 func lookup(name string) *file {
@@ -181,10 +192,10 @@ func lookup(name string) *file {
 // h nodes are immutable, so one highlighted tree serves every render of a page.
 var cache sync.Map
 
-func cached(name, region string, opts []Option, lines func() []string) h.H {
+func cached(name, region string, opts []Option) h.H {
 	c := config{}
 	for _, o := range opts {
-		o(&c)
+		o.apply(&c)
 	}
 	if !c.titled {
 		c.title = path.Base(name)
@@ -193,7 +204,7 @@ func cached(name, region string, opts []Option, lines func() []string) h.H {
 	if n, ok := cache.Load(key); ok {
 		return n.(h.H)
 	}
-	ls := trimBlank(lines())
+	ls := trimBlank(shown(name, region))
 	where := name
 	if region != "" {
 		where += "#" + region

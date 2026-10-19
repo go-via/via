@@ -7,6 +7,7 @@ import (
 	"github.com/go-via/via/h"
 	"go-via.dev/site/demo"
 	"go-via.dev/site/shell"
+	"go-via.dev/site/snippet"
 )
 
 // counterV07 is exact v0.7.0 API, the v0.7 twin of demos/counter.go. It is
@@ -57,7 +58,7 @@ var changes = []change{
 	{"an action `func(*via.Ctx) error`, `WithActionErrorHandler`", "`func(*via.Ctx)`; handle the error inside", byCompiler},
 	{"an `OnInit` error, logged while the page renders anyway", "an `OnInit` error aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500", bySilent},
 	{"`path:\"id\"` field tag", "`ctx.Param[T](\"id\")` in `OnInit`, stored in a field", bySilent},
-	{"`query:\"q\"` field tag", "`ctx.Request().URL.Query()` in `OnInit`; it is empty on actions, so list state belongs in the path or the session", bySilent},
+	{"`query:\"q\"` field tag", "`ctx.Request().URL.Query()` in `OnInit`; actions never see it, so list state belongs in the path or the session", bySilent},
 	{"`h.If(cond, node)`", "`via.When(cond, p.part)`: the node becomes a method returning `h.H`, called only when cond holds", byCompiler},
 	{"`h.When(cond, fn)`", "`via.When(cond, fn)`", byCompiler},
 	{"`h.IfElse`, `h.WhenElse`, `h.Switch`, `h.Maybe`", "a Go `if` or `switch` in a method returning `h.H`", byCompiler},
@@ -74,13 +75,13 @@ var changes = []change{
 	{"`h.Attr(n, v)`, `h.AttrNum(n, v)`", "`h.RawAttr(n, v)`", byCompiler},
 	{"`h.Checked()`, `h.Disabled()`, `h.Required()`, `h.Selected()`", "a bool argument: `h.Checked(true)`", byCompiler},
 	{"`h.ColSpan(\"2\")`, `h.TabIndex(\"0\")`, `h.MinNum(n)`, `h.ValueNum(n)`", "`h.ColSpan(2)`, `h.TabIndex(0)`, and the generic `h.Min(n)`, `h.Value(n)`", byCompiler},
-	{"`h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)`", "`h.Class(names…)` and `h.Style(css)`, with the names worked out in Go", byCompiler},
+	{"`h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)`", "`h.Class(names…)`, with the names worked out in Go; via's CSP blocks a style attribute, so styles move to a class or `h.DataStyle`", byCompiler},
 	{"`h.Tag`, `h.NewTag`, `h.VoidTag`", "`h.El(tag, …)`", byCompiler},
 	{"`h.Raw(html)`, `h.Static`, `h.With`", "gone; there is no unescaped HTML node", byCompiler},
 	{"`h.Title(s)`, the `<title>` element", "`PageMeta()` returning `via.Meta{Title: s}`; `h.Title` is now the `title` attribute", bySilent},
 	{"`sess.Put(ctx, v)`, `sess.Get[T](ctx)`, `sess.Clear[T](ctx)`, `sess.Rotate(ctx)`", "`ctx.Session().Put(v)`, `.Get[T]()`, `.Delete()`, `.Rotate()`", byCompiler},
 	{"one session value per type", "one value per session: a second `Put` replaces the first, so put one struct", bySilent},
-	{"`StateSess[T]`", "a topic per `ctx.Session().ID()`, followed with `State.Track` in `OnInit`", byCompiler},
+	{"`StateSess[T]`", "a topic per `ctx.Session().Ensure()`, followed with `State.Track` in `OnInit`", byCompiler},
 	{"`StateApp[T]`", "your own store, injected; a `topic.Topic[T]` and `via.StateTrack` to push its changes", byCompiler},
 	{"`app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal`", "`topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit`", byCompiler},
 	{"`OnConnect(ctx) error`", "`ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open", byWarn},
@@ -115,7 +116,7 @@ func (p *Migrate) PageMeta() via.Meta {
 func (p *Migrate) View() h.H {
 	d := p.doc()
 	plugins := append(inline("Plugins. picocss and its themes become your own CSS through `WithHead`; "+
-		"echarts and maplibre become an "), h.A(h.Href(d.Href("/islands")), h.Str("island")), h.Str("."))
+		"echarts and maplibre become an "), d.Link("/islands", "island"), h.Str("."))
 	return d.Page(
 		h.P(h.Str("v0.8 is a rebuild. The module never left v0.x, so "), Code("go get -u"), h.Str(" moves v0.7 to v0.8 as an "+
 			"ordinary bump and nothing warns you. Most v0.7 code does not port line by line, because the ideas "+
@@ -156,7 +157,7 @@ func (p *Migrate) View() h.H {
 
 		d.H3("The counter, both ways"),
 		h.P(h.Str("v0.7, with per-tab state and the numeric shape:")),
-		demo.Code(counterV07),
+		snippet.Highlight(counterV07),
 		h.P(inline("v0.8, the same counter as a `State[int]`, the source of the Counter card on Actions:")...),
 		demo.Source("counter.go"),
 		h.P(inline("Serve it with `http.ListenAndServe(\":3000\", via.Handler(Counter{}))`.")...),
@@ -195,7 +196,7 @@ func (p *Migrate) View() h.H {
 				"the handler's Go name and the field it was called on. A stale tab's click answers 404.")...),
 			h.Li(inline("The tab id signal is `viatab`, not `via_tab`.")...),
 			h.Li(inline("A signal's wire name is its field path, first letter lower-cased: `count`, and "+
-				"`chat__draft` inside an embedded `Chat`. The `via:\"name\"` override is gone.")...),
+				"`chat__draft` inside a `Chat` child. The `via:\"name\"` override is gone.")...),
 		),
 
 		d.H2("New startup panics"),

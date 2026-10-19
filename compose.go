@@ -14,13 +14,20 @@ import (
 // (h.RawAttr("id", …)) so the morph matches by id instead. Per-row actions use
 // on.Bind, carrying the row's own key with the click. Per-row signals are not
 // supported: a Signal inside a slice element is outside the composition struct,
-// so it has no field offset to name itself by and rendering it panics.
+// so it has no field offset to be found by and rendering it panics.
 func Each[T any](items []T, row func(T) h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		for _, item := range items {
-			r.Render(row(item))
-		}
-	})
+	return render.Dyn(eachNode[T]{items: items, row: row})
+}
+
+type eachNode[T any] struct {
+	items []T
+	row   func(T) h.H
+}
+
+func (n eachNode[T]) RenderTo(r *render.Renderer) {
+	for _, item := range n.items {
+		r.Render(n.row(item))
+	}
 }
 
 // When renders build()'s result when cond is true, and does not call build
@@ -39,9 +46,16 @@ func Each[T any](items []T, row func(T) h.H) h.H {
 // signals and content inside the branch round-trip normally but a handler that
 // only exists inside it answers 410. Put it outside the branch, or go live.
 func When(cond bool, build func() h.H) h.H {
-	return render.Dyn(func(r *render.Renderer) {
-		if cond {
-			r.Render(build())
-		}
-	})
+	return render.Dyn(whenNode{cond: cond, build: build})
+}
+
+type whenNode struct {
+	cond  bool
+	build func() h.H
+}
+
+func (n whenNode) RenderTo(r *render.Renderer) {
+	if n.cond {
+		r.Render(n.build())
+	}
 }

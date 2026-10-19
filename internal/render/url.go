@@ -50,16 +50,8 @@ func URLOrigin(u string) (origin string, ok bool) {
 	if scheme == "" {
 		return "", true
 	}
-	u = strings.Map(func(r rune) rune {
-		switch r {
-		case '\t', '\r', '\n':
-			return -1
-		case '\\':
-			return '/'
-		}
-		return r
-	}, u)
-	u = strings.TrimFunc(u, func(r rune) bool { return r <= ' ' })
+	u = strings.Map(browserURLRune, u)
+	u = strings.TrimFunc(u, isC0OrSpace)
 	p, err := url.Parse(u)
 	if err != nil || p.Host == "" {
 		return "", false
@@ -78,13 +70,8 @@ func URLOrigin(u string) (origin string, ok bool) {
 // for a relative URL. ok is false for an empty or protocol-relative URL, which
 // no policy admits.
 func urlScheme(u string) (scheme string, ok bool) {
-	u = strings.Map(func(r rune) rune {
-		if r == '\t' || r == '\r' || r == '\n' {
-			return -1
-		}
-		return r
-	}, u)
-	trimmed := strings.TrimLeftFunc(u, func(r rune) bool { return r <= ' ' })
+	u = strings.Map(dropTabCRLF, u)
+	trimmed := strings.TrimLeftFunc(u, isC0OrSpace)
 	if trimmed == "" || isSlashLike(trimmed, 0) && isSlashLike(trimmed, 1) {
 		return "", false
 	}
@@ -101,3 +88,22 @@ func urlScheme(u string) (scheme string, ok bool) {
 func isSlashLike(s string, i int) bool {
 	return i < len(s) && (s[i] == '/' || s[i] == '\\')
 }
+
+// dropTabCRLF drops the runes a browser strips anywhere in a URL.
+func dropTabCRLF(r rune) rune {
+	if r == '\t' || r == '\r' || r == '\n' {
+		return -1
+	}
+	return r
+}
+
+// browserURLRune is dropTabCRLF plus the browser's reading of a backslash as '/'.
+func browserURLRune(r rune) rune {
+	if r == '\\' {
+		return '/'
+	}
+	return dropTabCRLF(r)
+}
+
+// isC0OrSpace is what a browser trims from both ends of a URL.
+func isC0OrSpace(r rune) bool { return r <= ' ' }

@@ -36,9 +36,10 @@ type Attr interface {
 	isAttr()
 }
 
-// Binder bridges h and on into the via package without an import cycle. A
-// rendered signal declares its slot and registers its hydrator through it, and
-// package on binds its actions through it. via names the slots itself (a
+// Binder is the via Ctx a render pass runs under. render sits below via, so a
+// Renderer can hold the Ctx only as this interface. A rendered signal declares
+// its slot and registers its hydrator through it, and package on binds its
+// actions through it. via names the slots itself (a
 // signal's field path, an action's handler-name hash), so the Binder allocates
 // nothing. The via package supplies the implementation; h and on depend only
 // on this interface.
@@ -47,15 +48,29 @@ type Binder interface {
 	// initial value, for the page-level data-signals declaration. Idempotent
 	// within a render.
 	DeclareSignal(slot string, initial any)
-	// Hydrator records slot's update function, kept across renders so a live
-	// action can update the underlying value in place without a re-render. fn
-	// reports whether the value decoded.
-	Hydrator(slot string, fn func(json.RawMessage) bool)
+	// Hydrator records slot's updater, kept across renders so a live action
+	// can update the underlying value in place without a re-render.
+	Hydrator(slot string, h Hydrator)
 	// Action binds fn, a func(*via.Ctx), to event on the element r is writing.
 	Action(r *Renderer, event string, fn any)
-	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. decode turns
-	// a dispatched arg into the func(*via.Ctx) that calls fn with it.
-	ArgAction(r *Renderer, event string, fn, arg any, decode func(raw []byte) (any, error))
+	// ArgAction binds fn, a func(*via.Ctx, T), with arg to event. call
+	// decodes a dispatched arg and calls fn with it.
+	ArgAction(r *Renderer, event string, fn, arg any, call ArgCall)
+}
+
+// Hydrator writes a posted signal value into the handle it was bound from.
+type Hydrator interface {
+	// Hydrate reports whether raw decoded; a value that did not is not written.
+	Hydrate(raw json.RawMessage) bool
+}
+
+// ArgCall is on.Bind's typed half of an arg action: via checks the raw arg
+// against what the render bound between Decode and Call.
+type ArgCall interface {
+	// Decode turns a dispatched arg into the handler's argument type.
+	Decode(raw []byte) (any, error)
+	// Call runs the handler on ctx, a *via.Ctx, with a value Decode returned.
+	Call(ctx, v any)
 }
 
 // Renderer accumulates output bytes and exposes the Binder so dynamic nodes
@@ -113,8 +128,8 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 			// datastar-patch-elements frame mid-payload. Neutralise it.
 			buf.WriteString("&#13;")
 		case '\x00':
-			// HTML5 parsing replaces a literal NUL with U+FFFD; doing it
-			// here keeps the escaped bytes and the parsed DOM identical.
+			// A raw NUL never reaches the wire: body text would drop it
+			// silently, so it renders as a visible U+FFFD instead.
 			buf.WriteString("&#65533;")
 		default:
 			buf.WriteByte(s[i])
@@ -123,10 +138,12 @@ func writeEscaped(buf *bytes.Buffer, s string) {
 }
 
 var voidElements = map[string]bool{
-	"area": true, "br": true, "col": true, "embed": true, "hr": true,
+	"area": true, "base": true, "br": true, "col": true, "embed": true, "hr": true,
 	"img": true, "input": true, "link": true, "meta": true, "source": true,
 	"track": true, "wbr": true,
 }
+
+var newlineEaters = map[string]bool{"pre": true, "textarea": true, "listing": true}
 
 type element struct {
 	tag  string
@@ -141,11 +158,12 @@ func (e element) render(r *Renderer) {
 			a.render(r)
 		}
 	}
-	if voidElements[e.tag] {
+	if voidElements[strings.ToLower(e.tag)] {
 		r.WriteString(">")
 		return
 	}
 	r.WriteString(">")
+	body := r.buf.Len()
 	for _, k := range e.kids {
 		// A nil child is the documented "renders as nothing" (h.H's godoc), and
 		// a helper returning nil on an empty case is the idiom that produces
@@ -157,32 +175,39 @@ func (e element) render(r *Renderer) {
 			k.render(r)
 		}
 	}
+	if newlineEaters[strings.ToLower(e.tag)] && r.buf.Len() > body && r.buf.Bytes()[body] == '\n' {
+		// The HTML parser drops one newline right after these opening tags,
+		// so a leading newline of the content needs a second one to survive.
+		tail := bytes.Clone(r.buf.Bytes()[body:])
+		r.buf.Truncate(body)
+		r.buf.WriteByte('\n')
+		r.buf.Write(tail)
+	}
 	r.WriteString("</")
 	r.WriteString(e.tag)
 	r.WriteString(">")
 }
 
-// dynNode wraps a render function into a sealed H. It is the bridge the via
-// package uses to define dynamic body nodes (signals, children) that read the
-// Binder during the render pass, without breaking the seal or exposing render
-// itself. Users never construct one directly.
-type dynNode struct{ fn func(*Renderer) }
+// Dynamic is markup that reads the Binder during the render pass: signals,
+// children, bound actions. via and on implement it on unexported types and
+// wrap them with Dyn or DynAttr, which keeps H sealed and render unexported.
+type Dynamic interface{ RenderTo(*Renderer) }
 
-func (d dynNode) render(r *Renderer) { d.fn(r) }
+type dynNode struct{ d Dynamic }
 
-// Dyn wraps fn as a dynamic body node. via uses this for signal handles that
-// must read the Binder at render time. The fn is an internal detail of via,
-// never a user-supplied closure at a public call site.
-func Dyn(fn func(*Renderer)) H { return dynNode{fn: fn} }
+func (n dynNode) render(r *Renderer) { n.d.RenderTo(r) }
 
-type dynAttr struct{ fn func(*Renderer) }
+// Dyn wraps d as a dynamic body node.
+func Dyn(d Dynamic) H { return dynNode{d: d} }
 
-func (d dynAttr) render(r *Renderer) { d.fn(r) }
-func (d dynAttr) isAttr()            {}
+type dynAttr struct{ d Dynamic }
 
-// DynAttr wraps fn as a dynamic attribute. via uses this for event bindings
-// (package on) and Signal.Bind, which register with the render pass's Ctx.
-func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
+func (a dynAttr) render(r *Renderer) { a.d.RenderTo(r) }
+func (a dynAttr) isAttr()            {}
+
+// DynAttr wraps d as a dynamic attribute: event bindings (package on) and
+// Signal.Bind, which register with the render pass's Ctx.
+func DynAttr(d Dynamic) Attr { return dynAttr{d: d} }
 
 // El builds a generic element with the given tag and children. tag must match
 // [A-Za-z][A-Za-z0-9-]* — an invalid tag panics, since it is a
@@ -193,7 +218,7 @@ func DynAttr(fn func(*Renderer)) Attr { return dynAttr{fn: fn} }
 // every <script> a patch inserts, so one rendered in a live push would run
 // even though the same element in the first document is blocked.
 func El(tag string, kids ...H) H {
-	if !validTagName(tag) {
+	if !plainName(tag) {
 		panic(fmt.Sprintf("h: invalid tag name %q (must match [A-Za-z][A-Za-z0-9-]*)", tag))
 	}
 	if strings.EqualFold(tag, "script") {
@@ -203,16 +228,16 @@ func El(tag string, kids ...H) H {
 	return element{tag: tag, kids: kids}
 }
 
-// validTagName holds tag to the same strict ASCII allowlist as a non-data
-// attribute name: a leading letter, then letters, digits or hyphens. No
-// spaces, so a tag string cannot smuggle a second attribute or an inline
-// event handler into the opening tag.
-func validTagName(tag string) bool {
-	if tag == "" {
+// plainName is the strict ASCII allowlist for a tag and a non-data attribute
+// name: a leading letter, then letters, digits or hyphens. No spaces, so a
+// name cannot smuggle a second attribute or an inline event handler into the
+// opening tag.
+func plainName(name string) bool {
+	if name == "" {
 		return false
 	}
-	for i := range len(tag) {
-		c := tag[i]
+	for i := range len(name) {
+		c := name[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
 		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
@@ -265,19 +290,7 @@ func validAttrName(name string) bool {
 	if len(name) >= 2 && (name[0] == 'o' || name[0] == 'O') && (name[1] == 'n' || name[1] == 'N') {
 		return false
 	}
-	if name == "" {
-		return false
-	}
-	for i := range len(name) {
-		c := name[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z':
-		case i > 0 && (c >= '0' && c <= '9' || c == '-'):
-		default:
-			return false
-		}
-	}
-	return true
+	return plainName(name)
 }
 
 func cutDataPrefix(name string) (string, bool) {
@@ -309,10 +322,14 @@ func validDataSuffix(s string) bool {
 // programming-time construction and an injectable one defeats the safe-HTML
 // guarantee.
 func RawAttr(name, val string) Attr {
+	mustAttrName(name)
+	return rawAttr{name: name, val: val}
+}
+
+func mustAttrName(name string) {
 	if !validAttrName(name) {
 		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
 	}
-	return rawAttr{name: name, val: val}
 }
 
 // Data builds a data-<name>="val" attribute; val is HTML-escaped at render. The
@@ -336,9 +353,7 @@ func (noAttr) isAttr()          {}
 // BoolAttr builds a bare HTML boolean attribute — `disabled` when on, nothing
 // at all when off. The name is held to the same allowlist as RawAttr.
 func BoolAttr(name string, on bool) Attr {
-	if !validAttrName(name) {
-		panic(fmt.Sprintf("h: invalid attribute name %q (must match [A-Za-z][A-Za-z0-9-]*; data-* names may also use : _ . ; inline on* handlers are rejected)", name))
-	}
+	mustAttrName(name)
 	if !on {
 		return noAttr{}
 	}

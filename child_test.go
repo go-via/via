@@ -1,12 +1,14 @@
 package via_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
+	"net/http/httptest"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,12 +39,12 @@ func (b *beater) View() h.H {
 }
 
 // duo children two live beaters; it is itself plain (no State, Tick or Listen)
-// — a multiplex parent whose live children share one SSE stream.
+// — a parent whose live children share the tab's one SSE stream.
 type duo struct{ A, B beater }
 
 func (d *duo) View() h.H { return h.Div(via.Child(d.A), via.Child(d.B)) }
 
-func TestMux_eachLiveChildPushesItsOwnContainer(t *testing.T) {
+func TestChild_eachLiveChildPushesItsOwnContainer(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(duo{}))
 		conn := app.Connect()
@@ -50,6 +52,30 @@ func TestMux_eachLiveChildPushesItsOwnContainer(t *testing.T) {
 		conn.Await(`selector #via-i0`) // child 0 pushed its container
 		conn.Await(`selector #via-i1`) // child 1 pushed its container, independently
 	})
+}
+
+func TestChild_aPushIsAnInnerPatchOfItsContainerInOneSSEEvent(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(duo{}))
+	t.Cleanup(srv.Close)
+	lines, cancel := openStreamAt(t, srv, "/_via/sse")
+	defer cancel()
+
+	prev, pushed := "", false
+	for line := range lines {
+		if strings.HasPrefix(line, "event:") {
+			require.Empty(t, prev, "an event must open after a blank line")
+			if pushed {
+				return
+			}
+		}
+		if prev == "data: selector #via-i0" {
+			require.Equal(t, "data: mode inner", line, "a child's push must patch inside its container")
+			pushed = true
+		}
+		prev = line
+	}
+	require.Fail(t, "no event followed child 0's push")
 }
 
 // liveProbe is an embedded live child (State alone makes it live) that
@@ -79,14 +105,14 @@ type failPair struct {
 
 func (p *failPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+func TestChild_childInitErrorAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
 	resp, _ := do(t, serve(t, via.Handler(failPair{A: liveProbe{acquired: acquired}})),
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
-		"an embedded child's failed OnInit must abort the connect")
+		"a child's failed OnInit must abort the connect")
 	select {
 	case <-acquired:
 		require.Fail(t, "a sibling's OnConnect ran even though the connect never opened")
@@ -107,14 +133,14 @@ type panicPair struct {
 
 func (p *panicPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
+func TestChild_childInitPanicAbortsTheConnectAndAcquiresNothing(t *testing.T) {
 	t.Parallel()
 	acquired := make(chan struct{})
 	resp, _ := do(t, serve(t, via.Handler(panicPair{A: liveProbe{acquired: acquired}})),
 		http.MethodPost, "/_via/sse", "")
 
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode,
-		"an embedded child's panicking OnInit must abort the connect")
+		"a child's panicking OnInit must abort the connect")
 	select {
 	case <-acquired:
 		require.Fail(t, "a sibling's OnConnect ran even though the connect never opened")
@@ -185,7 +211,7 @@ type solo struct{ X liveNamer }
 
 func (s *solo) View() h.H { return h.Div(via.Child(s.X)) }
 
-func TestMux_liveChildSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
+func TestChild_liveChildSignalSlotIsStableAndPushOmitsDeclaration(t *testing.T) {
 	t.Parallel()
 	srv := via.Handler(solo{})
 
@@ -218,7 +244,7 @@ func TestChild_newChildSeedsTheChild(t *testing.T) {
 	t.Parallel()
 	app := via.Handler(greetPage{G: greeter{who: "alice"}})
 	_, body := do(t, serve(t, app), http.MethodGet, "/", "")
-	assert.Contains(t, body, "hi alice", "the parent literal must seed the embedded child")
+	assert.Contains(t, body, "hi alice", "the parent literal must seed the child")
 }
 
 // liveClicker is a live child with State + an action (dep-free, so a zero-value
@@ -235,21 +261,21 @@ type panel struct{ A, B liveClicker }
 
 func (p *panel) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
 
-func TestMux_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
+func TestChild_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect()
 
 		// URL id 1 addresses this child; Live routes it to this connection's tab.
 		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
-		assert.Equal(t, http.StatusNoContent, status, "a live mux action acks 204; the result rides the SSE")
+		assert.Equal(t, http.StatusNoContent, status, "a live child action acks 204; the result rides the SSE")
 
 		conn.Await("selector #via-i0") // the action's push must target its own child container
 		conn.Await("c=1")
 	})
 }
 
-func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
+func TestChild_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
@@ -259,7 +285,7 @@ func TestMux_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 	})
 }
 
-func TestMux_liveChildActionBindingCarriesChildID(t *testing.T) {
+func TestChild_liveChildActionBindingCarriesChildID(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(panel{})), http.MethodGet, "/", "")
 	assert.Regexp(t, `@post\('/_via/a/0/[A-Za-z0-9_-]+'`, body,
@@ -301,7 +327,7 @@ func TestChild_plainRootPatchLeavesLiveChildRegionAlone(t *testing.T) {
 	})
 }
 
-func TestMux_parentWithLiveChildsEmitsTheBootstrap(t *testing.T) {
+func TestChild_parentWithLiveChildrenEmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(duo{})), http.MethodGet, "/", "")
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
@@ -636,28 +662,30 @@ type plainRootWithFastTickGatedLiveChild[G any] struct{ Kid gatedLiveChildFastTi
 func (p *plainRootWithFastTickGatedLiveChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
 
 func TestChild_liveNestingViolationAbortsTheStreamAndLogsOnce(t *testing.T) {
-	t.Parallel()
-	var out lockedBuf
-	r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
-	via.Mount(r, "/", plainRootWithFastTickGatedLiveChild[gcLive]{})
-	app := vt.Serve(t, r)
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+		via.Mount(r, "/", plainRootWithFastTickGatedLiveChild[gcLive]{})
+		app := vt.Serve(t, r)
 
-	conn := app.Connect()
-	defer conn.Close()
+		conn := app.Connect()
+		defer conn.Close()
 
-	app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
 
-	require.Eventually(t, func() bool {
-		return strings.Contains(out.String(), "live push aborted")
-	}, 2*time.Second, 5*time.Millisecond,
-		"the violation must abort the stream")
+		require.Eventually(t, func() bool {
+			return strings.Contains(out.String(), "live push aborted")
+		}, 2*time.Second, 5*time.Millisecond,
+			"the violation must abort the stream")
 
-	// The Tick fires every 10ms; give a broken abort many chances to re-log
-	// before checking the count stayed at one.
-	time.Sleep(200 * time.Millisecond)
-	assert.Equal(t, 1, strings.Count(out.String(), "live push aborted"),
-		"a permanent nesting violation re-panics identically on every following tick — "+
-			"one log line from tearing the stream down, not one per beat")
+		// The Tick fires every 10ms; give a broken abort many chances to re-log
+		// before checking the count stayed at one.
+		time.Sleep(200 * time.Millisecond)
+		synctest.Wait()
+		assert.Equal(t, 1, strings.Count(out.String(), "live push aborted"),
+			"a permanent nesting violation re-panics identically on every following tick — "+
+				"one log line from tearing the stream down, not one per beat")
+	})
 }
 
 func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *testing.T) {
@@ -669,8 +697,8 @@ func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *
 	status, _ := app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 
-	assert.Contains(t, conn.Await("grand=here"), "grand=here",
-		"a hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing")
+	// A hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing.
+	conn.Await("grand=here")
 }
 
 // flipChild's own action count depends on a pointer shared with its parent —
@@ -853,7 +881,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 
 	// liveServer's httptest.NewTestServer only routes through its own
 	// srv.Client()'s transport (an in-memory network, needed for a live
-	// unit's own goroutines to run inside synctest) — a plain &http.Client{}
+	// stream goroutines to run inside synctest) — a plain &http.Client{}
 	// would try to dial the real network instead.
 	client := srv.Client()
 	jar, err := cookiejar.New(nil)
@@ -883,7 +911,7 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 		"the fresh page's OnInit must see the session value the live action just Put")
 }
 
-// initChild loads a field in its own OnInit — the hook an embedded child never
+// initChild loads a field in its own OnInit — the hook a child never
 // used to get at all; only the root's ran.
 type childIniter struct {
 	label string
@@ -926,7 +954,7 @@ func TestChild_childOnInitNotFoundAnswers404(t *testing.T) {
 	resp, body := do(t, serve(t, via.Handler(notFoundHost{})), http.MethodGet, "/", "")
 
 	assert.Equal(t, http.StatusNotFound, resp.StatusCode,
-		"ErrNotFound from an embedded child's OnInit is a 404, exactly as it is from the root's")
+		"ErrNotFound from a child's OnInit is a 404, exactly as it is from the root's")
 	assert.NotContains(t, body, "never", "the page must not serve once a child's OnInit failed")
 }
 
@@ -975,7 +1003,7 @@ func TestChild_childOnInitForbiddenAnswers403(t *testing.T) {
 	resp, body := do(t, serve(t, via.Handler(forbiddenHost{}, logTo(&out))), http.MethodGet, "/", "")
 
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
-		"ErrForbidden from an embedded child's OnInit is a 403, exactly as it is from the root's")
+		"ErrForbidden from a child's OnInit is a 403, exactly as it is from the root's")
 	assert.NotContains(t, body, "never")
 	assert.NotContains(t, out.String(), "level=ERROR", "a refusal is an answer, not a server fault")
 }
@@ -1094,7 +1122,7 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	code, _ := app.Action(0).Raw(childURL).Over(conn).Body(`{"i0__kid__step":5}`).Fire()
 	assert.Equal(t, http.StatusNoContent, code,
 		"the URL the parent's patch handed the browser must still reach the live child")
-	assert.Contains(t, conn.Await("n="), "5", "and drive it")
+	conn.Await("n=5<")
 }
 
 // threeDeepOuter/Mid nest a live leaf under two plain children, so its key is
@@ -1124,7 +1152,7 @@ func TestChild_liveLeafUnderTwoPlainChildsKeepsItsPathKey(t *testing.T) {
 
 	status, _ := app.ChildAction("0-0-0", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
-	assert.Contains(t, conn.Await("n="), "3")
+	conn.Await("n=3<")
 }
 
 // initKid loads its own data in OnInit. A re-render that skips it renders the
@@ -1402,7 +1430,7 @@ func TestChild_staleKeyNowHoldingASiblingOfTheSameTypeIsGone(t *testing.T) {
 	hide.Store(true)
 	status, body = app.ChildAction("0", 0).Fire()
 	assert.Equal(t, http.StatusGone, status, "A's stale URL must not run B's handler")
-	assert.NotContains(t, body, "B hits=1")
+	assert.Equal(t, "no such child\n", body, "a 410 ends the dispatch")
 
 	_, page := app.Get("/")
 	fresh, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "0", 0), strings.NewReader("{}"))
@@ -1532,23 +1560,25 @@ func (c *storedCard) View() h.H {
 // storedBody builds its child's markup in a helper that OnInit and OnReload
 // both call, so the GET and an action's re-render reach via.Child through
 // different frames.
-type storedBody struct{ body h.H }
+type storedBody struct {
+	body h.H
+	n    int
+}
 
 func (p *storedBody) load()                       { p.body = via.Child(storedCard{Label: "S"}) }
 func (p *storedBody) OnInit(ctx *via.Ctx) error   { p.load(); return nil }
 func (p *storedBody) OnReload(ctx *via.Ctx) error { p.load(); return nil }
-func (p *storedBody) Poke(ctx *via.Ctx)           {}
-func (p *storedBody) View() h.H                   { return h.Div(p.body, h.Button(on.Click(p.Poke), h.Str("poke"))) }
+func (p *storedBody) Poke(ctx *via.Ctx)           { p.n++ }
+func (p *storedBody) View() h.H {
+	return h.Div(h.Str(p.n), p.body, h.Button(on.Click(p.Poke), h.Str("poke")))
+}
 
 func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossAReRender(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(storedBody{}))
 
 	status, patch := app.Action(0).Fire()
-	require.Less(t, status, 300)
-	if status == http.StatusNoContent {
-		_, patch = app.Get("/")
-	}
+	require.Equal(t, http.StatusOK, status, "the root action must ship a re-render")
 	status, body := app.ChildAction("0", 0).Raw(actionURL(t, patch, "0", 0)).Fire()
 	assert.Equal(t, http.StatusOK, status, "the URL the root action's re-render shipped must still dispatch")
 	assert.Contains(t, body, "S hits=1")
@@ -1584,4 +1614,180 @@ func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossALivePushAndAReconnect(t
 	_, page := app.Get("/")
 	status, _ = app.ChildAction("0", 0).Raw(actionURL(t, page, "0", 0)).Tab(again.TabID()).Fire()
 	assert.Less(t, status, 300, "a reconnect re-runs OnInit without re-framing; the page's URL must still dispatch")
+}
+
+type loggedChild struct {
+	N via.Signal[int]
+	n via.State[int]
+}
+
+func (c *loggedChild) Bump(*via.Ctx) { c.n.Set(c.n.Get() + 1) }
+
+func (c *loggedChild) View() h.H {
+	return h.Div(h.Input(c.N.Bind()), c.n.Display(), h.Button(on.Click(c.Bump)))
+}
+
+type loggedParent struct{ C loggedChild }
+
+func (p *loggedParent) View() h.H { return h.Div(via.Child(p.C)) }
+
+func TestChild_aLiveChildsPushKeepsTheRoutersLogger(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var buf bytes.Buffer
+		app := vt.Serve(t, via.Handler(loggedParent{}, via.WithLogger(slog.New(slog.NewTextHandler(&buf, nil)))))
+		conn := app.Connect()
+		code, _ := app.ChildAction("0", 0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		conn.Await(">1<")
+
+		code, _ = app.ChildAction("0", 0).Over(conn).Body(`{"c__n":"x"}`).Fire()
+		require.Equal(t, http.StatusNoContent, code)
+		assert.Contains(t, buf.String(), "did not decode", "the warning must reach WithLogger, not slog.Default")
+	})
+}
+
+// tickOnlyGatedChild is live through its Tick alone: its View renders no State,
+// so nothing in a push re-derives its liveness.
+type tickOnlyGatedChild[G any] struct {
+	Gate  via.Signal[bool]
+	Grand G
+}
+
+func (c *tickOnlyGatedChild[G]) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (c *tickOnlyGatedChild[G]) Ping(*via.Ctx) {}
+func (c *tickOnlyGatedChild[G]) grand() h.H    { return via.Child(c.Grand) }
+func (c *tickOnlyGatedChild[G]) View() h.H {
+	return h.Div(h.Input(c.Gate.Bind()), h.Button(on.Click(c.Ping)), via.When(c.Gate.Get(), c.grand))
+}
+
+type plainRootWithTickOnlyChild[G any] struct{ Kid tickOnlyGatedChild[G] }
+
+func (p *plainRootWithTickOnlyChild[G]) View() h.H { return h.Div(via.Child(p.Kid)) }
+
+func TestChild_aTickOnlyLiveChildsPushCannotGrowALiveGrandchild(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var out lockedBuf
+		r := via.NewRouter(via.WithLogger(slog.New(slog.NewTextHandler(&out, nil))))
+		via.Mount(r, "/", plainRootWithTickOnlyChild[gcLive]{})
+		app := vt.Serve(t, r)
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		synctest.Wait()
+		assert.Contains(t, out.String(), "live push aborted", "liveness comes from the Tick, which a push does not re-run")
+	})
+}
+
+type initedGrand struct{ seen string }
+
+func (g *initedGrand) OnInit(*via.Ctx) error { g.seen = "inited"; return nil }
+func (g *initedGrand) View() h.H             { return h.Div(h.Str("grand=[" + g.seen + "]")) }
+
+func TestChild_aPlainGrandchildALiveChildsPushRevealsRunsItsOnInit(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(plainRootWithGatedLiveChild[initedGrand]{}))
+		conn := app.Connect()
+		defer conn.Close()
+
+		app.ChildAction("0", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		conn.Await("grand=[inited]")
+	})
+}
+
+// tickRootWithPlainForm is live through its root's Tick alone, and holds a
+// plain child whose native form is the one submitted.
+type tickRootWithPlainForm struct{ Form plainForm }
+
+func (p *tickRootWithPlainForm) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *tickRootWithPlainForm) View() h.H { return h.Div(via.Child(p.Form)) }
+
+type plainForm struct{}
+
+func (f *plainForm) Save(*via.Ctx) {}
+func (f *plainForm) View() h.H     { return via.PostForm(f.Save, h.Button(h.Str("save"))) }
+
+func TestChild_aPlainChildsNativeSubmitAnswersALivePageForALiveRoot(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(tickRootWithPlainForm{}))
+	t.Cleanup(srv.Close)
+	c := srv.Client()
+
+	page := jarGet(t, c, srv.URL+"/")
+	require.Contains(t, page, "data-init")
+	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "0", 0), nil)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, body, "data-init", "the answering page must reconnect its live root")
+}
+
+type declInner struct {
+	N via.Signal[int] `via:"init=5"`
+}
+
+func (i *declInner) View() h.H { return h.Div(i.N.Display()) }
+
+type declMiddle struct{ In declInner }
+
+func (m *declMiddle) View() h.H { return h.Div(via.Child(m.In)) }
+
+type declOuter struct{ M declMiddle }
+
+func (o *declOuter) View() h.H { return h.Div(via.Child(o.M)) }
+
+func TestChild_aGrandchildDeclaresItsSignalsOnTheGET(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(declOuter{}))
+	_, page := app.Get("/")
+	assert.Contains(t, page, `"m__in__n":5`)
+}
+
+type openerOuter struct {
+	open bool
+	In   noteKid
+}
+
+func (o *openerOuter) Open(*via.Ctx) { o.open = true }
+func (o *openerOuter) in() h.H       { return via.Child(o.In) }
+func (o *openerOuter) View() h.H {
+	return h.Div(h.Button(on.Click(o.Open)), via.When(o.open, o.in))
+}
+
+type plainOpenerRoot struct{ O openerOuter }
+
+func (p *plainOpenerRoot) View() h.H { return h.Div(via.Child(p.O)) }
+
+func TestChild_aPlainChildsPatchDeclaresAGrandchildItOpened(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(plainOpenerRoot{}))
+	code, body := app.ChildAction("0", 0).Fire()
+	require.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, `"o__in__note":""`)
+}
+
+type cntKid struct{ N via.Signal[int] }
+
+func (k *cntKid) View() h.H { return h.Div(k.N.Display()) }
+
+type cntBox struct{ B cntKid }
+
+type directAndNested struct {
+	A   cntKid
+	Box cntBox
+}
+
+func (p *directAndNested) View() h.H { return h.Div(via.Child(p.A), via.Child(p.Box.B)) }
+
+func TestChild_aDirectFieldSharingItsTypeWithANestedOneTakesThePositionalKey(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(directAndNested{}))
+	_, page := app.Get("/")
+	assert.NotContains(t, page, `"a__n"`, "a__n would name both children's slot")
+	assert.Contains(t, page, `"i0__n"`)
+	assert.Contains(t, page, `"i1__n"`)
 }

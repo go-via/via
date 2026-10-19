@@ -1,7 +1,6 @@
 package render_test
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/go-via/via/internal/render"
@@ -13,11 +12,11 @@ type stubBinder struct{}
 
 func (*stubBinder) DeclareSignal(string, any) {}
 
-func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
+func (*stubBinder) Hydrator(string, render.Hydrator) {}
 
 func (*stubBinder) Action(*render.Renderer, string, any) {}
 
-func (*stubBinder) ArgAction(*render.Renderer, string, any, any, func([]byte) (any, error)) {}
+func (*stubBinder) ArgAction(*render.Renderer, string, any, any, render.ArgCall) {}
 
 func TestBinder_isExposedSoDynamicNodesCanClaimSlots(t *testing.T) {
 	t.Parallel()
@@ -36,17 +35,21 @@ func TestWriteEscapedAndWriteString_distinguishRawFromEscaped(t *testing.T) {
 	assert.Equal(t, "<b>&lt;b&gt;", string(r.Bytes()))
 }
 
+type rawText string
+
+func (s rawText) RenderTo(r *render.Renderer) { r.WriteString(string(s)) }
+
 func TestDyn_rendersInTheElementBody(t *testing.T) {
 	t.Parallel()
 	r := render.NewRenderer(&stubBinder{})
-	r.Render(render.El("span", render.Dyn(func(r *render.Renderer) { r.WriteString("dyn") })))
+	r.Render(render.El("span", render.Dyn(rawText("dyn"))))
 	assert.Equal(t, "<span>dyn</span>", string(r.Bytes()))
 }
 
 func TestDynAttr_rendersInTheOpeningTag(t *testing.T) {
 	t.Parallel()
 	r := render.NewRenderer(&stubBinder{})
-	attr := render.DynAttr(func(r *render.Renderer) { r.WriteString(` data-x="1"`) })
+	attr := render.DynAttr(rawText(` data-x="1"`))
 	r.Render(render.El("span", attr, render.Str("body")))
 	assert.Equal(t, `<span data-x="1">body</span>`, string(r.Bytes()))
 }
@@ -76,4 +79,25 @@ func TestEl_acceptsOrdinaryTagNames(t *testing.T) {
 		}, "El(%q) must be accepted", tag)
 		assert.Equal(t, "<"+tag+"></"+tag+">", got)
 	}
+}
+
+func TestEl_aVoidTagInAnyCaseHasNoClosingTag(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{"BR", "base"} {
+		r := render.NewRenderer(&stubBinder{})
+		r.Render(render.El(tag))
+		assert.NotContains(t, string(r.Bytes()), "</", tag)
+	}
+}
+
+func TestEl_keepsALeadingNewlineThatTheParserWouldEat(t *testing.T) {
+	t.Parallel()
+	for _, tag := range []string{"textarea", "pre", "listing"} {
+		r := render.NewRenderer(&stubBinder{})
+		r.Render(render.El(tag, render.Str("\nx")))
+		assert.Equal(t, "<"+tag+">\n\nx</"+tag+">", string(r.Bytes()), tag)
+	}
+	r := render.NewRenderer(&stubBinder{})
+	r.Render(render.El("pre", render.Str("x\n")))
+	assert.Equal(t, "<pre>x\n</pre>", string(r.Bytes()), "only a leading newline is doubled")
 }

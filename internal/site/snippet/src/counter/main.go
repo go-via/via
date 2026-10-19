@@ -30,7 +30,5 @@ func (c *Counter) View() h.H {
 
 func main() {
 	r := via.Handler(Counter{n: new(atomic.Int64)})
-	err := http.ListenAndServe(":8080", r)
-	r.Close()
-	log.Fatal(err)
+	log.Fatal(http.ListenAndServe(":8080", r))
 }

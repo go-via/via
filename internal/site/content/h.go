@@ -74,7 +74,7 @@ func (p *Helpers) View() h.H {
 			h.Str(" or attribute value. Attribute and tag names are validated instead, and an invalid one panics: a name is written by you, not read from a request.")),
 		h.P(h.Str("Markup you already hold as a string, such as rendered Markdown, has no way into a view. Build it with h calls instead.")),
 		Callout(Warning, "Escaping stops HTML, not JavaScript",
-			h.P(h.Str("The "), h.A(h.Href(d.Href("/security")+"#content-security-policy"), h.Str("CSP")), h.Str(" admits Datastar's "+
+			h.P(h.Str("The "), d.Link("/security#content-security-policy", "CSP"), h.Str(" admits Datastar's "+
 				"expressions by the page's nonce, so it does not stop an expression. A value the user controls in "), API("h.Data"), h.Str(", "),
 				API("h.DataOn"), h.Str(", "), API("h.RawAttr"), h.Str(" on a "), Code("data-*"), h.Str(" name, "), API("expr.Raw"),
 				h.Str(" or the format of "), API("expr.Rawf"), h.Str(" runs as script. Pass user values through "), API("expr.Val"),
@@ -129,7 +129,7 @@ func (p *Helpers) View() h.H {
 			API("via.Each"), h.Str(" and "), API("via.Child"),
 			h.Str(". A child has state and a lifecycle, which h knows nothing about, and When and Each keep the view one expression. "+
 				"Since a nil node renders nothing, a Go if that leaves a variable nil works too. "),
-			h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")), h.Str(" covers all three.")),
+			d.Link("/compositions", "Compositions"), h.Str(" covers all three.")),
 
 		d.H2("Pairing with expr"),
 		snippet.Region("h/expr.go", "expr", snippet.Mark("q.Ne", "expr.Val", "expr.CopyTextOf", "expr.Class")),
@@ -142,7 +142,7 @@ func (p *Helpers) View() h.H {
 			h.Str(" copies the text of an element beside the handler, read at click time. "), API("expr.Class"),
 			h.Str(" toggles a class on the handler element, for feedback that needs no signal. "), API("h.DataOn"),
 			h.Str(" joins several statements with a semicolon. The rest of the vocabulary is on "),
-			h.A(h.Href(d.Href("/signals")+"#expressions"), h.Str("Signals")), h.Str(".")),
+			d.Link("/signals#expressions", "Signals"), h.Str(".")),
 
 		d.H2("Tags via owns"),
 		h.P(h.Str("h has no function for html, head, body, script, style, title, base, meta, link, template, slot or data. "+

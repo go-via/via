@@ -2,13 +2,15 @@ package via
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"sort"
 	"strconv"
@@ -29,6 +31,10 @@ const (
 	modeNative
 )
 
+func isDatastarRequest(req *http.Request) bool {
+	return req.Header.Get("Datastar-Request") == "true"
+}
+
 // tabSignal is the wire name of the tab id, which an action on a live unit
 // must carry to reach its instance; a plain action never checks it, so only
 // the origin floor guards those. It is also the canonical home of the
@@ -45,6 +51,10 @@ const (
 // the way the browser supplies a cookie. A user signal may not take this name
 // (declareSignal panics).
 const tabSignal = "viatab"
+
+// tabSignals is the signal object that hands a page or stream its tab id. id
+// is base64url, so it needs no JSON or attribute escaping.
+func tabSignals(id string) string { return `{"` + tabSignal + `":"` + id + `"}` }
 
 // tabFormField carries the tab id for a native <form> submit, which ships
 // neither Datastar's signal store nor its headers. Subject to the same
@@ -78,6 +88,15 @@ func (m *mount) warnNoChange(act, name string, v any) {
 		"act", act, "name", name)
 }
 
+// perMinute admits one log line a minute across goroutines.
+type perMinute struct{ last atomic.Int64 } // unix nanos of the last line admitted
+
+func (p *perMinute) allow() bool {
+	now := time.Now().UnixNano()
+	last := p.last.Load()
+	return now-last >= int64(time.Minute) && p.last.CompareAndSwap(last, now)
+}
+
 // warnAtCapacity breaks the silence of a router-wide refusal. The cap is
 // router-wide with no per-IP share, so one client can fill it and lock every
 // other tab out; a per-IP cap is a 1.0 change, but the operator at least has to
@@ -87,23 +106,19 @@ func (m *mount) warnNoChange(act, name string, v any) {
 // process: unlike a wiring mistake, being at capacity comes and goes, and a
 // refusal storm would otherwise be the loudest thing in the log.
 func (m *mount) warnAtCapacity(open int64) {
-	now := time.Now().UnixNano()
-	last := m.capWarn.Load()
-	if now-last < int64(time.Minute) || !m.capWarn.CompareAndSwap(last, now) {
+	if !m.capWarn.allow() {
 		return
 	}
 	m.cfg.log.Warn("via: refusing an SSE connect with 503: the router is at its live-stream cap. "+
 		"There is no per-IP share of that cap, so a single client can hold all of it; every tab is refused "+
 		"until one closes. The limit is WithMaxSSEConn — raise it only with the memory to back it.",
-		"open", open, "cap", m.maxLive)
+		"open", open, "cap", m.cfg.maxSSEConn)
 }
 
 // warnParkedFull is warnAtCapacity for parked actions: the cap is router-wide
 // and a single client can fill it, so the operator is told once a minute.
 func (m *mount) warnParkedFull() {
-	now := time.Now().UnixNano()
-	last := m.reg.parkWarn.Load()
-	if now-last < int64(time.Minute) || !m.reg.parkWarn.CompareAndSwap(last, now) {
+	if !m.reg.parkWarn.allow() {
 		return
 	}
 	m.cfg.log.Warn("via: refusing an action with 503: the router already holds its cap of actions parked "+
@@ -115,40 +130,51 @@ func (m *mount) warnParkedFull() {
 // happens on the connection's own goroutine, so every outcome has to be
 // carried back across the channel rather than answered where it occurred.
 type actionResult struct {
-	redirect  redirectTo
-	panicked  bool
-	badArg    error  // ?a= failed to decode (badActionArg) — 400, not 500
-	pushWork  func() // live only: the dirty-signals + element push, run by tabStream.run right after acking
-	gone      string // live only: the unit/action lookup came up invalid; the reason is the response body
-	initErr   error  // live only: the post-action OnInit re-run failed (see reloadUnit)
-	forbidden string // live only: the session-bound check rejected the request
-	paramMiss bool   // live only: a Param segment did not decode — 404, as on the plain path
-	// unavailable is a 503: the request was well-formed and the tab is live,
-	// but a dependency (the session store) could not answer. Distinct from
-	// forbidden so a store blip stops being reported as a security rejection.
-	unavailable string
+	redirect redirectTo
+	fail     *actionFail // nil when the action ran; otherwise the whole answer
+	pushWork *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
+	session  *Session    // live only: the action's handle, so a native answer's OnInit sees what the action wrote
+}
+
+// actionFail is an action that did not run to a normal answer. It carries its
+// own status, so both transports answer a failure the same way.
+type actionFail struct {
+	status int
+	body   string
+	note   error // what the error page reads, when it gets a reason
+	// hookErr is a failed post-action OnReload, answered like any hook error
+	// (see answerHookError) rather than with status and body.
+	hookErr error
+}
+
+func (f *actionFail) answer(log *slog.Logger, w http.ResponseWriter) {
+	if f.hookErr != nil {
+		answerHookError(log, w, f.hookErr, "via: OnReload after an action failed")
+		return
+	}
+	if f.note != nil {
+		noteErr(w, f.note)
+	}
+	http.Error(w, f.body, f.status)
+}
+
+// failGone is a unit or action lookup that came up invalid; body says why.
+func failGone(body string) *actionFail { return &actionFail{status: http.StatusGone, body: body} }
+
+// failPanic is an action that panicked: a 500 whose error the error page reads.
+func failPanic(rec any) *actionFail {
+	err := fmt.Errorf("via: action panic: %v", rec)
+	return &actionFail{status: http.StatusInternalServerError, body: "action failed", note: err}
 }
 
 // mount bundles a page's per-request wiring, shared by its GET, action, and
 // SSE routes so origin floor, OnInit, and body caps can't drift between them.
 type mount struct {
-	cfg         *config
-	sessions    *sessionManager
-	policy      *routerPolicy
-	reg         *registry
-	newInst     func() instance
+	*routerShared
+	root        interface{ newInst() instance }
 	patternBase string
+	pageSuffix  string // "/" when the page is served at its base plus a slash
 	names       []string
-	liveCount   *atomic.Int64 // concurrent SSE streams across the whole router, capped at maxLive
-	maxLive     int
-	noChange    *sync.Map     // the Router's dead-click warning dedupe (see warnNoChange)
-	unknownActs *idDedupe     // the Router's unknown-action warning dedupe (see unknownAction)
-	capWarn     *atomic.Int64 // unix nanos of the last at-capacity log, router-wide (see warnAtCapacity)
-	// routerCtx bounds every stream this mount opens, so Router.Close can end
-	// them; live counts the streams still running, so Close can wait.
-	routerCtx context.Context
-	live      *sync.WaitGroup
-	liveMu    *sync.RWMutex
 	// csp is this mount's Content-Security-Policy, built once at Mount from the
 	// router-wide assets plus the root's own PageMeta().Assets; assetsFP is the
 	// fingerprint of the latter, re-checked on every document render so a
@@ -176,7 +202,7 @@ func (bind *Ctx) unit(child string) *Ctx {
 }
 
 // unit returns the connected live unit for dispatch address child. Called on
-// the child goroutine (see dispatchOverStream) so the lookup is atomic with the
+// the stream goroutine (see dispatchOverStream) so the lookup is atomic with the
 // dispatch it guards; it still takes replace's lock, so a future caller reading
 // it from elsewhere need not remember to add one.
 func (c *tabStream) unit(child string) *Ctx {
@@ -233,10 +259,29 @@ func validAddr(child string) bool {
 }
 
 func unitAddr(c *Ctx) string {
-	if c != nil && c.isChild {
+	if c.isChild {
 		return c.childKey
 	}
 	return rootAddr
+}
+
+func (m *mount) newInst() instance { return m.root.newInst() }
+
+// serveGet renders the page.
+func (m *mount) serveGet(w http.ResponseWriter, req *http.Request) {
+	defer recoverRequest(m.cfg.log, w, req, "render")
+	// concreteBase, not patternBase: a page at /job/{id} must advertise
+	// /job/7/_via/sse. The pattern would be POSTed literally and 404,
+	// leaving every live child under a parametrised mount dead.
+	base := concreteBase(m.patternBase, req, m.names)
+	m.writePage(w, req, m.newInst(), base, nil, nil, false)
+}
+
+// recoverRequest answers a panic on a plain request transport.
+func recoverRequest(log *slog.Logger, w http.ResponseWriter, req *http.Request, what string) {
+	if rec := recover(); rec != nil {
+		recoverToHTTP(log, w, req, rec, what, false)
+	}
 }
 
 // dispatch is the single entry point for every action POST on a mount, at
@@ -244,17 +289,13 @@ func unitAddr(c *Ctx) string {
 // the six transports this replaced each re-implemented them and drifted (OnInit
 // never ran on a child action; a live/child action dropped ctx.Redirect).
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			recoverToHTTP(m.cfg.log, w, req, rec, "action", false)
-		}
-	}()
+	defer recoverRequest(m.cfg.log, w, req, "action")
 	if !originAllowed(req, m.cfg) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
 	mode := modeNative
-	if req.Header.Get("Datastar-Request") == "true" {
+	if isDatastarRequest(req) {
 		mode = modeDatastar
 	}
 	m.capBody(w, req, mode)
@@ -269,14 +310,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	child := req.PathValue("child")
 	act := req.PathValue("act")
 
-	tab := ""
-	if mode == modeNative {
-		tab = req.PostFormValue(tabFormField)
-	} else if raw, ok := in[tabSignal]; ok {
-		// Anything that is not a JSON string leaves tab empty and falls through
-		// to the plain path — the same graceful answer a stale id gets.
-		_ = json.Unmarshal(raw, &tab)
-	}
+	tab := actionTab(req, mode, in)
 	// The tab id rides in the body, so the body is read before anything can
 	// park: a parked action holds its decoded signals. parkedCap bounds that.
 	deadline := time.Now().Add(m.cfg.pinnedDeadline)
@@ -285,7 +319,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// for it is on its way, and the plain path could only 410 a live unit.
 	// An address via never renders is not worth a slot.
 	park := tab != "" && validAddr(child) && isActionID(act) && m.issuedTab(tab, tabCredential(m.sessions, req))
-	lc, leave, out := m.reg.enter(req.Context(), m.routerCtx, tab, deadline, park)
+	lc, ticket, out := m.reg.enter(req.Context(), m.ctx, tab, deadline, park)
 	switch out {
 	case enterGone:
 		noteErr(w, ErrStaleTab)
@@ -303,7 +337,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		return
 	case enterReady:
 		if lc.mount != m {
-			leave()
+			ticket.leave()
 			// The registry is router-wide, and a tab id from another mount is
 			// otherwise structurally valid here (same field, same action-id
 			// space), so nothing else would fail first.
@@ -313,23 +347,37 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 		// A streaming page's plain child echoes the tab id too, and its address
 		// was never registered on the connection. Membership is stable (a unit
 		// is published before the tab id is, and never removed), so this check
-		// is safe off the child goroutine, unlike the staleness lookup
+		// is safe off the stream goroutine, unlike the staleness lookup
 		// dispatchOverStream still does there.
 		if lc.unit(child) != nil {
-			m.dispatchOverStream(w, req, mode, lc, deadline, leave, child, act, in, base)
+			m.dispatchOverStream(w, req, mode, lc, deadline, ticket, child, act, in, base)
 			return
 		}
-		leave()
+		ticket.leave()
 	}
 	m.dispatchPlain(w, req, mode, child, act, in, base, tab)
+}
+
+// actionTab reads the tab id an action POST echoes, from the form field or the
+// signal body per mode.
+func actionTab(req *http.Request, mode actionMode, in map[string]json.RawMessage) string {
+	if mode == modeNative {
+		return req.PostFormValue(tabFormField)
+	}
+	tab := ""
+	if raw, ok := in[tabSignal]; ok {
+		// Anything that is not a JSON string leaves tab empty and falls through
+		// to the plain path — the same graceful answer a stale id gets.
+		_ = json.Unmarshal(raw, &tab)
+	}
+	return tab
 }
 
 func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMode) {
 	max := m.cfg.maxBody
 	if mode == modeNative {
 		// A native submit is multipart, so the cap rises to the upload cap;
-		// only maxBody of it stays in RAM, the rest spills to a temp file the
-		// caller removes.
+		// file parts past maxBody spill to a temp file the caller removes.
 		max = m.cfg.maxUpload
 	}
 	req.Body = http.MaxBytesReader(unwrapWriter(w), req.Body, max)
@@ -340,7 +388,9 @@ func (m *mount) capBody(w http.ResponseWriter, req *http.Request, mode actionMod
 func (m *mount) decodeSignals(w http.ResponseWriter, req *http.Request, mode actionMode) (map[string]json.RawMessage, bool) {
 	if mode == modeNative {
 		if err := req.ParseMultipartForm(m.cfg.maxBody); err != nil {
-			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			// multipart's own limits (text fields past maxBody+10 MiB, too
+			// many parts) are a size verdict too, not a malformed form.
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok || errors.Is(err, multipart.ErrMessageTooLarge) {
 				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 				return nil, false
 			}
@@ -389,49 +439,8 @@ func formError(req *http.Request, err error) string {
 // wait for the goroutine to pick the action up is bounded by req.Context(), the
 // connection closing and the pinned deadline; an action already running is
 // waited for, since it writes this response.
-func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, picked func(), child string, act string, in map[string]json.RawMessage, base string) {
-	res, outcome := lc.run(req.Context(), deadline, picked, func() actionResult {
-		// The client hung up between the handoff and now: applying the action
-		// would double-apply on its retry, and nobody reads this answer.
-		if req.Context().Err() != nil {
-			return actionResult{gone: "request abandoned"}
-		}
-		// Checked here, not before the closure was posted: a cookieless
-		// dispatch that passed a pre-queue check while the connection was
-		// unbound could be applied after a concurrent live login bound it. Here
-		// the compare and the run are atomic on one serialized goroutine.
-		// Resolved once, here, for both the binding check and the action. The
-		// store error is kept, not discarded: a store that could not answer
-		// yields a nil session, which used to read as "wrong session" (or "no
-		// prior session") rather than an outage.
-		sessID, sess, err := m.sessions.resolve(req)
-		if err != nil {
-			return actionResult{unavailable: "session store unavailable"}
-		}
-		if bound := lc.boundSession(); bound != "" {
-			// A dispatch must carry the same session, compared by sid (a Rotate
-			// moves the cookie id, never the sid). Otherwise a leaked tab id is a
-			// bearer credential good from any request, session or none, once
-			// the origin floor is open.
-			if sess == nil || sess.sid != bound {
-				return actionResult{forbidden: "session mismatch"}
-			}
-		}
-		// Also looked up here, not before the closure was posted: a concurrent
-		// push replaces lc.units, so a unit read earlier could be stale. That
-		// is more than an address mismatch — Signal.bind stamps the dirty sink
-		// at render time, so acting against an older unit attributes the write
-		// to a Ctx nothing downstream reads, silently dropping the patch.
-		u := lc.unit(child)
-		if u == nil || u.unitV.ident != req.URL.Query().Get(unitIdentParam) {
-			return actionResult{gone: "no such child"}
-		}
-		a, ok := u.actions[act]
-		if !ok {
-			return actionResult{gone: m.unknownAction(u, act)}
-		}
-		return liveRunAction(w, req, m.sessions, m.policy, sessID, sess, lc, u, in, a)
-	})
+func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mode actionMode, lc *tabStream, deadline time.Time, t *parkTicket, child string, act string, in map[string]json.RawMessage, base string) {
+	res, outcome := lc.run(req.Context(), deadline, t, &liveAction{m: m, w: w, req: req, lc: lc, child: child, act: act, in: in})
 	switch outcome {
 	case runPinned:
 		// 503, not 410: the tab is fine and the action is legitimate — this
@@ -446,49 +455,102 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, "request abandoned", http.StatusGone)
 		return
 	}
-	if res.unavailable != "" {
-		// A store that could not answer is the only producer of unavailable.
-		noteErr(w, ErrStoreDown)
-		http.Error(w, res.unavailable, http.StatusServiceUnavailable)
+	if res.fail != nil {
+		res.fail.answer(m.cfg.log, w)
 		return
 	}
-	if res.forbidden != "" {
-		http.Error(w, res.forbidden, http.StatusForbidden)
-		return
-	}
-	if res.gone != "" {
-		http.Error(w, res.gone, http.StatusGone)
-		return
-	}
-	if res.initErr != nil {
-		answerReloadFailure(m.cfg.log, w, res.initErr)
-		return
-	}
-	if res.badArg != nil {
-		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
-		return
-	}
-	if res.paramMiss {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if res.panicked {
-		http.Error(w, "action failed", http.StatusInternalServerError)
+	if m.answerRedirect(w, req, mode, res.redirect) {
 		return
 	}
 	if mode == modeNative {
-		m.respond(w, req, mode, res.redirect, func() {
-			// A native submit replaces the whole document, so this must be the
-			// page a brand-new connection will hold — a fresh instance with
-			// OnInit run, not a snapshot of the dying connection's live tree
-			// (which the reconnect is about to reseed anyway). The action just
-			// ran and may have mutated the session, so this OnInit resolves it
-			// fresh.
-			m.writePage(w, req, m.newInst(), base, nil)
-		}, nil)
+		// A native submit replaces the whole document, so this must be the
+		// page a brand-new connection will hold — a fresh instance with OnInit
+		// run, not a snapshot of the dying connection's live tree (which the
+		// reconnect is about to reseed anyway). The request's cookie predates
+		// the action's Put or Rotate, so OnInit reads the action's session.
+		m.writePage(w, req, m.newInst(), base, nil, res.session, false)
 		return
 	}
-	m.respond(w, req, mode, res.redirect, nil, nil) // patch: nil — the push already framed it
+	writePatch(w, nil) // the push already framed it
+}
+
+// liveAction is one action POST handed to its tab's stream goroutine.
+type liveAction struct {
+	m      *mount
+	w      http.ResponseWriter
+	req    *http.Request
+	lc     *tabStream
+	child  string
+	act    string
+	in     map[string]json.RawMessage
+	result chan actionResult
+}
+
+// run applies the action, answers the waiting POST, then pushes.
+func (a *liveAction) run() {
+	res := a.applyRecovered()
+	a.result <- res
+	if res.pushWork != nil {
+		res.pushWork.push()
+	}
+}
+
+func (a *liveAction) applyRecovered() (res actionResult) {
+	defer a.recoverPanic(&res)
+	return a.apply()
+}
+
+func (a *liveAction) recoverPanic(res *actionResult) {
+	if rec := recover(); rec != nil {
+		a.lc.mount.cfg.log.Error("via: live action panic",
+			"tab", a.lc.id, "unit", a.lc.unitType(), "err", rec, "stack", string(debug.Stack()))
+		*res = actionResult{fail: failPanic(rec)}
+	}
+}
+
+func (a *liveAction) apply() actionResult {
+	// The client hung up between the handoff and now: applying the action
+	// would double-apply on its retry, and nobody reads this answer.
+	if a.req.Context().Err() != nil {
+		return actionResult{fail: failGone("request abandoned")}
+	}
+	// Checked here, not before the action was posted: a cookieless
+	// dispatch that passed a pre-queue check while the connection was
+	// unbound could be applied after a concurrent live login bound it. Here
+	// the compare and the run are atomic on one serialized goroutine.
+	// Resolved once, here, for both the binding check and the action. The
+	// store error is kept, not discarded: a store that could not answer
+	// yields a nil session, which used to read as "wrong session" (or "no
+	// prior session") rather than an outage.
+	sessID, sess, err := a.m.sessions.resolve(a.req)
+	if err != nil {
+		// 503, not 403: the request is well-formed and the tab is live, so a
+		// store blip must not read as a security rejection.
+		return actionResult{fail: &actionFail{status: http.StatusServiceUnavailable, body: "session store unavailable", note: ErrStoreDown}}
+	}
+	if bound := a.lc.boundSession(); bound != "" {
+		// A dispatch must carry the same session, compared by sid (a Rotate
+		// moves the cookie id, never the sid). Otherwise a leaked tab id is a
+		// bearer credential good from any request, session or none, once
+		// the origin floor is open.
+		if sess == nil || sess.sid != bound {
+			return actionResult{fail: &actionFail{status: http.StatusForbidden, body: "session mismatch"}}
+		}
+	}
+	// Also looked up here, not before the action was posted: a concurrent
+	// push replaces lc.units, so a unit read earlier could be stale. That
+	// is more than an address mismatch — Signal.bind stamps the dirty sink
+	// at render time, so acting against an older unit attributes the write
+	// to a Ctx nothing downstream reads, silently dropping the patch.
+	u := a.lc.unit(a.child)
+	if u == nil || u.unitV.ident != a.req.URL.Query().Get(unitIdentParam) {
+		return actionResult{fail: failGone("no such child")}
+	}
+	act, ok := u.actions[a.act]
+	if !ok {
+		return actionResult{fail: failGone(a.m.unknownAction(u, a.act))}
+	}
+	return liveRunAction(a.w, a.req, a.m.sessions, a.m.policy, sessID, sess, a.lc, u, a.in, act)
 }
 
 // liveRunAction hydrates unit's signals from in and runs act. unit is the bind
@@ -503,34 +565,12 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 // doing the enqueue used to race other actions' goroutines and reorder their
 // pushes; returning it as data keeps everything on the one goroutine, in order.
 func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionManager, pol *routerPolicy, sessID string, beforeSession *sessionData, lc *tabStream, unit *Ctx, in map[string]json.RawMessage, act action) (res actionResult) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			if bad, ok := rec.(badActionArg); ok {
-				res = actionResult{badArg: bad.err}
-				return
-			}
-			if un, ok := rec.(unrenderedArg); ok {
-				res = actionResult{gone: un.body(lc.mount.cfg.log)}
-				return
-			}
-			// Same sentinel, same answer as recoverToHTTP gives the plain path:
-			// the URL names something that does not exist, which is a 404, not
-			// a server fault worth a stack dump.
-			if _, ok := rec.(paramMiss); ok {
-				res = actionResult{paramMiss: true, pushWork: unit.push}
-				return
-			}
-			lc.mount.cfg.log.Error("via: live action panic", "tab", lc.id,
-				"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-			res = actionResult{panicked: true, pushWork: unit.push}
-		}
-	}()
+	defer lc.recoverAction(unit, act, &res)
 	// Registered before the hydrate loop so every exit unwinds it, not just the
-	// one that reaches a push: a malformed arg, an unrendered arg, a paramMiss,
-	// a handler panic or a reloadUnit error all return without pushWork, and
-	// livePush's restore is the only other one — so without this the client's
-	// posted values stayed on the instance for the next Tick/Listen handler to
-	// read. Deferred rather than inline so the handler and reloadUnit still see
+	// one that reaches a push: a malformed or unrendered arg returns without
+	// pushWork, and livePush's restore is the only other one — so without this
+	// the client's posted values stayed on the instance for the next
+	// Tick/Listen handler to read. Deferred rather than inline so the handler and reloadUnit still see
 	// the hydrated values; a Set inside the handler drops its own slot, so a
 	// server write still survives.
 	defer lc.rev.restore()
@@ -549,7 +589,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 	for slot, raw := range in {
 		if hydrate, ok := unit.hydrators[slot]; ok {
-			if !hydrate(raw) {
+			if !hydrate.Hydrate(raw) {
 				delete(lc.client, slot)
 				continue
 			}
@@ -565,7 +605,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w}
+	rc := &Ctx{reqScope: reqScope{req: req, sessions: sessions, policy: pol, sessW: w}, streamCtx: unit.streamCtx}
 	rc.adoptSession(sessID, beforeSession, nil)
 	rc.session.stream = lc
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
@@ -573,16 +613,16 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	// on every dispatch dropped an earlier action's Set the moment it panicked
 	// or reloadUnit errored — no push ran to flush it, and this line wiped it
 	// before the next action's push ever saw it.
-	act.fn(rc)
+	act.run(rc)
 
 	// Re-load the unit the same way the plain path does: the handler mutated
 	// state this unit's OnInit had already read, and the push render below
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
 	// the tab is navigating away from this render. See reloader.
 	if rc.redirect.url == "" {
-		rl := &Ctx{req: req, sessions: sessions, policy: pol, sessW: w, session: rc.Session(), base: unit.base}
+		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{initErr: err, pushWork: unit.push}
+			return actionResult{fail: &actionFail{hookErr: err}, pushWork: unit.pusher}
 		}
 		rc.redirect = rl.redirect
 	}
@@ -595,14 +635,58 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	}
 	lc.shareSession(rc.session)
 
+	// Behind a Redirect the tab is navigating away, so nothing is pushed. A
+	// refused one navigates nowhere, so the push still runs.
+	if rc.redirect.url != "" && rc.redirect.refusal() == "" {
+		return actionResult{redirect: rc.redirect}
+	}
 	// The dirty set this action wrote is shipped by the push itself
 	// (tabStream.flushDirty), on the one path every server-driven signal change
 	// takes — a Tick/Listen handler's Set included.
-	push := unit.push
 	return actionResult{
 		redirect: rc.redirect,
-		pushWork: push, // patch-signals, then re-render this unit and frame the element-patch
+		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
+		session:  rc.session,
 	}
+}
+
+// recoverAction turns a panic in liveRunAction into its actionResult: via's
+// sentinels get the answer the plain path gives them, anything else is logged
+// as a handler fault.
+func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
+	if rec := recover(); rec != nil {
+		if f := sentinelFail(c.mount.cfg.log, rec); f != nil {
+			*res = actionResult{fail: f}
+			// Param panics from inside the handler, which may already have
+			// Set state; as after a handler panic, the push flushes it.
+			if _, miss := rec.(paramMiss); miss {
+				res.pushWork = unit.pusher
+			}
+			return
+		}
+		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
+			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
+		*res = actionResult{fail: failPanic(rec), pushWork: unit.pusher}
+	}
+}
+
+// sentinelFail turns a recovered panic that is one of via's request sentinels
+// into its answer, or nil for anything else, which is a handler fault. Both
+// transports answer through it, so a sentinel means the same status on a plain
+// request and over a stream.
+func sentinelFail(log *slog.Logger, rec any) *actionFail {
+	switch v := rec.(type) {
+	case badActionArg:
+		// 400, not 500: the client sent an arg that does not decode.
+		return &actionFail{status: http.StatusBadRequest, body: "bad action arg: " + v.err.Error()}
+	case unrenderedArg:
+		return failGone(v.body(log))
+	case paramMiss:
+		// The URL names something that does not exist: a 404, not a server
+		// fault worth a stack dump.
+		return &actionFail{status: http.StatusNotFound, body: "not found", note: ErrNotFound}
+	}
+	return nil
 }
 
 // unknownAction is the 410 body for an id this render does not bind — a branch
@@ -702,11 +786,12 @@ func noStream(mode actionMode, tab string) string {
 //
 // from non-nil already ran OnInit for this request; it carries that wiring down
 // (inheritRequestScope) instead of running OnInit twice.
-func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx) {
-	ctx, body := inst.renderPage(w, req, m, base, from)
+func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instance, base string, from *Ctx, sess *Session, rootLive bool) {
+	ctx, body := inst.renderPage(w, req, m, base, from, sess)
 	if ctx == nil {
 		return
 	}
+	ctx.live = ctx.live || rootLive
 	tab := ""
 	if len(liveUnits(ctx)) > 0 {
 		tab = m.newTabID(pageTabCredential(ctx, m.sessions, req))
@@ -714,16 +799,22 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, inst instanc
 	writeHTMLPage(w, m, body, base, tab, inst.v)
 }
 
-func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx) (*Ctx, []byte) {
+func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mount, base string, from *Ctx, sess *Session) (*Ctx, []byte) {
 	if from != nil {
 		return renderRootBase(inst, true, base, nil, nil, from, nil, from.badDecodeLogged)
 	}
 	ctx := newRootCtx(true, base, nil)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
+	if sess != nil {
+		// Detached from the action's stream: this page's tab is not that one.
+		s := *sess
+		s.stream = nil
+		ctx.session = &s
+	}
 	// Before OnInit, not just before the View: seeding an island with Set is
 	// what OnInit is for, and a Set with no slot and no pass goes nowhere.
 	prebindSignals(ctx, inst)
-	if runOnInit(inst.v, ctx, w, req, m.sessions, m.policy, false) != nil {
+	if runOnInit(inst.v, ctx, m.scope(w, req), false) != nil {
 		return nil, nil
 	}
 	return ctx, renderRootWith(ctx, inst.v)
@@ -733,6 +824,105 @@ func (inst instance) renderPage(w http.ResponseWriter, req *http.Request, m *mou
 // action, then answers per mode.
 func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode actionMode, child string, act string, in map[string]json.RawMessage, base string, tab string) {
 	inst := m.newInst()
+	auth, bind, rootBefore, ok := m.discoverPlain(w, req, inst, child, act, in, base)
+	if !ok {
+		return
+	}
+	ua, u, authAct, a, ok := m.actedUnit(w, req, auth, bind, child, act)
+	if !ok {
+		return
+	}
+	// The intersection is per (handler, arg), not per handler: a posted signal
+	// that widens an Each would otherwise widen the accepted arg set too, and
+	// an arg only the client's own body produced would dispatch. a.args is the
+	// very map action.run checks against, so pruning it in place is
+	// what fails the unauthorized arg closed.
+	pruneArgs(a, authAct)
+	if ua.live {
+		// Liveness is read off the auth render, never off bind (I1/I5): only
+		// auth ran the root's OnInit. Reaching here means the tab was missing
+		// or stale, so fail closed rather than mutating a throwaway instance.
+		noteErr(w, ErrStaleTab)
+		http.Error(w, noStream(mode, tab), http.StatusGone)
+		return
+	}
+	u.reqScope = m.scope(w, req)
+	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
+
+	// The handler mutated state the acted unit's OnInit had already read, so
+	// the response render below would frame the pre-action data — a 204 and a
+	// silently unchanged UI. Skipped behind a Redirect: nothing from this
+	// instance gets rendered. See reloader.
+	if u.redirect.url == "" {
+		rl := &Ctx{reqScope: u.reqScope, session: auth.session, base: base}
+		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
+			answerHookError(m.cfg.log, w, err, "via: OnReload after an action failed")
+			return
+		}
+		u.redirect = rl.redirect
+	}
+
+	if m.answerRedirect(w, req, mode, u.redirect) {
+		return
+	}
+	if mode == modeNative {
+		// auth ran the root's OnInit, so its verdict holds a Tick or Listen the
+		// re-render below cannot re-derive.
+		m.writePage(w, req, inst, base, u, nil, auth.live)
+		return
+	}
+	b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
+	if b == nil {
+		m.warnNoChange(act, a.name, actedViewer(inst, u))
+	}
+	writePatch(w, b)
+}
+
+// actedUnit finds the unit a plain action addresses in both discovery renders
+// and its handler in each, answering 410 when either render disagrees about
+// what lives at the address. ua and authAct are the auth render's; u and a are
+// the bind render's, the pair the action runs against.
+func (m *mount) actedUnit(w http.ResponseWriter, req *http.Request, auth, bind *Ctx, child, act string) (ua, u *Ctx, authAct, a action, ok bool) {
+	ua = auth.unit(child)
+	if ua == nil {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	authAct, authOK := ua.actions[act]
+	if !authOK {
+		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
+		return
+	}
+	u = bind.unit(child)
+	if u == nil {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	// Same guard, same reason, as the acted-instance substitution in
+	// childViewer: a When around a Child that depends on a hydrated signal can
+	// shift ordinals, so one key may denote different types in the auth and
+	// bind renders. Child's docs forbid such a When; fail closed rather than
+	// run the handler against a unit the authorization never looked at.
+	if ua.unitV.typ != u.unitV.typ {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	// A matching type is not yet the same unit: a sibling of the same type
+	// shifted onto this key carries a different identity (see childViewer).
+	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
+		http.Error(w, "no such child", http.StatusGone)
+		return
+	}
+	a, ok = u.actions[act]
+	if !ok {
+		http.Error(w, m.unknownAction(u, act), http.StatusGone)
+	}
+	return
+}
+
+// discoverPlain runs OnInit and the discovery renders for a plain action;
+// rootBefore is the root markup the response render is diffed against.
+func (m *mount) discoverPlain(w http.ResponseWriter, req *http.Request, inst instance, child, act string, in map[string]json.RawMessage, base string) (auth, bind *Ctx, rootBefore []byte, ok bool) {
 	// Discovery is two-phase. auth is the render the client did not influence:
 	// it alone decides what is dispatchable (see on.Bind). Then the body is
 	// applied to the slots that render made client-writable and the tree is
@@ -740,7 +930,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	// inside it hydrated too — without this their posted values were silently
 	// dropped. The action must be present in both, so the executed render is an
 	// intersection with auth, never a superset.
-	auth := newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
+	auth = newRootCtx(true, base, map[string]any{}) // nil only would read as "declare everything"
 	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
 	// several malformed slots at once still logs one Warn, not one per slot per
 	// pass (rebindFrom copies the pointer; childViewer carries it to children).
@@ -748,11 +938,11 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
 	auth.passUnits = map[string]*Ctx{}
 	prebindSignals(auth, inst)
-	if runOnInit(inst.v, auth, w, req, m.sessions, m.policy, false) != nil {
-		return
+	if runOnInit(inst.v, auth, m.scope(w, req), false) != nil {
+		return nil, nil, nil, false
 	}
-	rootBefore := renderRootWith(auth, inst.v)
-	bind := auth
+	rootBefore = renderRootWith(auth, inst.v)
+	bind = auth
 	done := map[string]bool{}
 	n := 0
 	for ; n < maxHydratePasses && hydrateTree(bind, in, done); n++ {
@@ -779,91 +969,7 @@ func (m *mount) dispatchPlain(w http.ResponseWriter, req *http.Request, mode act
 		bind = rebindFrom(auth)
 		renderRootWith(bind, inst.v)
 	}
-	ua := auth.unit(child)
-	if ua == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	authAct, ok := ua.actions[act]
-	if !ok {
-		http.Error(w, m.unknownAction(ua, act), http.StatusGone)
-		return
-	}
-	u := bind.unit(child)
-	if u == nil {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// Same guard, same reason, as the acted-instance substitution in
-	// childViewer: a When around a Child that depends on a hydrated signal can
-	// shift ordinals, so one key may denote different types in the auth and
-	// bind renders. Child's docs forbid such a When; fail closed rather than
-	// run the handler against a unit the authorization never looked at.
-	if ua.unitV.typ != u.unitV.typ {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// A matching type is not yet the same unit: a sibling of the same type
-	// shifted onto this key carries a different identity (see childViewer).
-	if ident := req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	a, ok := u.actions[act]
-	if !ok {
-		http.Error(w, m.unknownAction(u, act), http.StatusGone)
-		return
-	}
-	// The intersection is per (handler, arg), not per handler: a posted signal
-	// that widens an Each would otherwise widen the accepted arg set too, and
-	// an arg only the client's own body produced would dispatch. a.args is the
-	// very map the slot's closure checks against, so pruning it in place is
-	// what fails the unauthorized arg closed.
-	for k := range a.args {
-		if _, ok := authAct.args[k]; !ok {
-			delete(a.args, k)
-		}
-	}
-	if ua.live {
-		// Liveness is read off the auth render, never off bind (I1/I5): only
-		// auth ran the root's OnInit. Reaching here means the tab was missing
-		// or stale, so fail closed rather than mutating a throwaway instance.
-		noteErr(w, ErrStaleTab)
-		http.Error(w, noStream(mode, tab), http.StatusGone)
-		return
-	}
-	u.req = req
-	u.sessions = m.sessions
-	u.policy = m.policy
-	u.sessW = w
-	a.fn(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
-
-	// The handler mutated state the acted unit's OnInit had already read, so
-	// the response render below would frame the pre-action data — a 204 and a
-	// silently unchanged UI. Skipped behind a Redirect: nothing from this
-	// instance gets rendered. See reloader.
-	if u.redirect.url == "" {
-		rl := &Ctx{req: req, sessions: m.sessions, policy: m.policy, sessW: w, session: auth.session, base: base}
-		if err := reloadUnit(actedViewer(inst, u), rl); err != nil {
-			answerReloadFailure(m.cfg.log, w, err)
-			return
-		}
-		u.redirect = rl.redirect
-	}
-
-	if mode == modeNative {
-		m.respond(w, req, mode, u.redirect, func() {
-			m.writePage(w, req, inst, base, u)
-		}, nil)
-		return
-	}
-	m.respond(w, req, mode, u.redirect, nil, func() []byte {
-		b := m.rerenderPlain(child, rootBefore, inst, auth, bind, u, base)
-		if b == nil {
-			m.warnNoChange(act, a.name, actedViewer(inst, u))
-		}
-		return b
-	})
+	return auth, bind, rootBefore, true
 }
 
 // actedViewer is the composition the action just mutated: the root, or the
@@ -880,14 +986,13 @@ func actedViewer(inst instance, u *Ctx) any {
 // render with only the per-render tables reset. Three separate defect rounds
 // were one field set on auth and forgotten here (req/sessions/sessW/doInit,
 // then session, then live), each patched by hand-copying one more
-// field — so the default is inverted: a new Ctx field rides along unless it is
-// reset below, and forgetting one can no longer silently drop a request scope.
+// field — so the default is inverted: a new Ctx field rides along unless it
+// belongs to unitPass, and forgetting one can no longer silently drop a request
+// scope.
 //
-// Reset are exactly the things a render produces and the next render must
-// produce again (slot order/initials, the action and hydrator tables, the
-// child tree, the rendered bytes and push closure, this dispatch's dirty set
-// and redirect), plus the root's OnInit registrations — OnInit does not re-run
-// here and nothing on the plain path consumes them. `live` is not reset: it is
+// unitPass holds exactly what a render produces and the next render must
+// produce again, plus the root's OnInit registrations — OnInit does not re-run
+// here and nothing on the plain path consumes them. `live` stays on Ctx: it is
 // auth's verdict, and a later pass may only widen it (I5).
 //
 // The invariants this loop must preserve:
@@ -902,14 +1007,7 @@ func actedViewer(inst instance, u *Ctx) any {
 //	   re-render cannot raise it.
 func rebindFrom(auth *Ctx) *Ctx {
 	c := *auth
-	c.order, c.initial = nil, map[string]any{}
-	c.actions = map[string]action{}
-	c.hydrators = map[string]func(json.RawMessage) bool{}
-	c.dirty = map[string]any{}
-	c.children = nil
-	c.rendered, c.push = nil, nil
-	c.redirect = redirectTo{}
-	c.ticks, c.subs, c.onConnect, c.disposers = nil, nil, nil, nil
+	c.unitPass = newUnitPass()
 	return &c
 }
 
@@ -931,7 +1029,7 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 		if !ok {
 			continue
 		}
-		if !hydrate(raw) {
+		if !hydrate.Hydrate(raw) {
 			// Gone, so a live connection does not re-decode it on every push.
 			delete(in, slot)
 			continue
@@ -959,23 +1057,25 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 // value, and its slot must survive until then.
 func connectClient(bind *Ctx, in map[string]json.RawMessage) map[string]json.RawMessage {
 	keep := map[string]json.RawMessage{}
-	var walk func(c *Ctx)
-	walk = func(c *Ctx) {
-		if c.unitV.sig != nil {
-			for _, f := range c.unitV.sig.fields {
-				if raw, ok := in[f.wire(c.scopePrefix())]; ok && !f.cs {
-					keep[f.wire(c.scopePrefix())] = raw
-				}
-			}
-		}
-		for _, child := range c.children {
-			walk(child)
-		}
-	}
-	walk(bind)
+	keepSignalValues(bind, in, keep)
 	hydrateTree(bind, keep, map[string]bool{}) // drops what does not decode
 	bind.rev.restore()
 	return keep
+}
+
+// keepSignalValues copies into keep the values in carries for the non-CS
+// signal fields of c and its children.
+func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
+	if c.unitV.sig != nil {
+		for _, f := range c.unitV.sig.fields {
+			if raw, ok := in[f.wire(c.scopePrefix())]; ok && !f.cs {
+				keep[f.wire(c.scopePrefix())] = raw
+			}
+		}
+	}
+	for _, child := range c.children {
+		keepSignalValues(child, in, keep)
+	}
 }
 
 // maxHydratePasses bounds dispatchPlain's discovery loop. The loop cannot
@@ -985,7 +1085,7 @@ func connectClient(bind *Ctx, in map[string]json.RawMessage) map[string]json.Raw
 // slot takes exactly 2 passes (2 renders), which is the floor: the handler has
 // to run on a render that already saw the posted values.
 //
-// Each pass re-renders the whole tree, but an embedded child keeps the instance
+// Each pass re-renders the whole tree, but a child keeps the instance
 // its first pass made (see Ctx.passUnits), so its OnInit runs once, as a root's
 // does.
 const maxHydratePasses = 8
@@ -1017,7 +1117,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, au
 	// already-live root — liveAncestor reads that off the discovery tree, since
 	// this re-render's own synthetic root has no ancestor Ctx to walk from.
 	// auth, not bind (I1): liveness is the un-hydrated render's verdict.
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u, nil, u.badDecodeLogged, liveAncestor(auth, child))
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, base, u.dirtyAll(), seen, u, nil, u.badDecodeLogged, liveAncestor(auth, child))
 	assertRenderInvariantLiveness(afterCtx.live)
 	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
 		return nil
@@ -1034,7 +1134,7 @@ func (m *mount) rerenderPlain(child string, rootBefore []byte, inst instance, au
 
 // pruneToAuthority intersects a live display render's action table with the
 // authority render's, per handler and per arg — the same intersection
-// dispatchPlain does inline, for the same reason: a posted signal may widen
+// dispatchPlain does, for the same reason: a posted signal may widen
 // what the client sees and must never widen what it may call.
 //
 // Walked by child ordinal, since that is the dispatch address. A type mismatch
@@ -1064,11 +1164,7 @@ func pruneToAuthority(bind, auth *Ctx) {
 			delete(bind.actions, id)
 			continue
 		}
-		for k := range a.args {
-			if _, ok := authAct.args[k]; !ok {
-				delete(a.args, k)
-			}
-		}
+		pruneArgs(a, authAct)
 	}
 	for i, child := range bind.children {
 		var ac *Ctx
@@ -1076,6 +1172,16 @@ func pruneToAuthority(bind, auth *Ctx) {
 			ac = auth.children[i]
 		}
 		pruneToAuthority(child, ac)
+	}
+}
+
+// pruneArgs drops the args a bound handler holds that the authority render's
+// handler does not.
+func pruneArgs(a, authAct action) {
+	for k := range a.args {
+		if _, ok := authAct.args[k]; !ok {
+			delete(a.args, k)
+		}
 	}
 }
 
@@ -1112,7 +1218,7 @@ const redirectInit = `(()=>{var s=document.currentScript;if(!s)return;` +
 
 // writeRedirectScript answers a @post with the navigation script. The target is
 // JSON-encoded into a header and reaches the DOM through setAttribute, never
-// through the HTML parser, and respond has already cleared it through
+// through the HTML parser, and answerRedirect has already cleared it through
 // render.SafeURL (see redirectTo) — so no javascript: target and no attribute
 // escape.
 func writeRedirectScript(w http.ResponseWriter, target string) {
@@ -1122,51 +1228,60 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 		return
 	}
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/javascript; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/javascript; charset=utf-8")
 	hdr.Set("Datastar-Script-Attributes", string(attrs))
 	w.Write([]byte(redirectInit))
 }
 
-// respond is dispatch's one response policy for every action POST — root,
-// child, live, or native form. A queued Redirect wins: a native submit gets a
-// 303, a Datastar @post gets the navigation script above. Either way the target
-// must clear Redirect's host check and render.SafeURL, the same URL policy
-// runOnInit and rendered href/src URLs use; a refused one is dropped, not
-// followed. Otherwise renderNative or renderPatch (nil for
-// "unchanged" / "the live push already carried it") decides the body.
-func (m *mount) respond(w http.ResponseWriter, req *http.Request, mode actionMode, redirect redirectTo, renderNative func(), renderPatch func() []byte) {
-	if redirect.url != "" {
-		switch refused := redirect.refusal(); {
-		case refused != "":
-			m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
-		case mode == modeNative:
-			http.Redirect(w, req, redirect.url, http.StatusSeeOther)
-			return
-		default:
-			writeRedirectScript(w, redirect.url)
-			return
-		}
+// answerRedirect is dispatch's one redirect policy for every action POST —
+// root, child, live, or native form. It writes a queued Redirect and reports
+// whether it did: a native submit gets a 303, a Datastar @post gets the
+// navigation script above. Either way the target must clear Redirect's host
+// check and render.SafeURL, the same URL policy runOnInit and rendered href/src
+// URLs use; a refused one is logged and dropped, not followed, and the caller
+// answers as if none was queued.
+func (m *mount) answerRedirect(w http.ResponseWriter, req *http.Request, mode actionMode, redirect redirectTo) bool {
+	if redirect.url == "" {
+		return false
 	}
-	if mode == modeNative {
-		renderNative()
-		return
+	switch refused := redirect.refusal(); {
+	case refused != "":
+		m.cfg.log.Warn("via: Redirect target dropped", "redirect", redirect, "reason", refused)
+		return false
+	case mode == modeNative:
+		http.Redirect(w, req, m.fromPage(req, redirect.url), http.StatusSeeOther)
+	default:
+		writeRedirectScript(w, redirect.url)
 	}
-	if renderPatch == nil {
-		w.WriteHeader(http.StatusNoContent)
-		return
+	return true
+}
+
+// fromPage resolves a relative target against the page the action was
+// submitted from, as the browser does for the @post script. http.Redirect
+// would resolve it against the action URL.
+func (m *mount) fromPage(req *http.Request, target string) string {
+	u, err := url.Parse(target)
+	if err != nil || u.IsAbs() || strings.HasPrefix(u.Path, "/") {
+		return target
 	}
-	b := renderPatch()
+	page, err := url.Parse(concreteBase(m.patternBase, req, m.names) + m.pageSuffix)
+	if err != nil {
+		return target
+	}
+	return page.ResolveReference(u).String()
+}
+
+// writePatch answers a Datastar action with its element-patch fragment, or 204
+// for a nil one: unchanged, or already carried by the live push. Fragments take
+// the default policy: a fragment carries no document, so its header is inert —
+// only the page's policy governs what runs.
+func writePatch(w http.ResponseWriter, b []byte) {
 	if b == nil {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// Element-patch fragments take the default policy: a fragment carries no
-	// document, so its header is inert — only the page's policy governs what
-	// runs.
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/html; charset=utf-8")
 	hdr.Set("Content-Security-Policy", cspHeader)
 	w.Write(b)
 }

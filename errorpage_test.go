@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
@@ -469,7 +470,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 			return h.Div(h.Str("x"))
 		}),
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")),
+		testSessionKey,
 	)
 	via.Mount(r, "/", errLiveSess{})
 	t.Cleanup(r.Close)
@@ -526,4 +527,149 @@ func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
 
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "the wrapper caught a redirect it must pass through")
 	assert.Equal(t, "/login", resp.Header.Get("Location"))
+}
+
+func TestErrorPage_carriesErrNotFoundForAParamOnInitCannotDecode(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/thread/{id}", errParams{})
+	t.Cleanup(r.Close)
+
+	resp, _ := errGet(t, r, "/thread/abc")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrNotFound, "OnInit's Param miss must report what OnReload's does")
+}
+
+type errLivePanic struct{ n via.State[int] }
+
+func (l *errLivePanic) Boom(*via.Ctx) { panic("boom") }
+
+func (l *errLivePanic) View() h.H {
+	return h.Div(h.Button(on.Click(l.Boom), h.Str("!")), l.n.Display())
+}
+
+func TestErrorPage_carriesALiveActionsPanic(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/", errLivePanic{})
+	t.Cleanup(r.Close)
+	app := vt.Serve(t, r)
+	conn := app.Connect()
+	page := fetchPage(t, app, "/")
+
+	resp, _ := nativePost(t, app.Client(), app.URL()+actionURL(t, page, "r", 0), map[string]string{"_viatab": conn.TabID()})
+
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	assert.ErrorContains(t, got.Err, "boom", "a live action's panic must reach the error page as the plain path's does")
+}
+
+type errActParam struct{}
+
+func (errActParam) Go(ctx *via.Ctx) { ctx.Param[int]("id") }
+func (p errActParam) View() h.H     { return h.Div(h.Button(on.Click(p.Go), h.Str("go"))) }
+
+func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/thread/{id}", errActParam{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	page := jarGet(t, srv.Client(), srv.URL+"/thread/abc")
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), nil)
+
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrNotFound, "an action's Param miss must report what OnInit's does")
+}
+
+type errClick struct{}
+
+func (errClick) Go(*via.Ctx) {}
+func (p errClick) View() h.H { return h.Div(h.Button(on.Click(p.Go))) }
+
+func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithMaxUpload(20<<20), via.WithMaxBody(1<<20))
+	via.Mount(r, "/", errClick{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+
+	page := jarGet(t, srv.Client(), srv.URL+"/")
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), map[string]string{"f": strings.Repeat("x", 12<<20)})
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+type relRedirect struct{}
+
+func (relRedirect) Go(ctx *via.Ctx) { ctx.Redirect("?step=2") }
+func (p relRedirect) View() h.H     { return h.Div(h.Button(on.Click(p.Go))) }
+
+func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
+	t.Parallel()
+	for path, want := range map[string]string{"/x/{id}": "/x/7?step=2", "/docs/": "/docs/?step=2", "/": "/?step=2"} {
+		r := via.NewRouter()
+		via.Mount(r, path, relRedirect{})
+		t.Cleanup(r.Close)
+		srv := httptest.NewServer(r)
+		t.Cleanup(srv.Close)
+		c := srv.Client()
+		c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+		body := jarGet(t, c, srv.URL+strings.Replace(path, "{id}", "7", 1))
+		resp, _ := nativePost(t, c, srv.URL+actionURL(t, body, "r", 0), nil)
+		require.Equal(t, http.StatusSeeOther, resp.StatusCode, path)
+		assert.Equal(t, want, resp.Header.Get("Location"), path)
+	}
+}
+
+type errRotate struct{}
+
+func (errRotate) Out(ctx *via.Ctx) { ctx.Session().Rotate() }
+func (p errRotate) View() h.H      { return h.Button(on.Click(p.Out), h.Str("out")) }
+
+func TestErrorPage_carriesErrStaleTabOnANativeSubmitToAnEndedStream(t *testing.T) {
+	t.Parallel()
+	var got via.PageError
+	r := via.NewRouter(testSessionKey, via.WithErrorPage(func(_ *via.Ctx, e via.PageError) h.H {
+		got = e
+		return h.Div(h.Str("x"))
+	}))
+	via.Mount(r, "/", errLiveSess{})
+	via.Mount(r, "/out", errRotate{})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	page := jarGet(t, c, srv.URL+"/")
+	lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", "")
+	defer cancel()
+	tab := awaitTabID(t, lines)
+	jarPost(t, c, srv.URL+actionURL(t, jarGet(t, c, srv.URL+"/out"), "r", 0))
+	drained := time.After(5 * time.Second)
+	for open := true; open; {
+		select {
+		case _, open = <-lines:
+		case <-drained:
+			require.Fail(t, "the rotate did not end the other tab's stream")
+		}
+	}
+
+	resp, _ := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	require.Equal(t, http.StatusGone, resp.StatusCode)
+	assert.ErrorIs(t, got.Err, via.ErrStaleTab)
 }

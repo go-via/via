@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # CI gate for the repo, run from its root. It checks and never rewrites files:
 # gofmt over every module; vet, staticcheck, build and race tests for via and
-# the site module (internal/site); vet and staticcheck for vtbrowser; then
-# vtbrowser's real-browser tier.
+# the site module (internal/site); a complexity cap on via's non-test code; vet
+# and staticcheck for vtbrowser; then vtbrowser's real-browser tier.
 set -euo pipefail
 
 GO="${GO:-go}"
@@ -17,8 +17,8 @@ usage: ci.sh [--browser|--no-browser] [--chrome=PATH]
   --no-browser    skip the browser tier
   --chrome=PATH   use PATH as the browser binary (implies --browser)
 
-With no flags the tier runs when a Chromium/Chrome binary is present and skips
-loudly when one is not.
+With no flags the tier runs when VIA_CHROME or a Chromium/Chrome binary on PATH
+is present, and skips loudly when neither is.
 USAGE
 }
 while [ $# -gt 0 ]; do
@@ -32,6 +32,8 @@ while [ $# -gt 0 ]; do
 	esac
 	shift
 done
+# vtbrowser reads VIA_CHROME before PATH; a --chrome flag wins over both.
+chrome="${chrome:-${VIA_CHROME:-}}"
 
 # gofmt, not go fmt: go fmt rewrites in place and stops at nested modules.
 echo "== gofmt =="
@@ -47,6 +49,13 @@ $GO vet ./...
 
 echo "== staticcheck =="
 $GO tool staticcheck ./...
+
+# go list keeps out tests, nested modules and dot-dirs, which a bare path
+# argument would walk into.
+echo "== gocyclo, gocognit (over 15) =="
+srcs="$($GO list -f '{{range .GoFiles}}{{$.Dir}}/{{.}} {{end}}' ./...)"
+$GO tool gocyclo -over 15 $srcs
+$GO tool gocognit -over 15 $srcs
 
 echo "== go build =="
 $GO build ./...
@@ -66,7 +75,7 @@ echo "== vtbrowser module (vet, staticcheck) =="
 # rather than silently: vtbrowser's own t.Skip is invisible in CI output, so an
 # unrun tier reads as a pass.
 if [ -n "$chrome" ] && ! [ -x "$chrome" ]; then
-	echo "ci.sh: --chrome=$chrome is not an executable" >&2
+	echo "ci.sh: browser $chrome (--chrome or VIA_CHROME) is not an executable" >&2
 	exit 1
 fi
 if [ -z "$chrome" ] && [ "$browser" != "off" ]; then

@@ -7,8 +7,9 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"maps"
 	"net/http"
-	"runtime/debug"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,14 +19,13 @@ import (
 // action routes onto its single goroutine. units is replaced after every push
 // with that render's bind Ctx — always the render the client's DOM reflects.
 type tabStream struct {
-	mount       *mount            // a tab id is valid only on its mount, never another sharing the router-wide registry
-	pushq       chan func()       // serialization channel, shared by all this connection's units
-	done        <-chan struct{}   // closed on disconnect
-	pushSignals func(json string) // emit a patch-signals frame on this stream
-	mu          sync.Mutex        // replace runs on the child goroutine, unit is read from the dispatching request's
-	units       map[string]*Ctx   // dispatch address → current unit Ctx, at any embedding depth
-	sess        string            // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
-	handlers    []*Ctx            // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
+	mount    *mount          // a tab id is valid only on its mount, never another sharing the router-wide registry
+	pushq    chan pushItem   // serialization channel, shared by all this connection's units
+	done     <-chan struct{} // closed on disconnect
+	mu       sync.Mutex      // replace runs on the stream goroutine, unit is read from the dispatching request's
+	units    map[string]*Ctx // dispatch address → current unit Ctx, at any embedding depth
+	sess     string          // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
+	handlers []*Ctx          // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
@@ -34,7 +34,7 @@ type tabStream struct {
 	rev             *revertSet                 // how to undo that application before the next authority render
 	badDecodeLogged *atomic.Bool               // dedupes the hydrator's decode-failure warning for this connection's life
 
-	id           string      // the per-connection tab id, for correlating a log line with a tab
+	id           string      // the tab id, for correlating a log line with a tab
 	pinnedLogged atomic.Bool // warnPinned is once per connection, not once per click
 	// pinTimerLogged is the stream timer's own once-flag: a Tick that ran long
 	// once must not silence the action that later finds the tab truly pinned.
@@ -94,8 +94,8 @@ func (c *tabStream) moveSession(oldID, newID string) {
 
 // revalidate runs on the keepalive beat. The in-process index cannot hear a
 // Rotate, a logout or an expiry on another process sharing the store, so the
-// stream reads its session back and closes if it is gone; the reconnect then
-// resolves whatever the cookie names now. A store error is an outage, not a
+// stream reads its session back and closes if it is gone; the page reload
+// that follows resolves whatever the cookie names now. A store error is an outage, not a
 // revocation: the stream stays up and the next beat asks again.
 func (c *tabStream) revalidate() {
 	select {
@@ -193,11 +193,57 @@ func (c *tabStream) flushDirty(u *Ctx) {
 	}
 	// A server-driven signal change reaches the client as its own signal-patch:
 	// the element push omits data-signals, so a morph never clobbers what the
-	// user is typing.
-	if raw, err := json.Marshal(all); err == nil {
-		c.pushSignals(string(raw))
+	// user is typing. encodeSlots drops and logs a value that does not encode,
+	// rather than losing the whole frame to it.
+	if raw, n := encodeSlots(c.mount.cfg.log, slices.Sorted(maps.Keys(all)), all); n > 0 {
+		c.wire.signals(string(raw))
 	}
 	clearDirty(u)
+}
+
+// declareOpened seeds the slots cur declares and prev did not: a branch the
+// push opened. The element push omits data-signals, so without this the client
+// store has no value for them and a Display reads undefined.
+func (c *tabStream) declareOpened(prev, cur *Ctx) {
+	if sameSlots(prev, cur) {
+		return
+	}
+	had := map[string]bool{}
+	prev.collectSlots(had)
+	opened := map[string]any{}
+	openedSlots(cur, had, opened)
+	if len(opened) == 0 {
+		return
+	}
+	want := slices.Sorted(maps.Keys(opened))
+	if raw, n := encodeSlots(c.mount.cfg.log, want, opened); n > 0 {
+		c.wire.signals(string(raw))
+	}
+}
+
+// sameSlots is the allocation-free common case: a push that re-rendered the
+// same tree declares the same slots in the same order.
+func sameSlots(a, b *Ctx) bool {
+	if !slices.Equal(a.order, b.order) || len(a.children) != len(b.children) {
+		return false
+	}
+	for i := range a.children {
+		if !sameSlots(a.children[i], b.children[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func openedSlots(c *Ctx, had map[string]bool, into map[string]any) {
+	for _, slot := range c.order {
+		if !had[slot] {
+			into[slot] = c.initial[slot]
+		}
+	}
+	for _, isl := range c.children {
+		openedSlots(isl, had, into)
+	}
 }
 
 func clearDirty(c *Ctx) {
@@ -217,7 +263,7 @@ func (c *tabStream) replace(u *Ctx) {
 
 // runOutcome says why a dispatch did not produce a result. One 410 for three
 // unrelated causes was the whole defect: a closed tab, a client that hung up,
-// and a child goroutine pinned by a blocking Tick/Listen/action handler are
+// and a stream goroutine pinned by a blocking Tick/Listen/action handler are
 // three different operational problems and only the first is the client's to
 // fix.
 type runOutcome int
@@ -229,47 +275,33 @@ const (
 	runPinned
 )
 
-// pinnedDeadline is how long a dispatch waits for the child goroutine to reach
+// pinnedDeadline is how long a dispatch waits for the stream goroutine to reach
 // it before declaring the goroutine pinned (see WithPinnedDeadline). Well past
 // any sane handler, and short enough to answer before a load balancer or client
 // deadline does — the old code waited on req.Context() alone, so the pinned
 // case was invisible and arrived as a 410 that blamed the client.
 func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDeadline }
 
-// run posts fn onto the child goroutine and waits for its actionResult, so a
+// run posts fn onto the stream goroutine and waits for its actionResult, so a
 // live action's Redirect, session cookie and panic all resolve on the POST that
 // triggered it. The wait to be picked up is guarded on c.done, reqCtx and
 // deadline so a POST racing a closed tab, one whose client hung up, and one
 // whose goroutine never arrives are told apart rather than collapsed.
 // deadline is the one the action may already have spent parked in
 // registry.enter, so the two waits together never pass the pinned deadline.
-// picked runs as soon as the pickup is decided, handing the tab's turn to the
-// next parked action.
+// t's leave runs as soon as the pickup is decided, handing the tab's turn to
+// the next parked action.
 //
 // res.pushWork runs after result is sent, still on this goroutine: the POST
 // proceeds at once while pushWork stays serialized in the order its mutation
 // ran. A detached goroutine would race other actions' and push out of order.
-func (c *tabStream) run(reqCtx context.Context, deadline time.Time, picked func(), fn func() actionResult) (actionResult, runOutcome) {
-	result := make(chan actionResult, 1)
+func (c *tabStream) run(reqCtx context.Context, deadline time.Time, t *parkTicket, a *liveAction) (actionResult, runOutcome) {
+	a.result = make(chan actionResult, 1)
 	pinned := time.NewTimer(time.Until(deadline))
 	defer pinned.Stop()
 	outcome := runOK
 	select {
-	case c.pushq <- func() {
-		var res actionResult
-		defer func() {
-			if rec := recover(); rec != nil {
-				c.mount.cfg.log.Error("via: live action panic",
-					"tab", c.id, "unit", c.unitType(), "err", rec, "stack", string(debug.Stack()))
-				res = actionResult{panicked: true}
-			}
-			result <- res
-			if res.pushWork != nil {
-				res.pushWork()
-			}
-		}()
-		res = fn()
-	}:
+	case c.pushq <- pushItem{action: a}:
 	case <-c.done:
 		outcome = runClosed
 	case <-reqCtx.Done():
@@ -278,27 +310,27 @@ func (c *tabStream) run(reqCtx context.Context, deadline time.Time, picked func(
 		c.warnPinned(&c.pinnedLogged)
 		outcome = runPinned
 	}
-	picked()
+	t.leave()
 	if outcome != runOK {
 		return actionResult{}, outcome
 	}
 	// pushq is unbuffered, so the send above means the stream goroutine is
-	// already running fn, and neither a closing stream nor a hung-up client
-	// stops it. fn writes this request's w (a session cookie, a redirect), so
+	// already running a, and neither a closing stream nor a hung-up client
+	// stops it. a writes this request's w (a session cookie, a redirect), so
 	// returning before it finishes would hand w back to net/http mid-write.
-	return <-result, runOK
+	return <-a.result, runOK
 }
 
-// unitType names the Go type driving this connection, for a log line that has
-// to point at the handler to go read.
+// unitType names the mount's root type, for a log line that has to point at
+// the handler to go read. Not the root unit's: a plain root with a live child
+// registers no root unit.
 func (c *tabStream) unitType() string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if u := c.units[rootAddr]; u != nil && u.unitV.typ != nil {
-		return u.unitV.typ.String()
-	}
-	return "unknown"
+	return "*" + c.mount.newInst().typ.String() // %T of the unit, as the other unit= lines print it
 }
+
+// warnPinTimer is the pin timer's report, deduped separately from an
+// action's.
+func (c *tabStream) warnPinTimer() { c.warnPinned(&c.pinTimerLogged) }
 
 // warnPinned fires once per connection per path (once is that path's flag): a
 // pinned goroutine stays pinned, and every later click would repeat the line.
@@ -322,13 +354,13 @@ func (c *tabStream) warnPinned(once *atomic.Bool) {
 			"session check, so every action on this tab answers 503 until it answers (see "+
 			"WithSessionStoreTimeout).", attrs...)
 	default:
-		log.Warn("via: tab pinned — its stream goroutine is inside a Tick, Listen, OnConnect or action "+
+		log.Warn("via: tab pinned — its stream goroutine is inside a Tick, Listen or action "+
 			"handler, so its keepalives have stopped too and every action on this tab answers 503 until it "+
 			"returns. Move blocking work off the handler.", attrs...)
 	}
 }
 
-// registry maps a per-connection tab id to its live child. One per Router,
+// registry maps a tab id to the tabStream holding it. One per Router,
 // never global.
 //
 // A slot exists while a stream holds its id, an action is parked on it, or
@@ -338,7 +370,7 @@ func (c *tabStream) warnPinned(once *atomic.Bool) {
 type registry struct {
 	key       [32]byte // MACs the tab ids this process issues; see newTabID
 	maxParked int
-	parkWarn  atomic.Int64 // unix nanos of the last at-capacity log (see mount.warnParkedFull)
+	parkWarn  perMinute // see mount.warnParkedFull
 	mu        sync.Mutex
 	m         map[string]*tabSlot
 	parked    int
@@ -376,7 +408,8 @@ type tombstone struct {
 }
 
 // parkedCap bounds the router's parked actions whatever WithMaxSSEConn says:
-// each holds its decoded body, so the worst case is parkedCap × WithMaxBody.
+// each holds its decoded body, so the worst case is parkedCap × WithMaxBody,
+// or parkedCap × (WithMaxBody + 10 MiB) for native form submits.
 const parkedCap = 1024
 
 // maxTombstones bounds the ids remembered as server-ended. Past it the oldest
@@ -450,18 +483,16 @@ func (r *registry) put(id string, c *tabStream) {
 	s.signalHead()
 }
 
-func (r *registry) each(fn func(*tabStream)) {
+func (r *registry) streams() []*tabStream {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	all := make([]*tabStream, 0, len(r.m))
 	for _, s := range r.m {
 		if s.lc != nil {
 			all = append(all, s.lc)
 		}
 	}
-	r.mu.Unlock()
-	for _, c := range all {
-		fn(c)
-	}
+	return all
 }
 
 // del releases id. After a client hang-up or a failed write (tomb 0) parked
@@ -492,7 +523,7 @@ func (r *registry) del(id string, tomb time.Duration) {
 type enterOutcome int
 
 const (
-	enterReady     enterOutcome = iota // lc is the stream; call leave once it has taken the action
+	enterReady     enterOutcome = iota // lc is the stream; call the ticket's leave once it has taken the action
 	enterNoStream                      // nothing holds the id and the caller may not park
 	enterGone                          // the server ended the id's stream: 410
 	enterTimeout                       // no stream took the action by the deadline
@@ -511,9 +542,9 @@ const connectWait = 2 * time.Second
 // ahead is returned at once. Otherwise, when park is set, the action joins
 // the slot's queue and waits for its turn at a ready stream: until deadline,
 // and for the stream to register at all, until connectWait at most.
-// leave must be called once the stream has taken the action (or refused it),
-// so the next in line gets its turn.
-func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (lc *tabStream, leave func(), out enterOutcome) {
+// The ticket's leave must be called once the stream has taken the action (or
+// refused it), so the next in line gets its turn.
+func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline time.Time, park bool) (*tabStream, *parkTicket, enterOutcome) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now()
@@ -523,7 +554,7 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 	case s != nil && !s.gone.IsZero():
 		return nil, nil, enterGone
 	case s != nil && s.lc != nil && len(s.queue) == 0:
-		return s.lc, func() {}, enterReady
+		return s.lc, nil, enterReady
 	case !park:
 		return nil, nil, enterNoStream
 	case r.parked >= r.maxParked:
@@ -533,24 +564,29 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 	w := &waiter{}
 	s.queue = append(s.queue, w)
 	r.parked++
-	leave = func() {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		r.unpark(id, s, w)
-	}
+	t := &parkTicket{r: r, id: id, s: s, w: w}
+	return t.wait(ctx, routerCtx, now, deadline)
+}
+
+// wait parks t until its turn at a ready stream, or until its slot ends, the
+// deadline passes, the client hangs up or the router closes. The caller holds
+// r.mu and holds it again on return; it is released only while blocked.
+func (t *parkTicket) wait(ctx, routerCtx context.Context, now, deadline time.Time) (*tabStream, *parkTicket, enterOutcome) {
+	r, id, s, w := t.r, t.id, t.s, t.w
 	connectBy := now.Add(connectWait)
 	if deadline.Before(connectBy) {
 		connectBy = deadline
 	}
 	timer := time.NewTimer(connectBy.Sub(now))
 	defer timer.Stop()
+	var out enterOutcome
 	for {
 		switch {
 		case !s.gone.IsZero():
 			r.unpark(id, s, w)
 			return nil, nil, enterGone
 		case s.lc != nil && s.queue[0] == w:
-			return s.lc, leave, enterReady
+			return s.lc, t, enterReady
 		}
 		if w.wake == nil {
 			w.wake = make(chan struct{})
@@ -581,6 +617,25 @@ func (r *registry) enter(ctx, routerCtx context.Context, id string, deadline tim
 		r.unpark(id, s, w)
 		return nil, nil, out
 	}
+}
+
+// parkTicket is an action's place in its tab slot's queue. A nil ticket is an
+// action that never queued, so leave is a no-op.
+type parkTicket struct {
+	r  *registry
+	id string
+	s  *tabSlot
+	w  *waiter
+}
+
+// leave hands the tab's turn to the next action in line.
+func (t *parkTicket) leave() {
+	if t == nil {
+		return
+	}
+	t.r.mu.Lock()
+	defer t.r.mu.Unlock()
+	t.r.unpark(t.id, t.s, t.w)
 }
 
 func (r *registry) unpark(id string, s *tabSlot, w *waiter) {
@@ -663,7 +718,7 @@ func tabCredential(sm *sessionManager, req *http.Request) string {
 	if err != nil {
 		return ""
 	}
-	id, ok := sm.verify(ck.Value)
+	id, ok := sm.signer.Verify(ck.Value)
 	if !ok {
 		return ""
 	}

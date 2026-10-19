@@ -1,7 +1,8 @@
 # Migrating from v0.7 to v0.8
 
-This document tracks `main`. Lines marked v0.9.0 describe behaviour v0.8.3
-does not have; [Upgrading from v0.8.3](#upgrading-from-v083) lists all of it.
+This document tracks `main`. Lines marked v0.9.0 or v0.9.1 describe
+behaviour v0.8.3 does not have; [Upgrading from v0.8.3](#upgrading-from-v083)
+lists all of it. v0.9.1 only adds API, so it asks nothing of an upgrade.
 
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
 changes without a module-path change — so `go get -u` walks v0.7.0 → v0.9.1 as
@@ -66,7 +67,8 @@ This is the load-bearing constraint of the rewrite: **anything your view
 needs must be a field on the composition before `View` is called.** The hook
 for that is `OnInit(*Ctx) error`, which runs per-request before `View`. v0.7
 logged an `OnInit` error and rendered the page anyway; v0.8 stops: return
-`via.ErrNotFound` for a 404, anything else for a 500.
+`via.ErrNotFound` for a 404, `via.ErrForbidden` for a 403, anything else for a
+500.
 
 ```go
 // v0.7: a path:"id" tag filled the field before OnInit
@@ -86,14 +88,14 @@ func (p *Page) View() h.H { return h.H1(h.Str(p.user.Name)) }
 
 A leftover `path:"id"` tag compiles and leaves the field at its zero value.
 `query:"q"` tags go the same way; read `ctx.Request().URL.Query()` in `OnInit`
-instead. The query string is empty on actions, so list state
-(filter, page, sort) belongs in the path or the session.
+instead. An action never sees the page's query string, so list state (filter,
+page, sort) belongs in the path or the session.
 
 The v0.7 `Composition`, `Initializer`, `Connector` and `Disposer` interfaces are
 gone as named types. What replaced them: a composition is anything with
 `View() h.H`, and `OnInit(*Ctx) error` is the lifecycle hook,
-on a page and on every embedded child. There is no `Connector` and no `Live`
-interface: a composition is a live child when it *acts* like one, meaning its
+on a page and on every child. There is no `Connector` and no `Live`
+interface: a composition is a live unit when it *acts* like one, meaning its
 `OnInit` registered a `ctx.Tick`/`ctx.Listen` or its `View` rendered a
 `State[T]`/`List[E]`. `via.Stream(ctx, d, fn)` is `ctx.Tick(d, fn)` in
 `OnInit`. `OnDispose(ctx)` becomes `ctx.OnDispose(fn)`, registered in `OnInit`;
@@ -128,7 +130,8 @@ It catches two of the three ways to get this wrong:
   the walk and only panics on the first render that binds it.
 
 `OnInit` runs per request: on the GET, on every
-action, and on the SSE connect. Pair a connection-scoped acquire with
+plain action, and on the SSE connect, but not on a live action over an
+open stream. Pair a connection-scoped acquire with
 `ctx.OnConnect(fn)` and its release with `ctx.OnDispose(fn)`; both run only
 when a stream opens.
 
@@ -187,8 +190,9 @@ store plus a `topic.Topic[T]` and `via.StateTrack(room, load)` on the field:
 the store holds the value, the topic announces each change, and the tracked
 `State` seeds this connection's copy and follows.
 
-`StateSess[T]` is a topic per user, keyed by `ctx.Session().ID()` — the stable
-identity behind the cookie — and `State.Track` in `OnInit` (the method, not the
+`StateSess[T]` is a topic per user, keyed by `ctx.Session().Ensure()` — the
+stable identity behind the cookie, minted if the visitor has none yet, where
+`ID()` would be `""` and put every first visit on one topic — and `State.Track` in `OnInit` (the method, not the
 literal: the topic depends on the request). Data that only has to be read, not
 pushed, still belongs in the typed session.
 
@@ -237,8 +241,8 @@ child's warning waits for its first render), or nothing.
   500. Caught by: silent.
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field.
   Caught by: silent.
-- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
-  on actions, so list state belongs in the path or the session. Caught by:
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; actions
+  never see it, so list state belongs in the path or the session. Caught by:
   silent.
 - `h.If(cond, node)` → `via.When(cond, p.part)`: the node becomes a method
   returning `h.H`, called only when cond holds. Caught by: compiler.
@@ -274,8 +278,9 @@ child's warning waits for its first render), or nothing.
 - `h.ColSpan("2")`, `h.TabIndex("0")`, `h.MinNum(n)`, `h.ValueNum(n)` →
   `h.ColSpan(2)`, `h.TabIndex(0)`, and the generic `h.Min(n)`, `h.Value(n)`.
   Caught by: compiler.
-- `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` → `h.Class(names…)` and
-  `h.Style(css)`, with the names worked out in Go. Caught by: compiler.
+- `h.Classes(…)`, `h.ClassMap(m)`, `h.Styles(…)` → `h.Class(names…)`, with
+  the names worked out in Go; via's CSP blocks a style attribute, so styles
+  move to a class or `h.DataStyle`. Caught by: compiler.
 - `h.Tag`, `h.NewTag`, `h.VoidTag` → `h.El(tag, …)`. Caught by: compiler.
 - `h.Raw(html)`, `h.Static`, `h.With` → gone; there is no unescaped HTML node.
   Caught by: compiler.
@@ -287,7 +292,7 @@ child's warning waits for its first render), or nothing.
   `.Rotate()`. Caught by: compiler.
 - one session value per type → one value per session: a second `Put` replaces
   the first, so put one struct. Caught by: silent.
-- `StateSess[T]` → a topic per `ctx.Session().ID()`, followed with `State.Track`
+- `StateSess[T]` → a topic per `ctx.Session().Ensure()`, followed with `State.Track`
   in `OnInit`. Caught by: compiler.
 - `StateApp[T]` → your own store, injected; a `topic.Topic[T]` and
   `via.StateTrack` to push its changes. Caught by: compiler.
@@ -341,8 +346,8 @@ These compile and start; the first sign is behaviour:
 - an `OnInit` error, logged while the page renders anyway → an `OnInit` error
   aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500
 - `path:"id"` field tag → `ctx.Param[T]("id")` in `OnInit`, stored in a field
-- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; it is empty
-  on actions, so list state belongs in the path or the session
+- `query:"q"` field tag → `ctx.Request().URL.Query()` in `OnInit`; actions
+  never see it, so list state belongs in the path or the session
 - `h.Title(s)`, the `<title>` element → `PageMeta()` returning
   `via.Meta{Title: s}`; `h.Title` is now the `title` attribute
 - one session value per type → one value per session: a second `Put` replaces
@@ -390,7 +395,8 @@ a click is `via.On("click", p.Inc)`.
   write deadline (10s) are fixed, where v0.7 had `WithSSEHeartbeat` and
   `WithSSEWriteTimeout`. The connection cap (`WithMaxSSEConn`, default 10,000)
   and the pinned deadline (`WithPinnedDeadline`, default 5s) are the two SSE
-  options. Open an issue if a deployment needs another one tunable.
+  limits; `WithSSECompression` (v0.9.1) picks the stream's encoders. Open an
+  issue if a deployment needs another one tunable.
 
 ## Worked example: protecting a page
 
@@ -411,10 +417,10 @@ func (p *Profile) OnInit(ctx *via.Ctx) error {
 ```
 
 `OnInit` runs on every transport a mount answers but a live action over an
-already-open stream: a session revoked after connect still passes `OnInit`
-(it never runs again on that stream), so `Tick` and `Listen` keep pushing on
-it until the tab next acts, closes, or the router shuts down — that gap is
-unmitigated. A `Redirect` set inside `OnInit` answers the GET with a 303.
+already-open stream, so it does not see a session revoked after connect. The
+stream checks its session on every keepalive instead: once the session is
+rotated, deleted or expired, the stream ends within one beat and the tab's
+reload runs `OnInit` against whatever the cookie names now. A `Redirect` set inside `OnInit` answers the GET with a 303.
 
 ## Worked example: the counter, both ways
 
@@ -578,7 +584,7 @@ across the upgrade posts the old name to the old URL and fails as above.
 ## Wire break: signal slot names
 
 A `Signal[T]`'s wire name is its Go field path, first rune lowercased —
-`count`, `chat__draft` for a signal inside an embedded `Chat`,
+`count`, `chat__draft` for a signal inside a `Chat` child,
 `outer__mid__kid__step` for a deeper path. v0.7 used the lower-cased field
 name too, but a `via:"name"` tag could override it; v0.8 has no override. The
 field offset is the internal key, and the name is resolved once per
@@ -588,9 +594,9 @@ A plain nested struct joins its path with one underscore (`c_s`), a child
 boundary with two (`c__s`). A parent cannot bind its child's signal itself:
 with `C` a composition, `p.C.S` in the parent's View has no slot in the
 parent's unit and panics at `Mount`. A parent holding two fields of the
-child's type is ambiguous (`Child`'s argument order need not match
+child's type, or one plus a nested struct, slice or map that holds it, is ambiguous (`Child`'s argument order need not match
 declaration order), so those children fall back to the positional key:
-`i0__s`, `i1__s`, and `i0_0__s` for a nested one. The key's own depth
+`i0__s`, `i1__s`, and `i0__i0_0__s` for one nested inside the first. The key's own depth
 separator is `-` (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS
 identifier character and `Ref()` hands slot names straight to Datastar
 expressions, so the slot spells it `_`.
@@ -651,8 +657,9 @@ an upgrade in code that compiled fine before.
 ## The page's metadata is a method on the root
 
 v0.7 named the document with the router-wide `WithTitle`, `WithDescription`
-and `WithLang` options. In v0.8 `via.WithHead` is router-wide and carries only
-`Lang`, raw head markup and shared assets; a mounted page declares its own
+and `WithLang` options. In v0.8 `via.WithHead` is router-wide and carries
+`Lang`, raw head markup, shared assets and (v0.9.1) the `<html>` and
+`<body>` attributes; a mounted page declares its own
 document with `PageMeta`:
 
 ```go
@@ -671,15 +678,15 @@ Four rules:
   is read after `OnInit`, so the data is loaded. A composition that already
   has a `PageMeta` *field* must rename the field — Go forbids a method and a
   field sharing a name.
-- Only the **mounted root's** counts. An embedded child's `PageMeta` is ignored;
+- Only the **mounted root's** counts. A child's `PageMeta` is ignored;
   `Child` logs one line when it sees one.
 - It shapes the **document**, so it lands on the GET and on a native form
   submit. An SSE push patches inside `<body>` and never rewrites the head.
 - `Assets` is the one field that is **not** inert: it decides the mount's CSP,
-  is read once at `Mount` off the literal you mounted, and must be a constant of
-  the type. Making it depend on request data panics at `Mount`, or on the
-  first GET if `PageMeta` panicked on Mount's probe copy and the check was
-  skipped, which `Mount` logs.
+  is read at `Mount` off the literal you mounted and a probe copy, then again
+  on every document render, so it must be a constant of the type. Making it
+  depend on request data panics at `Mount`, or on the first GET if `PageMeta`
+  panicked on Mount's probe copy and the check was skipped, which `Mount` logs.
 
 ## Gating on a signal
 
@@ -704,7 +711,8 @@ composition in an argless handler.
 ## A live root re-inits its plain children every frame
 
 A live root re-renders its whole tree on every pushed frame, and each plain
-embedded child is a fresh copy, so its `OnInit` runs once per frame. That is
+child is a fresh copy, so its `OnInit` runs on every frame: once, or more
+on a page carrying a `Bind()`, where each frame renders the tree twice. That is
 what keeps such a child from coming back zero-valued, but any side effect in
 that `OnInit` repeats at the frame rate. Keep it cheap and pure, or hold the
 data on the live root and pass it down the field.
@@ -721,8 +729,9 @@ data on the live root and pass it down the field.
   server log names the handlers the render did bind, which is the fastest way
   to see it (the response body names only the id that was asked for: the bound
   list is your Go type and method names, and the client is not entitled to
-  them). Datastar resolves a non-2xx response silently; a streaming page
-  heals on the next push, a plain one stays dead until reload.
+  them). A page with a live unit reloads itself on a 410 ("Page is out of
+  date - reloading…"); Datastar resolves a non-2xx response silently, so a
+  plain page stays dead until the user reloads.
 - **Per-connection `State` does not survive a native form submit**: it is a
   navigation and opens a new connection, and the returned page no longer
   pretends it does. Persist across it through the session or a shared

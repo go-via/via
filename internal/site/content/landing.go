@@ -42,19 +42,19 @@ func (p *Landing) View() h.H {
 			h.P(h.Str("The same counter on this page. Nothing in its View is live, so a click is one POST and its response is the patch.")),
 			via.Child(p.Counter), "landing_counter.go", demo.WireOpen(),
 			demo.Try(h.Str("Click + and read the Wire pane: the POST, its status, the patched element."))),
-		h.P(h.A(h.Class("btn"), h.Href(d.Href("/start")+"#program"), h.Str("See the full program →"))),
+		h.P(h.A(h.Class("btn"), h.Href(d.Href("/start#program")), h.Str("See the full program →"))),
 
 		d.H2("Three kinds of field"),
 		table([]string{"Field type", "Value lives in", "Server code"},
-			[]h.H{APIText("via.Signal", "Signal"), h.Str("the browser; sent with every action POST"), h.Str("reads it with Get, changes it with Set")},
+			[]h.H{APIText("via.Signal", "Signal"), h.Str("the browser; sent with every action POST"), h.Str("reads a bound one with Get, changes it with Set")},
 			[]h.H{APIText("via.SignalCS", "SignalCS"), h.Str("the browser only; dropped from every POST"), h.Str("cannot read or write it: the type has no Get or Set")},
 			[]h.H{APIText("via.State", "State"), h.Str("the server, per tab"), h.Str("owns it; rendering it with Display makes the unit live, and a Set is pushed")},
 		),
 		h.P(h.Str("Where a value lives is the type of its field, so the compiler holds the client/server split: "+
 			"server code that reads a "), API("via.SignalCS"), h.Str(" does not build, and a "), API("via.State"),
 			h.Str(" has no "), Code("Ref"), h.Str(" for a client expression to reach. The full table is "),
-			h.A(h.Href(d.Href("/signals")+"#where-state-lives"), h.Str("Where state lives")), h.Str(", and "),
-			h.A(h.Href(d.Href("/why")), h.Str("Why via")), h.Str(" makes the longer case.")),
+			d.Link("/signals#where-state-lives", "Where state lives"), h.Str(", and "),
+			d.Link("/why", "Why via"), h.Str(" makes the longer case.")),
 
 		d.H2("Read next"),
 		CardGrid(

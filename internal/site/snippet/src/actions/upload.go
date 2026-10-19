@@ -13,7 +13,7 @@ import (
 func newRouter() *via.Router {
 	return via.NewRouter(
 		via.WithMaxUpload(20<<20), // whole body; over it is 413
-		via.WithMaxBody(1<<20),    // held in RAM; the rest spills to disk
+		via.WithMaxBody(1<<20),    // file parts past it spill to disk
 	)
 }
 

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
@@ -159,7 +158,7 @@ func (p *guardedParent) View() h.H { return h.Div(via.Child(p.I)) }
 
 func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/g", guardedParent{})
 	srv := serve(t, r)
 
@@ -833,7 +832,7 @@ func TestDispatchPlain_hydratesAChildSignalInABranchAnotherPostedChildSignalOpen
 	code, body := app.ChildAction("0", 1).Body(`{"d__mode":"x","d__name":"bob"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "seen: saw:bob",
-		"an embedded child must discover a branch its own posted signal opens, exactly as a root does")
+		"a child must discover a branch its own posted signal opens, exactly as a root does")
 }
 
 type echoKid struct{ Name via.Signal[string] }
@@ -879,7 +878,7 @@ func TestDispatchLive_hydratesADisclosedSignalAfterTheBranchIsOpened(t *testing.
 
 	code, _ = app.Action(2).Over(conn).Body(`{"mode":"x","name":"bob"}`).Fire()
 	require.Less(t, code, 300)
-	assert.Contains(t, conn.Await("seen: saw:bob"), "seen: saw:bob")
+	conn.Await("seen: saw:bob")
 }
 
 func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
@@ -895,7 +894,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	assert.Contains(t, body, "does not bind it")
 }
 
-// fixKid is a plain embedded child whose OnInit seeds the state its handler
+// fixKid is a plain child whose OnInit seeds the state its handler
 // reads — the state a later discovery pass used to skip.
 type fixKid struct {
 	loaded string
@@ -1220,7 +1219,6 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
-		require.NotEmpty(t, conn.TabID())
 
 		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
 		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
@@ -1519,7 +1517,8 @@ func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 	// where the connect body is allowed to show.
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, code, "the ungated action must still work")
-	require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE what its own signals opened")
+	// The client may still SEE what its own signals opened.
+	conn.Await("nuke")
 
 	for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 		url := conn.ActionURL("r", n)
@@ -1541,7 +1540,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) 
 	// allowed to call — the second door, and the one a connect-only fix misses.
 	code, _ := app.Action(0).Over(conn).Body(`{"isAdmin":true}`).Fire()
 	require.Equal(t, http.StatusNoContent, code)
-	require.Contains(t, conn.Await("nuke"), "nuke")
+	conn.Await("nuke")
 
 	for n := 1; n <= 2; n++ {
 		url := conn.ActionURL("r", n)
@@ -1625,7 +1624,8 @@ func TestDispatchPlain_aLivePagesConjuredChildIsNotDispatchable(t *testing.T) {
 
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, code, "the root's own action must still work")
-	require.Contains(t, conn.Await("reveal"), "reveal", "the client may still SEE what its own signal conjured")
+	// The client may still SEE what its own signal conjured.
+	conn.Await("reveal")
 
 	// Secret is a plain via.Child of a live root, so it never gets its own
 	// stream registration (only the root does) — this POST falls to
@@ -1724,7 +1724,8 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		// The forgery rides on an action Priv IS allowed to call.
 		code, _ := app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, code)
-		require.Contains(t, conn.Await("nuke"), "nuke", "the client may still SEE the branch its own signals opened")
+		// The client may still SEE the branch its own signals opened.
+		conn.Await("nuke")
 
 		for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
 			url := conn.ActionURL("0", n)
@@ -1813,10 +1814,10 @@ func TestConnect_aTickHandlersSetReachesTheClient(t *testing.T) {
 	app := vt.Serve(t, via.Handler(tickSetsBoundSignal{}))
 	conn := app.ConnectWith(`{"n":7}`)
 
-	assert.Contains(t, conn.Await(`"n":3`), `"n":3`,
-		"the signal patch must carry the server's value, not the client's posted 7")
-	assert.Contains(t, conn.Await(">3<"), ">3<",
-		"the display render must not paint the client's posted 7 back over the server's value")
+	// The signal patch must carry the server's value, not the client's posted 7.
+	conn.Await(`"n":3`)
+	// The display render must not paint the client's posted 7 back over the server's value.
+	conn.Await(">3<")
 }
 
 type dirtyAfterPanic struct{ X via.Signal[int] }
@@ -1851,11 +1852,9 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 	status, _ = app.Action(1).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 
-	assert.Contains(t, conn.Await(`"x":1`), `"x":1`,
-		"the panicking action's Set must still reach the client on the next push")
-	frame := conn.Await(">1<")
-	assert.Contains(t, frame, ">1<",
-		"the display render must show the server's value, not paint the client's stale 0 back: %s", frame)
+	// The panicking action's Set must still reach the client on the next push.
+	conn.Await(`"x":1`)
+	conn.Await(">1<") // the display shows the server's value, not the client's stale 0 painted back
 }
 
 func TestDispatchLive_aNullConnectBodyStillAcceptsActions(t *testing.T) {
@@ -2183,8 +2182,8 @@ func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 			// connect body to the live instance. The second is the one whose
 			// handler reads the instance afterwards.
 			bus.Publish("one")
-			require.Contains(t, conn.Await(">ATTACKER<"), ">ATTACKER<",
-				"the client must still SEE what it posted")
+			// The client must still SEE what it posted.
+			conn.Await(">ATTACKER<")
 
 			bus.Publish("two")
 			frame := conn.Await("/two]")
@@ -2281,7 +2280,7 @@ func TestDispatch_actionRunningPastThePinnedDeadlineStillAnswersItsResult(t *tes
 	synctest.Test(t, func(t *testing.T) {
 		p := slowActionLive{running: make(chan struct{}), block: make(chan struct{})}
 		srv := liveServer(t, via.Handler(p, via.WithPinnedDeadline(50*time.Millisecond),
-			via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+			testSessionKey))
 		lines, cancel := openStream(t, srv)
 		defer cancel()
 		tab := awaitTabID(t, lines)
@@ -2323,7 +2322,7 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
 	app := vt.Serve(t, via.Handler(sessBoundLive{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar
@@ -2348,7 +2347,7 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 func TestDispatch_liveActionOnAnUnboundTabAnswers503WhileTheStoreIsDown(t *testing.T) {
 	t.Parallel()
 	store := &outageStore{SessionStore: via.NewMemorySessionStore()}
-	r := via.NewRouter(via.WithSessionStore(store), via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(via.WithSessionStore(store), testSessionKey)
 	via.Mount(r, "/login", loginComp{})
 	via.Mount(r, "/live", sessionLive{})
 	srv := httptest.NewServer(r)
@@ -2393,7 +2392,7 @@ func TestDispatch_aBoundLiveActionReadsTheSessionStoreOnce(t *testing.T) {
 	store := &loadCounter{SessionStore: via.NewMemorySessionStore()}
 	app := vt.Serve(t, via.Handler(sessBoundLive{},
 		via.WithSessionStore(store),
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar
@@ -2426,10 +2425,7 @@ func (s *sessBoundLive) View() h.H {
 }
 
 func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}))
 	conn := app.Connect()
@@ -2538,10 +2534,7 @@ func (b *bumpLive) View() h.H {
 }
 
 func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}, via.WithMaxSSEConn(1)))
 
@@ -2562,10 +2555,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 }
 
 func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
-	var logs bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&logs)
-	defer log.SetOutput(prev)
+	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(panicLive{}))
 	conn := app.Connect()
@@ -2630,7 +2620,7 @@ func TestDispatch_listenHandlerSeesTheSessionALaterActionOnItsTabCarried(t *test
 	t.Parallel()
 	tp, box := topic.New[string](), &sidBox{}
 	app := vt.Serve(t, via.Handler(sessEcho{Topic: tp, Box: box},
-		via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long"))))
+		testSessionKey))
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
 	app.Client().Jar = jar
@@ -2745,4 +2735,30 @@ func TestLiveAction_aFailedActionStillPushesWhatItChanged(t *testing.T) {
 			})
 		})
 	}
+}
+
+type liveSetRedirector struct{ n via.State[int] }
+
+func (c *liveSetRedirector) Go(ctx *via.Ctx) { c.n.Set(42); ctx.Redirect("/dest") }
+
+func (c *liveSetRedirector) View() h.H {
+	return h.Div(h.Str("n="), c.n.Display(), h.Button(on.Click(c.Go)))
+}
+
+func TestDispatchLive_aRedirectShipsNoRender(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveSetRedirector{}))
+		conn := app.Connect()
+		code, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusOK, code)
+		synctest.Wait()
+
+		for {
+			line, ok := conn.Peek()
+			if !ok {
+				break
+			}
+			assert.NotContains(t, line, "n=42", "the tab is navigating away; nothing from this render is shown")
+		}
+	})
 }

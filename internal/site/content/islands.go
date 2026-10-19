@@ -1,7 +1,6 @@
 package content
 
 import (
-	"crypto/rand"
 	"io/fs"
 	"log/slog"
 	"net/http/httptest"
@@ -72,11 +71,9 @@ func islandsJS(open, end string) string {
 
 // gaugeCSP is the header via serves for islands.Gauge on a router with no
 // WithHead assets. buildCSP is unexported, so it is read off a real mount
-// instead of retyped. The key only exists because a router needs one.
+// instead of retyped.
 func gaugeCSP() string {
-	key := make([]byte, 32)
-	rand.Read(key)
-	r := via.NewRouter(via.WithSessionKey(key), via.WithLogger(slog.New(slog.DiscardHandler)))
+	r := via.NewRouter(via.WithLogger(slog.New(slog.DiscardHandler)))
 	defer r.Close()
 	via.Mount(r, "/", islands.Gauge{})
 	rec := httptest.NewRecorder()
@@ -145,7 +142,7 @@ func (p *Islands) View() h.H {
 			h.P(
 				h.Str("The MapLibre script is declared once in the page's Assets and serves however many maps the grid holds. "),
 				h.Str("The grid is one unit with a fixed Signal per slot, not a child per map; "),
-				h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")),
+				d.Link("/compositions", "Compositions"),
 				h.Str(" covers why a child's key must not move."),
 			),
 			via.Child(p.Maps), "mapgrid.go",
@@ -178,7 +175,7 @@ func (p *Islands) View() h.H {
 		h.P(h.Str("Mounted on a router with no other assets, that type is served this policy. The text below is the header via returned when this site started, one directive per line:")),
 		snippet.Text("Content-Security-Policy", cdnCSP),
 		h.P(h.Str("The CDN origin joins "), Code("script-src"), h.Str(" and nothing else changes. The three hashes are via's own inline scripts. "),
-			h.A(h.Href(d.Href("/security")+"#content-security-policy"), h.Str("Sessions & security")), h.Str(" goes through the policy directive by directive.")),
+			d.Link("/security#content-security-policy", "Sessions & security"), h.Str(" goes through the policy directive by directive.")),
 		Callout(Caveat, "No integrity attribute",
 			h.P(API("via.Script"), h.Str(" has no field for Subresource Integrity, so a CDN script is trusted by origin alone. Serving the file yourself keeps the policy at "),
 				Code("'self'"), h.Str(" and the bytes pinned."))),
@@ -186,6 +183,6 @@ func (p *Islands) View() h.H {
 		Callout(Note, "Coming from v0.7 plugins",
 			h.P(h.Str("The echarts and maplibre plugins passed to "), Code("WithPlugins"), h.Str(" are gone. Each becomes an island: the library's script in Assets, a container with "),
 				API("h.DataIgnoreMorph"), h.Str(" and "), API("h.DataEffect"), h.Str(", and a function of yours. "),
-				h.A(h.Href(d.Href("/migrate")), h.Str("Migrating from v0.7")), h.Str(" has the full mapping."))),
+				d.Link("/migrate", "Migrating from v0.7"), h.Str(" has the full mapping."))),
 	)
 }

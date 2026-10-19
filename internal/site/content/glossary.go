@@ -44,8 +44,8 @@ func glossaryTerms() []glossaryTerm {
 	s := h.Str[string]
 	return []glossaryTerm{
 		{"Action",
-			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"), s(" bound with "), API("on.Bind"),
-				s(", attached to a DOM event with package "), Code("on"), s(". The browser POSTs to it; via runs it on the server, then OnReload, then re-renders the unit and answers with the patch. It returns nothing: a failure the user can fix goes into state, and a panic is a 500.")},
+			[]h.H{s("A method of a composition, "), Code("func(*via.Ctx)"), s(" or "), Code("func(*via.Ctx, V)"),
+				s(", attached to a DOM event with package "), Code("on"), s("; the second takes its argument through "), API("on.Bind"), s(". The browser POSTs to it; via runs it on the server, then OnReload, then re-renders the unit and answers with the patch. It returns nothing: a failure the user can fix goes into state, and a panic is a 500.")},
 			[]seeLink{{"Actions", "/actions#handling-a-click"}, {"Action signatures", "/actions#action-signatures"}},
 			[]h.H{API("on.Click"), API("on.Bind")}},
 		{"Composition",
@@ -76,7 +76,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"The island contract", "/islands#the-island-contract"}},
 			[]h.H{API("h.DataIgnoreMorph"), API("h.DataEffect")}},
 		{"Listen",
-			[]h.H{API("via.Ctx.Listen"), s(" subscribes a unit to a Topic: each published value runs the handler on the unit's own goroutine, then the unit re-renders and pushes. Valid only in OnInit, and it makes the unit live. The subscription is taken when the stream connects and stopped when it closes.")},
+			[]h.H{API("via.Ctx.Listen"), s(" subscribes a unit to a Topic: each published value runs the handler on its tab's stream goroutine, then the unit re-renders and pushes. Valid only in OnInit, and it makes the unit live. The subscription is taken when the stream connects and stopped when it closes.")},
 			[]seeLink{{"Topics", "/live#topics"}},
 			[]h.H{API("via.Ctx.Listen")}},
 		{"Live unit",
@@ -107,7 +107,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"OnReload",
-			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick, Listen and OnConnect called inside it register nothing and log a warning.")},
+			[]h.H{Code("OnReload(*via.Ctx) error"), s(" runs after one of the unit's actions and before the render that answers it, on plain and live units alike: it re-reads what the handler wrote. It is skipped when the handler called Redirect, and Tick, Listen, OnConnect, OnDispose and Track called inside it register nothing and log a warning.")},
 			[]seeLink{{"What an action body can do", "/actions#what-an-action-body-can-do"}, {"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			nil},
 		{"PageMeta",
@@ -120,7 +120,7 @@ func glossaryTerms() []glossaryTerm {
 			nil},
 		{"Positional child key",
 			[]h.H{s("The key via gives each Child: its position among its parent's Child calls, joined to the parent's key ("), Code("0"), s(", "), Code("0-0"),
-				s("). The child's container id, signal prefix and action address all derive from it, so it must be the same on every render for the life of a connection. A "),
+				s("). An action URL names the mounted root "), Code("r"), s(" in its place. The child's container id and action address derive from it, and so does its signal prefix, unless the child sits in a direct field of its parent whose type no other direct field shares (then the prefix is that field name), so it must be the same on every render for the life of a connection. A "),
 				API("via.When"), s(" around a Child shifts its later siblings, so it may depend only on data fixed by OnInit or the field literal.")},
 			[]seeLink{{"Children and keys", "/compositions#children-and-keys"}, {"Conditional children shift keys", "/compositions#conditional-children-shift-keys"}},
 			[]h.H{API("via.Child")}},
@@ -148,7 +148,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Session stores", "/security#session-stores"}, {"Sessions that survive a restart", "/deploy#sessions-that-survive-a-restart"}},
 			[]h.H{API("via.SessionStore"), API("via.WithSessionStore")}},
 		{"Signal",
-			[]h.H{API("via.Signal"), s(", a field whose value lives in the browser as a Datastar signal named after the field. It is sent with every action and the server can read and Set it; T must round-trip through JSON. "),
+			[]h.H{API("via.Signal"), s(", a field whose value lives in the browser as a Datastar signal named after the field. It is sent with every action; the server takes the posted value only for one bound to an input with Bind, and can Set any; T must round-trip through JSON. "),
 				API("via.Signal.Bind"), s(" ties it to an input and "), API("via.Signal.Display"), s(" renders it as text.")},
 			[]seeLink{{"Where state lives", "/signals#where-state-lives"}, {"Binding and display", "/signals#binding-and-display"}},
 			[]h.H{API("via.Signal")}},
@@ -167,7 +167,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Server state", "/live#server-state"}},
 			[]h.H{API("via.State"), API("via.StateOf")}},
 		{"Tick",
-			[]h.H{API("via.Ctx.Tick"), s(" runs a function every interval for the life of the unit's connection, on the unit's goroutine, then re-renders and pushes. Valid only in OnInit, and it makes the unit live.")},
+			[]h.H{API("via.Ctx.Tick"), s(" runs a function every interval for the life of the unit's connection, on its tab's stream goroutine, then re-renders and pushes. Valid only in OnInit, and it makes the unit live.")},
 			[]seeLink{{"Timers", "/live#timers"}},
 			[]h.H{API("via.Ctx.Tick")}},
 		{"Topic",
@@ -180,7 +180,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"The parts", "/start#the-parts"}, {"A composition is a struct", "/compositions#a-composition-is-a-struct"}},
 			nil},
 		{"Wire pane",
-			[]h.H{s("A go-via.dev feature, not part of via: the pane under each demo card that lists the demo's action POSTs, their statuses, and the SSE patches it receives.")},
+			[]h.H{s("A go-via.dev feature, not part of via: the pane under each demo card that lists the demo's action POSTs and their statuses, the patches that answer them or arrive on its stream, and its signal values.")},
 			[]seeLink{{"Run a counter", "/start#run-a-counter"}},
 			nil},
 	}
@@ -200,7 +200,7 @@ func (p *Glossary) View() h.H {
 			if i > 0 {
 				see = append(see, h.Str(", "))
 			}
-			see = append(see, h.A(h.Href(d.Href(l.href)), h.Str(l.text())))
+			see = append(see, d.Link(l.href, l.text()))
 		}
 		for _, a := range t.api {
 			see = append(see, h.Str(", "), a)

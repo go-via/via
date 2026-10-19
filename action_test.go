@@ -1,10 +1,8 @@
 package via_test
 
 import (
-	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -247,10 +245,7 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 
 func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -346,24 +341,6 @@ func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
 	slots := regexp.MustCompile(`data-text="\$([a-z0-9_]+)"`).FindAllStringSubmatch(rec.Body.String(), -1)
 	require.Len(t, slots, 2)
 	require.Contains(t, rec.Body.String(), `"`+slots[1][1]+`":1`, "body: %s", rec.Body.String())
-}
-
-type idSameMethodTwice struct{ N via.Signal[int] }
-
-func (c *idSameMethodTwice) Inc(ctx *via.Ctx) { c.N.Set(c.N.Get() + 1) }
-
-func (c *idSameMethodTwice) View() h.H {
-	return h.Div(
-		h.Button(on.Click(c.Inc), h.Str("+")),
-		h.Button(on.Click(c.Inc), h.Str("also +")),
-	)
-}
-
-func TestActionID_sameHandlerTwiceCollapses(t *testing.T) {
-	t.Parallel()
-	urls := actionURLs(t, via.Handler(idSameMethodTwice{}))
-	require.Len(t, urls, 2)
-	require.Equal(t, urls[0], urls[1])
 }
 
 type idClosurePair struct{ hits [2]int }
@@ -797,11 +774,9 @@ func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "an id past the end of the list must not dispatch")
 }
 
-// The arg set's cost, measured rather than asserted by eye: rendering 1000
-// value-carrying bindings must stay within a small constant per binding. The
-// ceiling is deliberately loose (it is a regression tripwire, not a budget) —
-// what it catches is the set turning into something super-linear, or the args
-// being retained per row rather than merged per slot.
+// Reports the arg set's cost for rendering 1000 value-carrying bindings, so a
+// set turning super-linear, or args retained per row rather than merged per
+// slot, shows in the allocs.
 func BenchmarkEachArgSet(b *testing.B) {
 	h := via.Handler(bigList{})
 	srv := httptest.NewServer(h)
@@ -998,4 +973,18 @@ func TestActionID_valueReceiverHeldAtOnePathDispatches(t *testing.T) {
 			assert.Contains(t, rec.Body.String(), "<h1>1</h1>")
 		})
 	}
+}
+
+type nilArgPage struct{}
+
+func (p *nilArgPage) Pick(ctx *via.Ctx, ids []int) {}
+func (p *nilArgPage) View() h.H {
+	return h.Button(h.ID("b"), on.Click(on.Bind(p.Pick, []int(nil))))
+}
+
+func TestBind_aNilArgDropsTheBindingAndSaysSo(t *testing.T) {
+	logs := globalLog(t)
+	_, page := do(t, serve(t, via.Handler(nilArgPage{})), http.MethodGet, "/", "")
+	assert.NotContains(t, page, "data-on:click", "a null arg answers 400 on every click, so it must not render")
+	assert.Contains(t, logs.String(), "on.Bind arg is null")
 }

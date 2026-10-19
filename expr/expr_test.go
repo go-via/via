@@ -32,9 +32,9 @@ func TestExpr_emitsComposedExpressions(t *testing.T) {
 		{"val", expr.Val([]int{1, 2}), "[1,2]"},
 		{"call", expr.Call("drawChart", expr.El, expr.Expr("$series")), "drawChart(el, $series)"},
 		{"call dotted, no args", expr.Call("console.log"), "console.log()"},
-		{"copy literal", expr.CopyToClipboard(expr.Val("go get github.com/go-via/via")), `navigator.clipboard.writeText("go get github.com/go-via/via").catch(() => {})`},
-		{"copy el-relative", expr.CopyToClipboard(expr.Raw("el.dataset.copy")), "navigator.clipboard.writeText(el.dataset.copy).catch(() => {})"},
-		{"copy text", expr.CopyTextOf("pre"), `navigator.clipboard.writeText(el.parentElement?.querySelector("pre")?.textContent ?? "").catch(() => {})`},
+		{"copy literal", expr.CopyToClipboard(expr.Val("go get github.com/go-via/via")), `navigator.clipboard?.writeText("go get github.com/go-via/via").catch(() => {})`},
+		{"copy el-relative", expr.CopyToClipboard(expr.Raw("el.dataset.copy")), "navigator.clipboard?.writeText(el.dataset.copy).catch(() => {})"},
+		{"copy text", expr.CopyTextOf("pre"), `navigator.clipboard?.writeText(el.parentElement?.querySelector("pre")?.textContent ?? "").catch(() => {})`},
 		{"class on", expr.Class("copied", true), `el.classList.toggle("copied", true)`},
 		{"class off", expr.Class("copied", false), `el.classList.toggle("copied", false)`},
 		{"raw", expr.Raw("$n > 0 ? 1 : 2"), "$n > 0 ? 1 : 2"},
@@ -162,4 +162,12 @@ func TestRawf_countsOnlyRealVerbsInTheMismatchPanic(t *testing.T) {
 	assert.PanicsWithValue(t, "expr: Rawf has 2 %s verbs and 1 arguments", func() {
 		expr.Rawf("%%%s %s", expr.Expr("$a"))
 	})
+}
+
+func TestExpr_groupsACompositeRawOperand(t *testing.T) {
+	t.Parallel()
+	or := expr.Raw("$a || $b")
+	assert.Equal(t, expr.Expr("(!($a || $b))"), or.Not())
+	assert.Equal(t, expr.Expr("(($a || $b) === 1)"), or.Eq(1))
+	assert.Equal(t, expr.Expr("($n < ($a || $b))"), expr.Raw("$n").Lt(or))
 }

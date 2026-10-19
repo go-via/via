@@ -14,6 +14,7 @@ package via_test
 //   - no '&' and no closures where via takes a handler (the call-site lint)
 //   - no binder plumbing on any public package (it stays in internal/render)
 //   - black-box tests, and none of package main (CONVENTIONS.md)
+//   - no func literals outside tests (CONVENTIONS.md, No Func Literals)
 
 import (
 	"bytes"
@@ -610,6 +611,75 @@ func whiteBoxTests(root string) ([]string, error) {
 				out = append(out, file+": package "+pkg+", want "+want)
 			}
 		}
+		return nil
+	})
+	return out, err
+}
+
+func TestSources_holdNoFuncLiterals(t *testing.T) {
+	t.Parallel()
+	got, err := funcLiterals(".")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestFuncLiteralLint_flagsLiteralsOutsideTestsAndShownSnippets(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"p/p.go":           "package p\n\nvar f = func() {}",
+		"p/named.go":       "package p\n\nfunc g() {}\n\nvar h = g",
+		"p/p_test.go":      "package p_test\n\nvar f = func() {}",
+		"snippet/src/x.go": "package x\n\nvar f = func() {}",
+		"testdata/t.go":    "package t\n\nvar f = func() {}",
+	} {
+		path := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(src+"\n"), 0o644))
+	}
+	got, err := funcLiterals(root)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join("p", "p.go") + ":3:9: func literal: use a named func, method value or typed value"}, got)
+}
+
+// funcLiterals lists every func literal under root outside tests. The site's
+// snippet/src is exempt: it shows readers plain net/http, where a closure is
+// the idiom they will meet.
+func funcLiterals(root string) ([]string, error) {
+	var out []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			n := d.Name()
+			if path != root && (strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_") || n == "vendor" || n == "testdata") {
+				return filepath.SkipDir
+			}
+			if filepath.Base(filepath.Dir(path)) == "snippet" && n == "src" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		fset := token.NewFileSet()
+		f, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			if lit, ok := n.(*ast.FuncLit); ok {
+				p := fset.Position(lit.Pos())
+				out = append(out, fmt.Sprintf("%s:%d:%d: func literal: use a named func, method value or typed value", rel, p.Line, p.Column))
+			}
+			return true
+		})
 		return nil
 	})
 	return out, err

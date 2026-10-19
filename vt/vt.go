@@ -110,14 +110,14 @@ func Logger(t testing.TB) *slog.Logger {
 	t.Cleanup(w.end)
 	// The time is dropped: under synctest it is the fake clock's, and go test
 	// already orders the lines under their test.
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
-		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-			if len(groups) == 0 && a.Key == slog.TimeKey {
-				return slog.Attr{}
-			}
-			return a
-		},
-	}))
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{ReplaceAttr: dropTime}))
+}
+
+func dropTime(groups []string, a slog.Attr) slog.Attr {
+	if len(groups) == 0 && a.Key == slog.TimeKey {
+		return slog.Attr{}
+	}
+	return a
 }
 
 type testLog struct {
@@ -160,7 +160,7 @@ func (a *App) Get(path string) (int, string) {
 	a.t.Helper()
 	req, err := http.NewRequest(http.MethodGet, a.srv.URL+path, nil)
 	if err != nil {
-		a.t.Fatalf("vt.Get: build request: %v", err)
+		a.t.Fatalf("vt.App.Get: build request: %v", err)
 	}
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {
@@ -172,10 +172,11 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (the root is child "r"). The URL is read off the rendered root page at
-// Fire time, not constructed: the wire id is a hash of the handler's func
-// name and any ?a= row datum rides along with it, so a hand-built path would
-// be wrong. By default it carries Sec-Fetch-Site: same-origin,
+// order (the root is child "r"). The URL is read off the root page the App's
+// first Fire fetched, not constructed: the wire id is a hash of the handler's
+// func name and any ?a= row datum rides along with it, so a hand-built path
+// would be wrong. That page is cached, so an action that only appears after a
+// change needs Raw with a URL read off a fresh Get. By default it carries Sec-Fetch-Site: same-origin,
 // modelling a same-origin browser fetch; the builder methods override that
 // to exercise the origin floor.
 func (a *App) Action(n int) *Action { return a.ChildAction("r", n) }
@@ -278,7 +279,7 @@ func (a *Action) signalBody() string {
 		return a.body
 	}
 	sig := map[string]json.RawMessage{}
-	if err := json.Unmarshal([]byte(a.body), &sig); err != nil {
+	if err := json.Unmarshal([]byte(a.body), &sig); err != nil || sig == nil {
 		return a.body
 	}
 	sig[tabSignal], _ = json.Marshal(a.tab)
@@ -336,7 +337,7 @@ func (a *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Conn is an open SSE stream to a live child, carrying its per-connection tab id.
+// Conn is an open SSE stream to a live page, carrying its tab id.
 type Conn struct {
 	t        testing.TB
 	app      *App
@@ -355,6 +356,12 @@ type Conn struct {
 // recentKept is how many events a failed Await prints. Enough to show the
 // push before the one that was expected, few enough to read.
 const recentKept = 3
+
+// maxFrameLine caps one line of the stream.
+const maxFrameLine = 16 << 20
+
+// awaitTimeout bounds every wait on the stream.
+const awaitTimeout = 2 * time.Second
 
 // frameHead and frameTail cap each printed event. A patch carries the unit's
 // whole HTML, so a long list would push everything else off the screen; the
@@ -417,7 +424,7 @@ func (c *Conn) arrived(read int) string {
 	return b.String()
 }
 
-// tabSignal mirrors via's own wire name for the per-connection tab id.
+// tabSignal mirrors via's own wire name for the tab id.
 const tabSignal = "viatab"
 
 var tabRE = regexp.MustCompile(`"` + tabSignal + `":"([^"]+)"`)
@@ -441,7 +448,7 @@ func (a *App) ConnectAt(path, body string) *Conn {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.srv.URL+sse, strings.NewReader(body))
 	if err != nil {
 		cancel()
-		a.t.Fatalf("vt.Connect: build request: %v", err)
+		a.t.Fatalf("vt.App.Connect: build request: %v", err)
 	}
 	// The stream connect is a POST carrying the page signals as a body. A real
 	// same-origin browser fetch sends Sec-Fetch-Site; the origin floor requires
@@ -450,66 +457,74 @@ func (a *App) ConnectAt(path, body string) *Conn {
 	resp, err := a.srv.Client().Do(req)
 	if err != nil {
 		cancel()
-		a.t.Fatalf("vt.Connect: %v", err)
+		a.t.Fatalf("vt.App.Connect: %v", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		cancel()
 		resp.Body.Close()
-		a.t.Fatalf("vt.Connect: status %d", resp.StatusCode)
+		a.t.Fatalf("vt.App.Connect: status %d", resp.StatusCode)
 	}
 
 	frames := make(chan string, 256)
 	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel, closed: make(chan struct{})}
-	go func() {
-		defer close(frames)
-		defer resp.Body.Close()
-		sc := bufio.NewScanner(resp.Body)
-		// Recorded before close(closed), so AwaitClose never observes the
-		// channel shut with the error not yet stored.
-		defer func() {
-			c.mu.Lock()
-			c.readErr = sc.Err()
-			c.endEvent()
-			c.mu.Unlock()
-			close(c.closed)
-		}()
-		inElements := false
-		for sc.Scan() {
-			line := sc.Text()
-			c.mu.Lock()
-			if line == "" {
-				c.endEvent()
-			} else {
-				c.pending = append(c.pending, strings.TrimPrefix(strings.TrimPrefix(line, "event: "), "data: "))
-			}
-			c.mu.Unlock()
-			switch {
-			case strings.HasPrefix(line, "event:"):
-				inElements = strings.Contains(line, "datastar-patch-elements")
-				if inElements {
-					c.mu.Lock()
-					c.elements = append(c.elements, nil)
-					c.mu.Unlock()
-				}
-			case line == "":
-				inElements = false
-			case inElements:
-				c.mu.Lock()
-				i := len(c.elements) - 1
-				c.elements[i] = append(append(c.elements[i], line...), '\n')
-				c.mu.Unlock()
-			}
-			select {
-			case frames <- line:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	go c.read(ctx, resp, frames)
 
 	a.t.Cleanup(c.Close)
 	c.tabID = c.awaitTab()
 	return c
+}
+
+// read scans the stream into c's events and element patches, and forwards
+// each line on frames until ctx ends.
+func (c *Conn) read(ctx context.Context, resp *http.Response, frames chan<- string) {
+	defer close(frames)
+	defer resp.Body.Close()
+	sc := bufio.NewScanner(resp.Body)
+	// A patch carries the unit's whole HTML on one line, past the default 64 KB.
+	sc.Buffer(nil, maxFrameLine)
+	defer c.endRead(sc)
+	inElements := false
+	for sc.Scan() {
+		line := sc.Text()
+		c.mu.Lock()
+		if line == "" {
+			c.endEvent()
+		} else {
+			c.pending = append(c.pending, strings.TrimPrefix(strings.TrimPrefix(line, "event: "), "data: "))
+		}
+		c.mu.Unlock()
+		switch {
+		case strings.HasPrefix(line, "event:"):
+			inElements = strings.Contains(line, "datastar-patch-elements")
+			if inElements {
+				c.mu.Lock()
+				c.elements = append(c.elements, nil)
+				c.mu.Unlock()
+			}
+		case line == "":
+			inElements = false
+		case inElements:
+			c.mu.Lock()
+			i := len(c.elements) - 1
+			c.elements[i] = append(append(c.elements[i], line...), '\n')
+			c.mu.Unlock()
+		}
+		select {
+		case frames <- line:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// endRead records the scan error before close(closed), so AwaitClose never
+// observes the channel shut with the error not yet stored.
+func (c *Conn) endRead(sc *bufio.Scanner) {
+	c.mu.Lock()
+	c.readErr = sc.Err()
+	c.endEvent()
+	c.mu.Unlock()
+	close(c.closed)
 }
 
 // TabID is the credential a live action must carry to route to this
@@ -564,15 +579,15 @@ func (c *Conn) Peek() (string, bool) {
 // Await read, and the last three, each cut to a few hundred bytes.
 func (c *Conn) Await(needle string) string {
 	c.t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(awaitTimeout)
 	read := 0
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatalf("vt.Await: timed out after 2s waiting for %q. %s", needle, c.arrived(read))
+			c.t.Fatalf("vt.Conn.Await: timed out after %v waiting for %q. %s", awaitTimeout, needle, c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatalf("vt.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
+				c.t.Fatalf("vt.Conn.Await: stream closed before %q arrived. %s", needle, c.arrived(read))
 			}
 			if strings.HasPrefix(line, "event:") {
 				read++
@@ -592,8 +607,8 @@ func (c *Conn) AwaitClose() error {
 	c.t.Helper()
 	select {
 	case <-c.closed:
-	case <-time.After(2 * time.Second):
-		c.t.Fatal("vt.AwaitClose: the stream was still open after 2s")
+	case <-time.After(awaitTimeout):
+		c.t.Fatalf("vt.Conn.AwaitClose: the stream was still open after %v", awaitTimeout)
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -605,15 +620,15 @@ func (c *Conn) Close() { c.cancel() }
 
 func (c *Conn) awaitTab() string {
 	c.t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(awaitTimeout)
 	read := 0
 	for {
 		select {
 		case <-deadline:
-			c.t.Fatal("vt.Connect: no viatab frame arrived. " + c.arrived(read))
+			c.t.Fatal("vt.App.Connect: no tab-id frame arrived. " + c.arrived(read))
 		case line, ok := <-c.frames:
 			if !ok {
-				c.t.Fatal("vt.Connect: stream closed before the tab-id frame. " + c.arrived(read))
+				c.t.Fatal("vt.App.Connect: stream closed before the tab-id frame. " + c.arrived(read))
 			}
 			if strings.HasPrefix(line, "event:") {
 				read++

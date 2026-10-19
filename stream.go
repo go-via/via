@@ -14,10 +14,15 @@ import (
 	"time"
 )
 
+const (
+	patchElementsEvent = "event: datastar-patch-elements\n"
+	patchSignalsEvent  = "event: datastar-patch-signals\n"
+)
+
 // writePatchFrame writes one Datastar element-patch SSE event; the client
 // morphs the fragment into the live DOM by id (default mode).
 func writePatchFrame(w io.Writer, fragment []byte) {
-	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, patchElementsEvent)
 	writeElementLines(w, fragment)
 	_, _ = io.WriteString(w, "\n")
 }
@@ -28,7 +33,7 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 // is how a live child's push still lands on a container the root-walk render
 // marked data-ignore-morph.
 func writeInnerPatchFrame(w io.Writer, id string, fragment []byte) {
-	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, patchElementsEvent)
 	_, _ = io.WriteString(w, "data: selector #"+id+"\n")
 	_, _ = io.WriteString(w, "data: mode inner\n")
 	writeElementLines(w, fragment)
@@ -74,10 +79,10 @@ func (e *errWriter) Write(p []byte) (int, error) {
 // stream serializes every write and tears the stream down on the first write
 // or flush failure. A half-open peer (vanished without a FIN) never cancels the
 // request context, so a failed frame write is the only in-band signal it's
-// gone; cancelling stops the child goroutine, its tickers and subscriptions and
+// gone; cancelling stops the stream goroutine, its tickers and subscriptions and
 // runs disposers instead of leaking them against a dead socket. The per-frame
 // deadline keeps a stalled-but-alive peer from pinning the goroutine forever.
-// All calls run on the child goroutine, so it needs no lock.
+// All calls run on the stream goroutine, so it needs no lock.
 type stream struct {
 	w       io.Writer
 	rc      *http.ResponseController
@@ -113,25 +118,57 @@ func (s *stream) blockedOn() string {
 	case busyStore:
 		return "waiting on the session store"
 	}
-	return "inside a Tick, Listen, OnConnect, OnDispose or action handler"
+	return "inside a Tick, Listen, OnDispose or action handler"
 }
 
-// frame emits one SSE event and flushes it, cancelling the stream on any
-// error. Once failed it is a no-op, so a write racing a just-torn-down stream
-// can't re-trigger teardown.
-func (s *stream) frame(write func(io.Writer)) {
-	if s.failed {
+// patch frames an element-patch: the whole page when id is empty, else the
+// children of #id.
+func (s *stream) patch(id string, body []byte) {
+	ew := s.begin()
+	if ew == nil {
 		return
 	}
+	if id == "" {
+		writePatchFrame(ew, body)
+	} else {
+		writeInnerPatchFrame(ew, id, body)
+	}
+	s.finish(ew)
+}
+
+// signals frames a patch-signals event carrying the JSON object j.
+func (s *stream) signals(j string) {
+	if ew := s.begin(); ew != nil {
+		writeSignalsFrame(ew, j)
+		s.finish(ew)
+	}
+}
+
+func (s *stream) keepalive() {
+	if ew := s.begin(); ew != nil {
+		writeKeepaliveFrame(ew)
+		s.finish(ew)
+	}
+}
+
+// begin opens one SSE event, or returns nil once the stream has failed, so a
+// write racing a just-torn-down stream can't re-trigger teardown.
+func (s *stream) begin() *errWriter {
+	if s.failed {
+		return nil
+	}
 	s.busy.Store(busyWrite)
-	defer s.busy.Store(busyNone)
 	_ = s.rc.SetWriteDeadline(time.Now().Add(s.timeout))
-	ew := &errWriter{w: s.w}
-	write(ew)
+	return &errWriter{w: s.w}
+}
+
+// finish flushes the event begin opened, cancelling the stream on any error.
+func (s *stream) finish(ew *errWriter) {
 	err := ew.err
 	if err == nil {
 		err = s.rc.Flush()
 	}
+	s.busy.Store(busyNone)
 	if err != nil {
 		s.failed = true
 		s.cancel()
@@ -153,43 +190,80 @@ func (s *stream) abort() {
 // beats; disposers run on exit.
 // listeners and wake are built by the caller, before any OnConnect runs, so a
 // unit observes its own connect-time publish; runStream only drains them.
-func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, children []*Ctx, listeners []listener, wake chan struct{}, pushq chan func(), keepalive func(), interval time.Duration) {
-	defer func() {
-		for _, child := range children {
-			for _, d := range child.disposers {
-				runRecovered(log, g, d)
-			}
-		}
-		g.close(log)
-	}()
-	for _, child := range children {
-		for _, t := range child.ticks {
-			startTicker(reqCtx, child, t, pushq)
+func runStream(log *slog.Logger, reqCtx context.Context, g *pushGuard, units []*Ctx, listeners []subscription, wake chan struct{}, lc *tabStream) {
+	defer disposeUnits(log, g, units)
+	for _, u := range units {
+		for _, t := range u.ticks {
+			go runTicker(reqCtx, u, t, lc.pushq)
 		}
 	}
-	beat := time.NewTicker(interval)
+	beat := time.NewTicker(sseHeartbeat)
 	defer beat.Stop()
 	for {
 		select {
 		case <-reqCtx.Done():
 			return
-		case fn := <-pushq:
-			runPushItem(log, g, fn)
+		case it := <-lc.pushq:
+			runPushItem(log, g, it)
 		case <-wake:
 			sweepListeners(log, g, listeners)
 		case <-beat.C:
-			runPushItem(log, g, keepalive)
+			runPushItem(log, g, pushItem{beat: lc})
 		}
+	}
+}
+
+// disposeUnits runs every unit's disposers, then closes the guard.
+func disposeUnits(log *slog.Logger, g *pushGuard, units []*Ctx) {
+	runDisposers(log, g, units)
+	g.close(log)
+}
+
+func runDisposers(log *slog.Logger, g *pushGuard, units []*Ctx) {
+	for _, u := range units {
+		for _, d := range u.disposers {
+			runRecovered(log, g, d)
+		}
+	}
+}
+
+// pushItem is one piece of serialized stream work. Exactly one of its work
+// fields is set.
+type pushItem struct {
+	unit   *Ctx         // the unit tick runs against
+	tick   func(*Ctx)   // a Tick handler; the unit is pushed after it
+	listen subscription // a Listen whose backlog was just drained
+	action *liveAction  // a POST's action, handed over by tabStream.run
+	push   *unitPusher  // a bare push, after the unit's OnConnect fns
+	beat   *tabStream   // the keepalive: frame it, then revalidate the session
+}
+
+func (it pushItem) run() {
+	switch {
+	case it.unit != nil:
+		// Keyed on unit, not tick: a nil Tick handler panics here, on the
+		// beat, where the guard logs it.
+		it.tick(it.unit)
+		it.unit.pusher.push()
+	case it.listen != nil:
+		it.listen.deliver()
+	case it.action != nil:
+		it.action.run()
+	case it.push != nil:
+		it.push.push()
+	case it.beat != nil:
+		it.beat.wire.keepalive()
+		it.beat.revalidate()
 	}
 }
 
 // sweepListeners drains every listener once, in registration order, so two
 // Listens fire deterministically instead of racing two reader goroutines;
 // one wake token may stand for any number of pending subscriptions.
-func sweepListeners(log *slog.Logger, g *pushGuard, listeners []listener) {
+func sweepListeners(log *slog.Logger, g *pushGuard, listeners []subscription) {
 	for _, l := range listeners {
-		if work := l.poll(); work != nil {
-			runPushItem(log, g, work)
+		if l.drain() {
+			runPushItem(log, g, pushItem{listen: l})
 		}
 	}
 }
@@ -203,10 +277,11 @@ func sweepListeners(log *slog.Logger, g *pushGuard, listeners []listener) {
 // beat repeats, and ending it would trade a unit that stopped updating for a
 // reload loop that ends in a "Disconnected." banner over units that still
 // work. pushGuard keeps the log to one stack per site.
-func runPushItem(log *slog.Logger, g *pushGuard, fn func()) {
+func runPushItem(log *slog.Logger, g *pushGuard, it pushItem) {
 	g.arm()
 	defer g.disarm()
-	runRecovered(log, g, fn)
+	defer g.recoverPanic(log)
+	it.run()
 }
 
 // runRecovered is runPushItem without the pin timer, for OnDispose: the tab is
@@ -214,12 +289,14 @@ func runPushItem(log *slog.Logger, g *pushGuard, fn func()) {
 // pinned tab. Still recovered, since a disposer is user code and one panicking
 // must not skip the rest and leak what they release.
 func runRecovered(log *slog.Logger, g *pushGuard, fn func()) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			g.panicked(log, rec)
-		}
-	}()
+	defer g.recoverPanic(log)
 	fn()
+}
+
+func (g *pushGuard) recoverPanic(log *slog.Logger) {
+	if rec := recover(); rec != nil {
+		g.panicked(log, rec)
+	}
 }
 
 // panicSummaryEvery bounds how often a panic that repeats at one site is
@@ -303,7 +380,7 @@ func (g *pushGuard) close(log *slog.Logger) {
 }
 
 // panicSite is the file:line the recovered panic started at. A deferred
-// recover that re-panics (rootPush's) sits between, so it is the frame past
+// recover that re-panics (unitPusher.recoverFatal) sits between, so it is the frame past
 // the deepest runtime.gopanic, not the nearest.
 func panicSite() string {
 	pcs := make([]uintptr, 64)
@@ -327,7 +404,7 @@ func panicSite() string {
 // to hand the client its tab id, whose name must stay underscore-free (see
 // tabSignal).
 func writeSignalsFrame(w io.Writer, signalsJSON string) {
-	_, _ = io.WriteString(w, "event: datastar-patch-signals\ndata: signals ")
+	_, _ = io.WriteString(w, patchSignalsEvent+"data: signals ")
 	_, _ = io.WriteString(w, signalsJSON)
 	_, _ = io.WriteString(w, "\n\n")
 }
@@ -337,11 +414,10 @@ func writeSignalsFrame(w io.Writer, signalsJSON string) {
 // is replaced.
 func writeSSEHeaders(w http.ResponseWriter) {
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/event-stream")
+	setContentType(hdr, "text/event-stream")
 	if hdr.Get("Cache-Control") != noStoreValue {
 		hdr.Set("Cache-Control", "no-cache")
 	}
-	hdr.Set("X-Content-Type-Options", "nosniff")
 }
 
 // canFlush reports whether w can stream, looking through wrappers the way

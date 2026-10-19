@@ -41,7 +41,7 @@ type config struct {
 const sseHeartbeat = 25 * time.Second
 
 // sseWriteTimeout caps a single frame write, so a stalled peer can't pin the
-// child's goroutine. Fixed: disabling it would let one pin a net/http goroutine
+// stream goroutine. Fixed: disabling it would let one pin a net/http goroutine
 // per click, since an action POST waits behind this same deadline.
 const sseWriteTimeout = 10 * time.Second
 
@@ -49,21 +49,21 @@ const sseWriteTimeout = 10 * time.Second
 // connect is refused 503. See WithMaxSSEConn.
 const defaultMaxSSEConn = 10_000
 
-// defaultPinnedDeadline is how long a dispatch waits for the child goroutine
+// defaultPinnedDeadline is how long a dispatch waits for the stream goroutine
 // before declaring it pinned. See WithPinnedDeadline.
 const defaultPinnedDeadline = 5 * time.Second
 
 // Option configures a Handler or a NewRouter. On a Router the options apply to
 // the whole app, not to an individual Mount: there is one session cookie and
 // one origin policy across every page mounted on it.
-type Option func(*config)
+type Option interface{ apply(*config) }
 
 type mountConfig struct{}
 
 // MountOption configures a single Mount call, as opposed to Option which
 // configures the whole Router. None exist yet; the type keeps Mount's
 // signature stable for when one does.
-type MountOption func(*mountConfig)
+type MountOption interface{ applyMount(*mountConfig) }
 
 func newConfig(opts []Option) *config {
 	c := &config{
@@ -74,7 +74,7 @@ func newConfig(opts []Option) *config {
 		maxUpload:      maxUploadBytes,
 	}
 	for _, opt := range opts {
-		opt(c)
+		opt.apply(c)
 	}
 	if c.log == nil {
 		c.log = slog.Default()
@@ -106,12 +106,18 @@ const unsafeEvalNotice = "via: WithUnsafeEval set, so every page's CSP allows 'u
 // The h package and via/topic have no Router to reach and keep writing to
 // slog.Default().
 func WithLogger(l *slog.Logger) Option {
-	return func(c *config) {
-		if l == nil {
-			panic("via: WithLogger(nil)")
-		}
-		c.log = l
+	return loggerOption{l}
+}
+
+type loggerOption struct {
+	l *slog.Logger
+}
+
+func (o loggerOption) apply(c *config) {
+	if o.l == nil {
+		panic("via: WithLogger(nil)")
 	}
+	c.log = o.l
 }
 
 // WithTrustedOrigin turns on origin enforcement for the action endpoint and
@@ -126,9 +132,17 @@ func WithLogger(l *slog.Logger) Option {
 // lower-cased and a default port dropped, so "https://Auth.example:443"
 // matches an Origin of "https://auth.example", and a trailing "/" is
 // dropped. It panics on a value that is not a bare http(s) origin: one with a
-// path, a query, a fragment or userinfo.
+// path, a query, a fragment, userinfo, a wildcard host or an empty port.
 func WithTrustedOrigin(origin string) Option {
-	return func(c *config) { c.trustedOrigins[bareOrigin(origin)] = true }
+	return trustedOriginOption{origin}
+}
+
+type trustedOriginOption struct {
+	origin string
+}
+
+func (o trustedOriginOption) apply(c *config) {
+	c.trustedOrigins[bareOrigin(o.origin)] = true
 }
 
 // bareOrigin normalizes a WithTrustedOrigin value the way the browser
@@ -136,31 +150,47 @@ func WithTrustedOrigin(origin string) Option {
 // origin: the browser never sends a path or query, so such an entry would
 // silently match nothing.
 func bareOrigin(origin string) string {
-	bad := func(part string) {
-		panic(fmt.Sprintf("via: WithTrustedOrigin(%q): %s; want a bare origin, scheme://host[:port]", origin, part))
-	}
 	u, err := url.Parse(origin)
-	switch {
-	case err != nil:
-		bad("does not parse: " + err.Error())
-	case u.Scheme != "http" && u.Scheme != "https":
-		bad("scheme is not http or https")
-	case u.User != nil:
-		bad("has userinfo")
-	case u.Host == "":
-		bad("has no host")
-	case u.Path != "" && u.Path != "/" || u.RawPath != "":
-		bad("has a path")
-	case u.RawQuery != "" || u.ForceQuery:
-		bad("has a query")
-	case u.Fragment != "" || strings.Contains(origin, "#"):
-		bad("has a fragment")
+	if err != nil {
+		badOrigin(origin, "does not parse: "+err.Error())
+	}
+	if fault := originFault(origin, u); fault != "" {
+		badOrigin(origin, fault)
 	}
 	norm, ok := render.URLOrigin(origin)
 	if !ok || norm == "" {
-		bad("is not an origin")
+		badOrigin(origin, "is not an origin")
 	}
 	return norm
+}
+
+// originFault names the first reason a parsed origin is not a bare
+// scheme://host[:port], or "" when none applies. The order picks which
+// reason a multiply-bad value reports.
+func originFault(origin string, u *url.URL) string {
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "scheme is not http or https"
+	case u.User != nil:
+		return "has userinfo"
+	case u.Host == "":
+		return "has no host"
+	case strings.Contains(u.Host, "*"):
+		return "has a wildcard; list each origin"
+	case strings.HasSuffix(u.Host, ":"):
+		return "has an empty port"
+	case u.Path != "" && u.Path != "/" || u.RawPath != "":
+		return "has a path"
+	case u.RawQuery != "" || u.ForceQuery:
+		return "has a query"
+	case u.Fragment != "" || strings.Contains(origin, "#"):
+		return "has a fragment"
+	}
+	return ""
+}
+
+func badOrigin(origin, part string) {
+	panic(fmt.Sprintf("via: WithTrustedOrigin(%q): %s; want a bare origin, scheme://host[:port]", origin, part))
 }
 
 // WithSessionTTL sets how long a session may sit idle before it expires
@@ -170,12 +200,18 @@ func bareOrigin(origin string) string {
 // little as half the TTL after its last request. It panics on a value of 0 or
 // less.
 func WithSessionTTL(d time.Duration) Option {
-	return func(c *config) {
-		if d <= 0 {
-			panic("via: WithSessionTTL must be positive")
-		}
-		c.sessionTTL = d
+	return sessionTTLOption{d}
+}
+
+type sessionTTLOption struct {
+	d time.Duration
+}
+
+func (o sessionTTLOption) apply(c *config) {
+	if o.d <= 0 {
+		panic("via: WithSessionTTL must be positive")
 	}
+	c.sessionTTL = o.d
 }
 
 // WithSessionCookieName overrides the session cookie name (default
@@ -183,12 +219,18 @@ func WithSessionTTL(d time.Duration) Option {
 // or their session cookies clobber each other. It panics on a name net/http
 // would drop from Set-Cookie: empty, or with a byte outside an HTTP token.
 func WithSessionCookieName(name string) Option {
-	return func(c *config) {
-		if err := (&http.Cookie{Name: name, Value: "x"}).Valid(); err != nil {
-			panic(fmt.Sprintf("via: WithSessionCookieName(%q) is not a valid cookie name: %v", name, err))
-		}
-		c.sessionCookie = name
+	return sessionCookieNameOption{name}
+}
+
+type sessionCookieNameOption struct {
+	name string
+}
+
+func (o sessionCookieNameOption) apply(c *config) {
+	if err := (&http.Cookie{Name: o.name, Value: "x"}).Valid(); err != nil {
+		panic(fmt.Sprintf("via: WithSessionCookieName(%q) is not a valid cookie name: %v", o.name, err))
 	}
+	c.sessionCookie = o.name
 }
 
 // WithSecureCookies forces Secure on the session cookie even when via can't
@@ -197,9 +239,13 @@ func WithSessionCookieName(name string) Option {
 // which keeps plain http://localhost dev working. Set this behind a
 // TLS-terminating proxy that sends neither header.
 func WithSecureCookies() Option {
-	return func(c *config) {
-		c.sessionSecure = true
-	}
+	return secureCookiesOption{}
+}
+
+type secureCookiesOption struct{}
+
+func (secureCookiesOption) apply(c *config) {
+	c.sessionSecure = true
 }
 
 // WithSessionStore points sessions at a shared, durable store instead of the
@@ -230,15 +276,21 @@ func WithSecureCookies() Option {
 //
 // It panics on nil and on a second WithSessionStore.
 func WithSessionStore(s SessionStore) Option {
-	return func(c *config) {
-		if s == nil {
-			panic("via: WithSessionStore(nil)")
-		}
-		if c.sessionStore != nil {
-			panic("via: conflicting WithSessionStore options; pass one store")
-		}
-		c.sessionStore = s
+	return sessionStoreOption{s}
+}
+
+type sessionStoreOption struct {
+	s SessionStore
+}
+
+func (o sessionStoreOption) apply(c *config) {
+	if o.s == nil {
+		panic("via: WithSessionStore(nil)")
 	}
+	if c.sessionStore != nil {
+		panic("via: conflicting WithSessionStore options; pass one store")
+	}
+	c.sessionStore = o.s
 }
 
 // WithSessionStoreTimeout caps how long one session store round-trip may take
@@ -248,12 +300,18 @@ func WithSessionStore(s SessionStore) Option {
 // escape. A read-modify-write with retries (see [Session]) is bounded as a
 // whole, not per attempt.
 func WithSessionStoreTimeout(d time.Duration) Option {
-	return func(c *config) {
-		if d <= 0 {
-			panic("via: WithSessionStoreTimeout must be positive")
-		}
-		c.sessionTimeout = d
+	return sessionStoreTimeoutOption{d}
+}
+
+type sessionStoreTimeoutOption struct {
+	d time.Duration
+}
+
+func (o sessionStoreTimeoutOption) apply(c *config) {
+	if o.d <= 0 {
+		panic("via: WithSessionStoreTimeout must be positive")
 	}
+	c.sessionTimeout = o.d
 }
 
 // WithSessionKey sets the HMAC key signing the session cookie id. The key
@@ -267,15 +325,21 @@ func WithSessionStoreTimeout(d time.Duration) Option {
 // instead of falling back to a random key), on one shorter than 16 bytes, and
 // on a second WithSessionKey.
 func WithSessionKey(key []byte) Option {
-	return func(c *config) {
-		if len(key) == 0 {
-			panic("via: WithSessionKey needs a key; omit the option to fall back to VIA_SESSION_KEY or a random per-process key")
-		}
-		if c.sessionKey != nil {
-			panic("via: conflicting WithSessionKey options; pass one key")
-		}
-		c.sessionKey = key
+	return sessionKeyOption{key}
+}
+
+type sessionKeyOption struct {
+	key []byte
+}
+
+func (o sessionKeyOption) apply(c *config) {
+	if len(o.key) == 0 {
+		panic("via: WithSessionKey needs a key; omit the option to fall back to VIA_SESSION_KEY or a random per-process key")
 	}
+	if c.sessionKey != nil {
+		panic("via: conflicting WithSessionKey options; pass one key")
+	}
+	c.sessionKey = o.key
 }
 
 // WithMaxSSEConn caps how many live SSE streams this Router serves at once
@@ -287,12 +351,18 @@ func WithSessionKey(key []byte) Option {
 // for a tab's stream to connect; past it an action answers 503 at once. It
 // panics on a value of 0 or less.
 func WithMaxSSEConn(n int) Option {
-	return func(c *config) {
-		if n <= 0 {
-			panic("via: WithMaxSSEConn must be positive")
-		}
-		c.maxSSEConn = n
+	return maxSSEConnOption{n}
+}
+
+type maxSSEConnOption struct {
+	n int
+}
+
+func (o maxSSEConnOption) apply(c *config) {
+	if o.n <= 0 {
+		panic("via: WithMaxSSEConn must be positive")
 	}
+	c.maxSSEConn = o.n
 }
 
 // WithPinnedDeadline sets how long an action POST waits for the tab's stream
@@ -314,40 +384,60 @@ func WithMaxSSEConn(n int) Option {
 // Set it below the load balancer's own timeout so via answers first. It
 // panics on a value of 0 or less.
 //
-// The tab is logged as pinned too when any one handler, or one frame write to
-// a client that stopped reading, runs past d with no action waiting, so a tab
-// nobody clicks on is still reported. The line says which of the two it is.
+// The tab is logged as pinned too when any one handler, one frame write to a
+// client that stopped reading, or one keepalive session check waiting on the
+// store runs past d with no action waiting, so a tab nobody clicks on is still
+// reported. The line says which of the three it is.
 func WithPinnedDeadline(d time.Duration) Option {
-	return func(c *config) {
-		if d <= 0 {
-			panic("via: WithPinnedDeadline must be positive")
-		}
-		c.pinnedDeadline = d
+	return pinnedDeadlineOption{d}
+}
+
+type pinnedDeadlineOption struct {
+	d time.Duration
+}
+
+func (o pinnedDeadlineOption) apply(c *config) {
+	if o.d <= 0 {
+		panic("via: WithPinnedDeadline must be positive")
 	}
+	c.pinnedDeadline = o.d
 }
 
 // WithMaxBody caps an action POST body in bytes, and how much of a native form
-// submit stays in RAM before the rest spills to a temp file (default 1 MiB).
+// submit's file parts stays in RAM before the rest spills to a temp file
+// (default 1 MiB). A submit's text fields stay in RAM, up to this plus 10 MiB.
 // Over the cap the request answers 413. It panics on a value of 0 or less.
 func WithMaxBody(bytes int64) Option {
-	return func(c *config) {
-		if bytes <= 0 {
-			panic("via: WithMaxBody must be positive")
-		}
-		c.maxBody = bytes
+	return maxBodyOption{bytes}
+}
+
+type maxBodyOption struct {
+	bytes int64
+}
+
+func (o maxBodyOption) apply(c *config) {
+	if o.bytes <= 0 {
+		panic("via: WithMaxBody must be positive")
 	}
+	c.maxBody = o.bytes
 }
 
 // WithMaxUpload caps a native PostForm submit's whole multipart body in bytes
 // (default 8 MiB). Over the cap the request answers 413. It panics on a value
 // of 0 or less.
 func WithMaxUpload(bytes int64) Option {
-	return func(c *config) {
-		if bytes <= 0 {
-			panic("via: WithMaxUpload must be positive")
-		}
-		c.maxUpload = bytes
+	return maxUploadOption{bytes}
+}
+
+type maxUploadOption struct {
+	bytes int64
+}
+
+func (o maxUploadOption) apply(c *config) {
+	if o.bytes <= 0 {
+		panic("via: WithMaxUpload must be positive")
 	}
+	c.maxUpload = o.bytes
 }
 
 // WithPageCompression compresses every response except the SSE stream —
@@ -360,7 +450,15 @@ func WithMaxUpload(bytes int64) Option {
 // Compression makes a response's length depend on its content, which is what
 // BREACH reads: keep long-lived secrets out of rendered output.
 func WithPageCompression(encs ...Encoder) Option {
-	return func(c *config) { setEncoders(&c.pageEnc, "WithPageCompression", encs) }
+	return pageCompressionOption{encs}
+}
+
+type pageCompressionOption struct {
+	encs []Encoder
+}
+
+func (o pageCompressionOption) apply(c *config) {
+	setEncoders(&c.pageEnc, "WithPageCompression", o.encs)
 }
 
 // WithSSECompression compresses the live SSE stream the way
@@ -370,7 +468,15 @@ func WithPageCompression(encs ...Encoder) Option {
 // brotli window (LGWin) or the gzip level for that. It panics like
 // WithPageCompression.
 func WithSSECompression(encs ...Encoder) Option {
-	return func(c *config) { setEncoders(&c.sseEnc, "WithSSECompression", encs) }
+	return sSECompressionOption{encs}
+}
+
+type sSECompressionOption struct {
+	encs []Encoder
+}
+
+func (o sSECompressionOption) apply(c *config) {
+	setEncoders(&c.sseEnc, "WithSSECompression", o.encs)
 }
 
 // WithUnsafeEval adds 'unsafe-eval' to every mount's script-src, for a
@@ -379,5 +485,11 @@ func WithSSECompression(encs ...Encoder) Option {
 // which Datastar does not need. While it is set, the Router logs a warning at
 // startup.
 func WithUnsafeEval() Option {
-	return func(c *config) { c.unsafeEval = true }
+	return unsafeEvalOption{}
+}
+
+type unsafeEvalOption struct{}
+
+func (unsafeEvalOption) apply(c *config) {
+	c.unsafeEval = true
 }

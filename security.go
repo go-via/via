@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-via/via/internal/render"
 )
@@ -18,6 +19,13 @@ const maxActionBody = 1 << 20
 // ones with a file input, since the parser can't tell in advance. Only
 // maxActionBody of it is kept in RAM regardless. The default for WithMaxUpload.
 const maxUploadBytes = 8 << 20
+
+// setContentType is the only way via types a response: a type via sets is
+// never left for the browser to second-guess.
+func setContentType(hdr http.Header, contentType string) {
+	hdr.Set("Content-Type", contentType)
+	hdr.Set("X-Content-Type-Options", "nosniff")
+}
 
 // originAllowed is the "origin floor": the check that a state-changing request
 // comes from a host the app trusts, read off Origin/Sec-Fetch-Site. Every
@@ -66,7 +74,7 @@ type routerPolicy struct {
 	trustedOrigins map[string]bool
 	log            *slog.Logger
 	hookWarned     *sync.Map
-	tickWarn       sync.Once
+	tickWarned     atomic.Bool
 }
 
 // redirectTo is a queued Redirect. Its verdict is taken when it is queued,

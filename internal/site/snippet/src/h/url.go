@@ -6,9 +6,6 @@ import (
 
 // snippet:start urls
 func Links() h.H {
-	a := func(u, s string) h.H {
-		return h.A(h.Href(u), h.Str(s))
-	}
 	return h.Nav(
 		a("/docs?q=a&b", "rel"),
 		a("https://go.dev", "https"),
@@ -18,6 +15,8 @@ func Links() h.H {
 		a("data:text/html,x", "data"),
 	)
 }
+
+func a(u, s string) h.H { return h.A(h.Href(u), h.Str(s)) }
 
 // snippet:end
 

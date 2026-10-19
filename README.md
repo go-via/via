@@ -136,7 +136,8 @@ Pre-1.0: the API can change between minor versions.
 ```
 
 It runs gofmt, vet, staticcheck and the race tests for via and the site
-module (`internal/site`), then the browser tier in `vtbrowser`, which needs
+module (`internal/site`), caps via's cyclomatic and cognitive complexity at 15
+(gocyclo, gocognit), then the browser tier in `vtbrowser`, which needs
 Chromium or Chrome; `--no-browser` skips it. It reports, never rewrites.
 
 [`CONVENTIONS.md`](CONVENTIONS.md) has the code and test conventions,

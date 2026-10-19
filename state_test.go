@@ -45,9 +45,8 @@ func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
 		"a page whose View renders State must bootstrap the stream")
 
-	c := app.Connect()
-	defer c.Close()
-	assert.NotEmpty(t, c.TabID(), "the connect must hand back a tab id, not 404")
+	// Connect fails the test unless the stream answers with a tab id.
+	app.Connect().Close()
 }
 
 // stateEcho is a live child whose action writes a user-influenced value into
@@ -108,15 +107,22 @@ func TestList_outOfRangeIndexPanics(t *testing.T) {
 	assert.Panics(t, func() { newList().Remove(1) }, "Remove past the end")
 }
 
-func TestList_removeZeroesTheFreedSlot(t *testing.T) {
+func TestList_removeLeavesTheOldArrayUntouched(t *testing.T) {
 	t.Parallel()
-	var l via.List[*string]
-	a, b := "a", "b"
-	l.Append(&a)
-	l.Append(&b)
-	full := l.Get()[:2]
+	l := via.ListOf("a", "b")
+	before := l.Get()
 	l.Remove(0)
-	assert.Nil(t, full[1], "the vacated tail slot must be zeroed, not left aliasing the element")
+	assert.Equal(t, []string{"a", "b"}, before, "another tab may still hold the old array")
+	assert.Equal(t, []string{"b"}, l.Get())
+}
+
+func TestList_appendLeavesASetSlicesSpareCapacityUntouched(t *testing.T) {
+	t.Parallel()
+	shared := make([]string, 1, 4)
+	var l via.List[string]
+	l.Set(shared)
+	l.Append("x")
+	assert.Empty(t, shared[:2][1], "another tab may have Set the same snapshot")
 }
 
 // listChild is the canonical case item 04 claimed was impossible: a live list
@@ -467,10 +473,7 @@ func (w *trackLater) View() h.H {
 
 func TestState_trackAfterOnInitIsIgnored(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	n := &atomic.Int64{}
 	n.Store(5)
@@ -515,10 +518,7 @@ func (w *trackFromAction) View() h.H {
 
 func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
 	// Sequential: it captures the global log output.
-	var buf bytes.Buffer
-	prev := log.Writer()
-	log.SetOutput(&buf)
-	defer log.SetOutput(prev)
+	buf := globalLog(t)
 
 	n := &atomic.Int64{}
 	n.Store(7)
@@ -629,13 +629,13 @@ func TestStateTrack_worksOnAnEmbeddedChild(t *testing.T) {
 
 	status, body := app.Get("/")
 	require.Equal(t, http.StatusOK, status)
-	assert.Contains(t, body, "kid: 4", "an embedded child's literal must seed at its own init")
+	assert.Contains(t, body, "kid: 4", "a child's literal must seed at its own init")
 
 	conn := app.Connect()
 	defer conn.Close()
 	room.Publish(n.Add(1))
 	assert.Contains(t, conn.Await("kid: "), "kid: 5",
-		"an embedded child's literal must follow its topic")
+		"a child's literal must follow its topic")
 }
 
 // litTrackSilent never renders State; only the literal's Listen can make the page live.
@@ -653,4 +653,52 @@ func TestStateTrack_makesThePageLive(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `@post('/_via/sse')`,
 		"a literal-tracked State must earn the page a stream even when nothing renders it")
+}
+
+// sharedSeed is a List seeded by a literal and by a tag, each mounted once and
+// so copied into every tab.
+type sharedSeed struct {
+	Lit    via.List[string]
+	Tagged via.List[string] `via:"init=[\"x\",\"y\",\"z\"]"`
+}
+
+func (p *sharedSeed) Drop(ctx *via.Ctx) { p.Lit.Remove(0); p.Tagged.Remove(0) }
+
+func (p *sharedSeed) View() h.H {
+	return h.Div(h.Button(on.Click(p.Drop)),
+		h.P(h.Str("lit="), p.Lit.Each(seedItem)), h.P(h.Str("tagged="), p.Tagged.Each(seedItem)))
+}
+
+func seedItem(s string) h.H { return h.Str(s + ",") }
+
+func TestList_aTabsRemoveLeavesTheSeedOtherTabsGet(t *testing.T) {
+	app := vt.Serve(t, via.Handler(sharedSeed{Lit: via.ListOf("a", "b", "c")}))
+	conn := app.Connect()
+	status, _ := app.Action(0).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+	conn.Await("lit=b,c,<")
+
+	_, page := app.Get("/")
+	assert.Contains(t, page, "lit=a,b,c,<")
+	assert.Contains(t, page, "tagged=x,y,z,<")
+}
+
+type mapSeed struct {
+	Tags via.State[map[string]int] `via:"init={\"a\":1}"`
+}
+
+func (p *mapSeed) Mark(*via.Ctx) { p.Tags.Get()["leak"] = 1 }
+
+func (p *mapSeed) View() h.H {
+	return h.Div(h.Str(len(p.Tags.Get())), h.Button(on.Click(p.Mark)))
+}
+
+func TestState_aTaggedMapSeedIsEachRequestsOwn(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mapSeed{}))
+	code, _ := app.Action(0).Fire()
+	require.Less(t, code, 300)
+
+	_, body := app.Get("/")
+	assert.Contains(t, body, "<div>1<", "a write into one request's seeded map must not reach the next")
 }

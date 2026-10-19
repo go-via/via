@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/go-via/via"
 	"github.com/go-via/via/vt"
@@ -129,8 +131,10 @@ func TestOrder_derivesOnBothSides(t *testing.T) {
 }
 
 func TestClock_ticks(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(compositions.Clock{}))
-	conn := app.Connect()
-	conn.Await("datastar-patch-elements")
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(compositions.Clock{}))
+		conn := app.Connect()
+		time.Sleep(time.Second)
+		conn.Await("datastar-patch-elements")
+	})
 }

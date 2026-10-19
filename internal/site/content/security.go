@@ -38,6 +38,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Origin: https://evil.example' \
 const signInTranscript = `$ curl -si -H 'Origin: https://example.com' \
     -F name=ada -F _viatab= https://example.com/security/_via/a/1/<id>
 HTTP/1.1 303 See Other
+Cache-Control: private, no-store
 Location: /security
 Set-Cookie: via_session=<signed id>; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax
 Date: Fri, 25 Sep 2026 16:10:27 GMT
@@ -46,7 +47,7 @@ Content-Length: 0`
 const cspTranscript = `$ curl -sI https://example.com/security \
     | grep -i '^content-security-policy' | tr ';' '\n'
 Content-Security-Policy: default-src 'self'
- script-src 'self' 'nonce-KSfGODYz22EjHLF6Vse7nw' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-LqIkD2ynqYz8zKSe58JjW3qRObZHPM+TRdfHp4SBKu4=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
+ script-src 'self' 'nonce-KSfGODYz22EjHLF6Vse7nw' 'sha256-qgomxTCf6EyY9wRYTe+McNJfTHmvsnuHqNwURb6wkX0=' 'sha256-g7YdaHyafXvG7LGcI8Rr65SfNdLx6li/nDY+t9Lb4sY=' 'sha256-2TX8Ens+wrX3VPIQX1+1OWZMcSu8dc4f2EwNYTMzJTs='
  style-src 'self'
  object-src 'none'
  base-uri 'self'
@@ -70,14 +71,14 @@ func (p *Security) View() h.H {
 				"origin check below is the only CSRF defence.")),
 		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, form submit and stream "+
 			"connect, in this order: an "),
-			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header must be "),
-			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; otherwise the "), Code("Origin"),
+			Code("Origin"), h.Str(" on the allowlist passes; otherwise a "), Code("Sec-Fetch-Site"), h.Str(" header, when present, alone decides and must be "),
+			Code("same-origin"), h.Str(" or "), Code("none"), h.Str("; without one, the "), Code("Origin"),
 			h.Str(" host must equal the request's "), Code("Host"),
 			h.Str(", and be https when the request arrived over TLS or the proxy says "), Code("X-Forwarded-Proto: https"),
 			h.Str(" or "), Code("Forwarded: proto=https"), h.Str(". A request with neither header fails. A refusal is "), Code("403 forbidden origin"), h.Str(". "+
 				"Behind a proxy, list the public origin: the allowlist is checked first, so a rewritten Host does not matter. "+
 				"A listed origin is compared as the browser sends it: host case, a default port and a trailing \"/\" do not "+
-				"matter, and a value with a path, query, fragment or userinfo panics at startup.")),
+				"matter, and a value with a path, query, fragment, userinfo, wildcard or empty port panics at startup.")),
 		snippet.Text("shell", crossOriginPOST),
 		Callout(Warning, "Without it, every origin is accepted",
 			h.P(h.Str("A plain action never checks the tab id, even on a page with live parts, so any site can post to it. "+
@@ -139,14 +140,14 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.Session.Put"), h.Str("Stores the value, replacing the last one. Does not rotate.")},
 			[]h.H{API("via.Session.Get"), h.Str("Reads the value as T; false if none or if it no longer decodes.")},
 			[]h.H{API("via.Session.Delete"), h.Str("Clears the value. The id and the cookie stay.")},
-			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new id. Every other open tab on the session reloads under the new cookie.")},
+			[]h.H{API("via.Session.Rotate"), h.Str("New cookie id, same data, old id deleted. Returns the new cookie id, not Session.ID. Every other open tab on the session reloads under the new cookie.")},
 			[]h.H{API("via.Session.Ensure"), h.Str("Issues the cookie with no value, to key per-user state before there is any.")},
 			[]h.H{API("via.Session.ID"), h.Str("A stable id that survives Rotate. Key your own data by it; it grants nothing.")},
 		),
 		h.P(h.Str("Rotate and the first Put need a response to carry the cookie: call them in "), Code("OnInit"),
 			h.Str(" or an action, not in a Tick or Listen handler. Auth is a check in "), Code("OnInit"),
 			h.Str(" and a branch in "), Code("View"), h.Str("; composition and the hooks are on "),
-			h.A(h.Href(d.Href("/compositions")), h.Str("Compositions")), h.Str(".")),
+			d.Link("/compositions", "Compositions"), h.Str(".")),
 		Callout(Warning, "Nothing rotates on its own",
 			h.P(h.Str("Call Rotate at every auth-state change: login, logout, privilege change. Put does not rotate."))),
 
@@ -173,6 +174,8 @@ func (p *Security) View() h.H {
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("base-uri 'self'")), h.Str("Fixed.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("form-action 'self'")), h.Str("Fixed.")},
 			[]h.H{h.Code(h.Class("csp-has"), h.Str("frame-ancestors 'self'")), h.Str("Fixed.")},
+			[]h.H{h.Code(h.Class("csp-absent"), h.Str("font-src")), h.Span(h.Str("Added only when a preload names a font on another origin, or "),
+				API("via.Assets"), h.Str("."), Code("FontOrigins"), h.Str(" lists one: a remote stylesheet's @font-face origin is inside a file via never sees."))},
 			[]h.H{h.Code(h.Class("csp-absent"), h.Str("img-src")), h.Str("Added only when a preload names an image on another origin.")},
 		),
 		h.P(h.Str("The policy is built once per mount from the router's "), API("via.WithHead"), h.Str(" assets plus the page's "),
@@ -205,15 +208,15 @@ func (p *Security) View() h.H {
 
 		d.H2("Request limits"),
 		table([]string{"Option", "Default", "Caps, and the answer over it"},
-			[]h.H{API("via.WithMaxBody"), h.Str("1 MiB"), h.Span(h.Str("An action POST body, and how much of a form submit stays in memory. "), Code("413 request body too large"), h.Str("."))},
-			[]h.H{API("via.WithMaxUpload"), h.Str("8 MiB"), h.Span(h.Str("A PostForm submit's whole multipart body; the part past WithMaxBody spills to a temp file. "), Code("413 request body too large"), h.Str("."))},
+			[]h.H{API("via.WithMaxBody"), h.Str("1 MiB"), h.Span(h.Str("An action POST body, and how much of a form submit's file parts stays in memory. "), Code("413 request body too large"), h.Str("."))},
+			[]h.H{API("via.WithMaxUpload"), h.Str("8 MiB"), h.Span(h.Str("A PostForm submit's whole multipart body; file parts past WithMaxBody spill to a temp file, and text fields stay in RAM up to WithMaxBody plus 10 MiB. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxSSEConn"), h.Str("10000"), h.Span(h.Str("Open live streams across the Router. "), Code("503 stream capacity reached"), h.Str("."))},
 			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, "), Code("410"), h.Str("."))},
 		),
 		h.P(h.Str("The stream cap is router-wide, with no per-client share: one client can hold all of it. Set it to what the "+
 			"machine has memory for, since each stream holds a goroutine and a composition tree for the tab's life. A per-client "+
 			"limit belongs at the proxy, which sees the client's address; see "),
-			h.A(h.Href(d.Href("/deploy")+"#limits-and-dead-peers"), h.Str("Limits and dead peers")), h.Str(".")),
+			d.Link("/deploy#limits-and-dead-peers", "Limits and dead peers"), h.Str(".")),
 
 		d.H2("Middleware"),
 		snippet.Region("security/middleware.go", "middleware", snippet.Mark("Unwrap()", "accessLog(securityHeaders(app))")),

@@ -41,10 +41,10 @@ func inheritRequestScope(ctx, from *Ctx) {
 		return
 	}
 	ctx.doInit = true
-	ctx.req = from.req
-	ctx.sessions = from.sessions
-	ctx.policy = from.policy
-	ctx.sessW = from.sessW
+	// A re-render of a live unit is live whether or not this View re-derives
+	// it: a Tick or Listen that made it live is not registered again here.
+	ctx.live = from.live
+	ctx.reqScope = from.reqScope
 	// The resolved handle, not just the manager: a session minted this request
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).
@@ -120,17 +120,19 @@ func withWritten(c *Ctx, written map[string]any) ([]string, map[string]any) {
 	return append(slices.Clone(c.order), extra...), initial
 }
 
+const liveUnderLiveMsg = "via: via.Child: a live unit cannot sit inside another live unit — " +
+	"embed it directly from a plain ancestor instead"
+
 // checkLiveNesting enforces the two deferred-feature rules on the finished
 // render tree: a live unit may not hold another live unit, and a live child's
 // View may not call Child at all (a live root may — its plain children are
-// re-inited on every push, see rootPush). It runs after the walk because
+// re-inited on every push, see unitPusher.from). It runs after the walk because
 // liveness is only knowable then — loud and early, rather than serving a page
 // that silently misroutes an action.
 func checkLiveNesting(c *Ctx, underLive bool) {
 	if c.live {
 		if underLive {
-			panic("via: via.Child: a live unit cannot sit inside another live unit — " +
-				"embed it directly from a plain ancestor instead")
+			panic(liveUnderLiveMsg)
 		}
 		if c.isChild && len(c.children) > 0 {
 			panic("via: via.Child: a live child's View must not call Child — keep a live child's View flat")
@@ -153,8 +155,7 @@ func checkLiveNesting(c *Ctx, underLive bool) {
 // descendant with no ancestor left to register it.
 func checkLiveUnderLive(c *Ctx, underLive bool) {
 	if c.live && underLive {
-		panic(liveNestingViolation{msg: "via: via.Child: a live unit cannot sit inside another live unit — " +
-			"embed it directly from a plain ancestor instead"})
+		panic(liveNestingViolation{msg: liveUnderLiveMsg})
 	}
 	for _, ch := range c.children {
 		checkLiveUnderLive(ch, underLive || c.live)
@@ -170,13 +171,7 @@ var bootPolicy = &routerPolicy{log: slog.New(slog.DiscardHandler)}
 // side effects. It returns the message of a Miswired panic and swallows every
 // other: a View that dereferences data OnInit would have loaded is not a bug.
 func bootRender(inst instance) (miswired string) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			if m, ok := rec.(render.Miswired); ok {
-				miswired = string(m)
-			}
-		}
-	}()
+	defer recoverMiswired(&miswired)
 	ctx := newRootCtx(false, "", nil)
 	ctx.unitV = inst
 	ctx.policy = bootPolicy
@@ -184,9 +179,17 @@ func bootRender(inst instance) (miswired string) {
 	return ""
 }
 
+func recoverMiswired(msg *string) {
+	if rec := recover(); rec != nil {
+		if m, ok := rec.(render.Miswired); ok {
+			*msg = string(m)
+		}
+	}
+}
+
 // liveNestingViolation is checkLiveUnderLive's panic value. Unlike a render
 // panic from user code, this rule is a fixed property of the tree shape: the
-// same push will hit it again on every following tick. childPush recovers it
-// by type (see connect.go) to abort the stream once instead of retrying it
+// same push will hit it again on every following tick. unitPusher.recoverFatal
+// recovers it by type to abort the stream once instead of retrying it
 // forever the way runPushItem's generic per-item recover would.
 type liveNestingViolation struct{ msg string }

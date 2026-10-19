@@ -266,7 +266,8 @@ go-via.dev {
 		-Server
 	}
 
-	# The site takes no uploads; via's own 8 MiB default never has to be reached.
+	# Tighter than via's 8 MiB upload default, so a file over 2MB in the
+	# /actions upload demo gets Caddy's 413 before via sees it.
 	request_body {
 		max_size 2MB
 	}

@@ -91,7 +91,7 @@ func cspOf(t *testing.T, c *http.Client, url string) string {
 
 func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
@@ -109,7 +109,7 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 
 func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
@@ -142,7 +142,7 @@ func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 
 func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/p", profilePage{})
 	srv := serve(t, r)
 	jar, _ := cookiejar.New(nil)
@@ -362,7 +362,7 @@ func TestRouter_paramUnknownNamePanics(t *testing.T) {
 
 func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
@@ -460,7 +460,7 @@ func TestRouter_onInitParamMissWinsOverAQueuedRedirect(t *testing.T) {
 
 func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
@@ -476,7 +476,7 @@ func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 
 func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
@@ -529,7 +529,7 @@ func postForm(c *http.Client, t *testing.T, url, field, value string) *http.Resp
 
 func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -587,7 +587,7 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 
 func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -600,7 +600,7 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 
 func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
@@ -954,6 +954,17 @@ func TestMount_staysQuietForAnOrdinaryActionThatSharesAHookLookalikeName(t *test
 	assert.NotContains(t, logged, "mis-named")
 }
 
+// globalLog sends the global log to a buffer until the test ends. A test that
+// uses it must not run in parallel.
+func globalLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return &buf
+}
+
 func captureLog(t *testing.T, fn func()) string {
 	t.Helper()
 	var buf bytes.Buffer
@@ -992,7 +1003,7 @@ func TestOnInit_seesTheConnectRequest(t *testing.T) {
 
 func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
-	r := via.NewRouter(via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
@@ -1190,8 +1201,8 @@ func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
 
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Less(t, code, 300)
-	assert.Contains(t, conn.Await("n=1"), "n=1",
-		"the pushed frame must carry post-action data, not the connect-time snapshot")
+	// The pushed frame must carry post-action data, not the connect-time snapshot.
+	conn.Await("n=1")
 }
 
 // reloadNotFound models the row an action just deleted: OnReload says the page's
@@ -1235,6 +1246,24 @@ func TestReload_redirectFromReloadNavigatesTheTab(t *testing.T) {
 
 	assert.Contains(t, resp.Header.Get("Content-Type"), "text/javascript")
 	assert.JSONEq(t, `{"data-via-to":"/elsewhere"}`, resp.Header.Get("datastar-script-attributes"))
+}
+
+type liveReloadRedirector struct{ n via.State[int] }
+
+func (p *liveReloadRedirector) OnReload(ctx *via.Ctx) error { ctx.Redirect("/elsewhere"); return nil }
+
+func (p *liveReloadRedirector) Go(ctx *via.Ctx) {}
+
+func (p *liveReloadRedirector) View() h.H { return h.Div(p.n.Display(), h.Button(on.Click(p.Go))) }
+
+func TestReload_redirectFromALiveUnitsReloadNavigatesTheTab(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveReloadRedirector{}))
+		code, body := app.Action(0).Over(app.Connect()).Fire()
+
+		assert.Equal(t, http.StatusOK, code)
+		assert.Contains(t, body, "location.assign", "a Redirect from the reload after a live action must still navigate")
+	})
 }
 
 // tickingReload registers a Tick from OnReload on a page served plain. Honouring
@@ -1421,25 +1450,26 @@ func TestRouterClose_isSafeToCallTwice(t *testing.T) {
 }
 
 func TestRouterClose_stopsTheTickGoroutine(t *testing.T) {
-	t.Parallel()
-	r, p := closableRouter(t)
-	app := vt.Serve(t, r)
-	conn := app.Connect()
-	<-p.beats
-	r.Close()
-	require.NoError(t, conn.AwaitClose())
+	synctest.Test(t, func(t *testing.T) {
+		r, p := closableRouter(t)
+		app := vt.Serve(t, r)
+		conn := app.Connect()
+		<-p.beats
+		r.Close()
+		require.NoError(t, conn.AwaitClose())
 
-	// Drain whatever the last live tick already queued, then prove the timer
-	// is gone rather than merely between beats.
-	select {
-	case <-p.beats:
-	default:
-	}
-	select {
-	case <-p.beats:
-		assert.Fail(t, "a Tick fired after Close returned")
-	case <-time.After(50 * time.Millisecond):
-	}
+		// Drain whatever the last live tick already queued, then prove the timer
+		// is gone rather than merely between beats.
+		select {
+		case <-p.beats:
+		default:
+		}
+		select {
+		case <-p.beats:
+			assert.Fail(t, "a Tick fired after Close returned")
+		case <-time.After(50 * time.Millisecond):
+		}
+	})
 }
 
 func TestRouter_zeroValueServesAndMountsWithoutNewRouter(t *testing.T) {
@@ -1658,7 +1688,7 @@ func (c *closePage) View() h.H     { return h.Div(c.n.Display()) }
 func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 	t.Parallel()
 	admitted := 0
-	for range 50 {
+	for i := range 50 {
 		opened, disposed := &atomic.Int64{}, &atomic.Int64{}
 		r := via.NewRouter()
 		via.Mount(r, "/", closePage{opened: opened, disposed: disposed})
@@ -1677,11 +1707,12 @@ func TestRouterClose_drainsAConnectThatRacedTheShutdown(t *testing.T) {
 			resp.Body.Close()
 			status <- resp.StatusCode
 		}()
-		// Long enough for the connect to clear the shutting-down check, short
-		// enough that it is still setting the stream up. The window between
-		// that check and the WaitGroup join is internal, so a sleep is the
-		// only way to aim at it from outside.
-		time.Sleep(300 * time.Microsecond)
+		// The window between the shutting-down check and the WaitGroup join is
+		// internal, so a sleep is the only way to aim at it from outside. The
+		// delay sweeps 0 to ~10ms, densest at the short end: the early tries
+		// land in the window on a fast machine, the late ones admit a stream
+		// on a loaded one, so the run is never vacuous.
+		time.Sleep(time.Duration(i*i) * 4 * time.Microsecond)
 		r.Close()
 		// The connect joins the WaitGroup before it runs OnInit, so an admitted
 		// stream Close did not drain shows up here as an opened stream with no
@@ -1949,4 +1980,13 @@ func TestMount_bootRenderIsBestEffortAndARenderStillPanics(t *testing.T) {
 	resp, _ := do(t, serve(t, r), http.MethodGet, "/", "")
 	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.Contains(t, out.String(), "share the action id")
+}
+
+func TestMount_aPathWithAHostPanics(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	t.Cleanup(r.Close)
+	assert.PanicsWithValue(t,
+		`via: Mount path "example.com/docs" must start with "/"; a host or method prefix is not supported`,
+		func() { via.Mount(r, "example.com/docs", errOK{}) })
 }

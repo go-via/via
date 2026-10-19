@@ -170,23 +170,26 @@ Reasoning: Optional configuration passed as variadic arguments keeps
 call sites clean and avoids boolean-laden signatures. Conflicting options
 are a programming error, not a runtime condition.
 
-Rule: Optional config uses the `func(*cfg)` pattern. When two options
-are mutually exclusive, the second one panics — fail at registration /
-init time rather than silently overriding or returning an error. This
-applies to options evaluated during startup; options resolved at runtime
-should return errors instead.
+Rule: Optional config is an interface with one unexported method,
+`apply(*config)`, and each constructor returns a small unexported type
+that implements it. When two options are mutually exclusive, the second
+one panics — fail at registration / init time rather than silently
+overriding or returning an error. This applies to options evaluated
+during startup; options resolved at runtime should return errors instead.
 
 ```go
-type Option func(*config)
+type Option interface{ apply(*config) }
 
-func WithDarkMode() Option {
-    return func(cfg *config) {
-        if cfg.themeSet {
-            panic("via: conflicting theme options")
-        }
-        cfg.theme = "dark"
-        cfg.themeSet = true
+func WithDarkMode() Option { return darkMode{} }
+
+type darkMode struct{}
+
+func (darkMode) apply(cfg *config) {
+    if cfg.themeSet {
+        panic("via: conflicting theme options")
     }
+    cfg.theme = "dark"
+    cfg.themeSet = true
 }
 ```
 
@@ -194,19 +197,32 @@ Rule: Export the option type; keep the config it mutates unexported and
 in the same package. Callers must be able to name the option type — to
 hold one in a variable, build a `[]Option` slice, or write a helper that
 returns options — so a constructor's signature may not reference an
-unexported or `internal/` type. The `func(*config)` target stays
-unexported because the option set is closed: users compose the provided
-`WithX` constructors, they never author an option by hand.
+unexported or `internal/` type. The `apply` method stays unexported
+because the option set is closed: users compose the provided `WithX`
+constructors, they never author an option by hand.
 
-- ✅ `type Option func(*config)` — `config` unexported, same package
-- ✅ `type MountOption func(*mountConfig)` — no constructors yet; it keeps
-  `Mount`'s signature stable for when one lands
+- ✅ `type Option interface{ apply(*config) }` — `config` unexported, same
+  package
+- ✅ `type MountOption interface{ applyMount(*mountConfig) }` — no
+  constructors yet; it keeps `Mount`'s signature stable for when one lands
 - ❌ `func Debounce(d string) spec.Option` (leaks `internal/spec` — a
   downstream module can't name the return type)
 
 A package that needs the same option type a sibling already defines
 should re-export it with an alias (`type Option = spec.Option`) rather
 than expose the shared internal type in its signatures.
+
+## No Func Literals
+
+Non-test code holds no func literals. A callback is a named func, a method
+value, or a small type with a method (an `http.Handler`, a `sort` comparator
+named for its order). Named code has a name in a stack trace and a profile,
+and a typed value states what it captures; a closure on a hot path also
+allocates per call.
+
+`TestSources_holdNoFuncLiterals` in `sourcelint_test.go` enforces this across
+all three modules. Tests are exempt (`t.Run`, `assert.Eventually`), and so is
+`internal/site/snippet/src`, which shows readers plain `net/http` code.
 
 ## Panic on Invalid Registration
 
@@ -252,7 +268,7 @@ these:
 
 `PageMeta` clears all three, which is why it is a method on the root and not
 `ctx.Title(…)`: the document head is one shared slot, and the setter shape let
-any embedded child silently rename the page.
+any child silently rename the page.
 
 Measured against the same rule and deliberately left imperative:
 
@@ -369,7 +385,7 @@ it.
 
 ```go
 // ✅ Adds information the name doesn't
-// ErrNotFound from OnInit answers 404; any other error answers 500.
+// ErrNotFound from OnInit or OnReload answers 404 rather than a 500.
 var ErrNotFound = errors.New("via: not found")
 
 // ✅ States a non-obvious contract
@@ -514,9 +530,10 @@ signal — change the surface, not the test boundary.
 Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
 (the reflect allowlist, the no-`&`/no-closure guard over the site's demos and
 snippets, the guard that keeps `internal/render`'s binder plumbing off every
-public package, and the black-box test lint) parse the tree and assert on what
-it says, so they pair with every source file and therefore with none. A failure
-there means the source drifted from a design rule, not a behavioral regression.
+public package, the black-box test lint and the func-literal lint) parse the
+tree and assert on what it says, so they pair with every source file and
+therefore with none. A failure there means the source drifted from a design
+rule, not a behavioral regression.
 
 The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
 is the set of files one page shows, tested together from `<pkg>_test.go`. A
@@ -546,9 +563,8 @@ the compiler checks.
 
 Rule: Use `internal/` for code that must not be imported by consumers and
 either is shared across packages within the module, or is split out of root
-to hide one decision. A package split out of root never imports `via` and
-imports a sibling only where a lint allows it. Do not use `internal/` as a
-dumping ground — the same responsibility rules apply.
+to hide one decision. A package split out of root never imports `via`. Do
+not use `internal/` as a dumping ground — the same responsibility rules apply.
 
 - ✅ `internal/render` holds the binder plumbing that root, `h` and `on`
   share.

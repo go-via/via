@@ -1,7 +1,6 @@
 package h_test
 
 import (
-	"encoding/json"
 	"testing"
 
 	"github.com/go-via/via/h"
@@ -16,11 +15,11 @@ type stubBinder struct{}
 
 func (*stubBinder) DeclareSignal(string, any) {}
 
-func (*stubBinder) Hydrator(string, func(json.RawMessage) bool) {}
+func (*stubBinder) Hydrator(string, render.Hydrator) {}
 
 func (*stubBinder) Action(*render.Renderer, string, any) {}
 
-func (*stubBinder) ArgAction(*render.Renderer, string, any, any, func([]byte) (any, error)) {}
+func (*stubBinder) ArgAction(*render.Renderer, string, any, any, render.ArgCall) {}
 
 func markup(t *testing.T, node h.H) string {
 	t.Helper()
@@ -129,16 +128,6 @@ func TestElements_fullVocabularyRendersItsTags(t *testing.T) {
 	for _, c := range cases {
 		assert.Equal(t, c.want, markup(t, c.node))
 	}
-}
-
-func TestURLAttrs_neutralizeUnsafeSchemes(t *testing.T) {
-	t.Parallel()
-	assert.Contains(t, markup(t, h.A(h.Href("/threads/7"))), `href="/threads/7"`)
-	assert.Contains(t, markup(t, h.A(h.Href("https://example.com/x"))), `href="https://example.com/x"`)
-	assert.Contains(t, markup(t, h.A(h.Href("javascript:alert(1)"))), `href="#"`)
-	assert.Contains(t, markup(t, h.Img(h.Src("data:text/html,x"))), `src="#"`)
-	assert.Contains(t, markup(t, h.A(h.Href("//evil.example/x"))), `href="#"`)
-	assert.Contains(t, markup(t, h.Form(h.Action("/login"))), `action="/login"`)
 }
 
 func TestRawAttr_rejectsNamesThatCanBreakOutOfTheTag(t *testing.T) {

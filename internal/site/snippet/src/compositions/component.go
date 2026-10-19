@@ -10,7 +10,7 @@ import (
 
 // snippet:start stepper
 type Stepper struct {
-	Label string         // prop: whoever embeds or mounts it sets it
+	Label string         // prop: whoever mounts it or renders it with via.Child sets it
 	By    int            // prop with a default, filled in by OnInit
 	N     via.State[int] // state: on the server, one per connection
 }

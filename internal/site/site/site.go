@@ -4,7 +4,7 @@
 package site
 
 import (
-	"crypto/rand"
+	"errors"
 	"html"
 	"log"
 	"log/slog"
@@ -77,25 +77,35 @@ func New(opts Options) (*via.Router, http.Handler) {
 	return app, newMux(app, s, opts.Version)
 }
 
-func errorPage(s *shell.Site, idx *search.Index) func(*via.Ctx, via.PageError) h.H {
-	return func(ctx *via.Ctx, e via.PageError) h.H {
-		if e.Reason == via.ReasonNotFound {
-			return notFound(s, idx, ctx.Request())
-		}
-		title, detail := "Something broke", e.Detail
-		switch e.Reason {
-		case via.ReasonBadRequest, via.ReasonForbidden, via.ReasonMethodNotAllowed, via.ReasonGone:
-			title = "Request refused"
-		case via.ReasonTooLarge:
-			title = "Request too large"
-		case via.ReasonUnavailable:
-			title, detail = "Temporarily unavailable", "The session store did not answer. Nothing you did caused this; try again shortly."
-		}
-		return s.Doc(shell.NavItem{Title: title}, nil).Page(
-			h.P(h.Str(detail)),
-			h.P(h.A(h.Href(s.Href("/")), h.Str("Back to the front page"))),
-		)
+// errorPages renders the router's error page.
+type errorPages struct {
+	s   *shell.Site
+	idx *search.Index
+}
+
+func (p errorPages) render(ctx *via.Ctx, e via.PageError) h.H {
+	s := p.s
+	if e.Reason == via.ReasonNotFound {
+		return notFound(s, p.idx, ctx.Request())
 	}
+	title, detail := "Something broke", e.Detail
+	switch e.Reason {
+	case via.ReasonBadRequest, via.ReasonForbidden, via.ReasonMethodNotAllowed, via.ReasonGone:
+		title = "Request refused"
+	case via.ReasonTooLarge:
+		title = "Request too large"
+	case via.ReasonUnavailable:
+		// A native submit to a busy or shutting-down live tab is a 503 with no
+		// Err, so only ErrStoreDown names the store.
+		title, detail = "Temporarily unavailable", "The server is busy. Nothing you did caused this; try again shortly."
+		if errors.Is(e.Err, via.ErrStoreDown) {
+			detail = "The session store did not answer. Nothing you did caused this; try again shortly."
+		}
+	}
+	return s.Doc(shell.NavItem{Title: title}, nil).Page(
+		h.P(h.Str(detail)),
+		h.P(h.A(h.Href(s.Href("/")), h.Str("Back to the front page"))),
+	)
 }
 
 // notFound offers the closest nav entry and a search. The error page carries
@@ -117,11 +127,7 @@ func notFound(s *shell.Site, idx *search.Index, r *http.Request) h.H {
 		} else {
 			items := []h.H{h.Class("search-hits")}
 			for _, hit := range hits {
-				label := hit.Title
-				if hit.Heading != "" {
-					label += " › " + hit.Heading
-				}
-				items = append(items, h.Li(h.A(h.Href(hit.Href), h.Str(label)), h.Small(h.Str(hit.Snippet))))
+				items = append(items, h.Li(h.A(h.Href(hit.Href), h.Str(hit.Label())), h.Small(h.Str(hit.Snippet))))
 			}
 			body = append(body, h.Ul(items...))
 		}
@@ -164,7 +170,7 @@ func routerOptions(s *shell.Site, idx *search.Index) []via.Option {
 				},
 			},
 		}),
-		via.WithErrorPage(errorPage(s, idx)),
+		via.WithErrorPage(errorPages{s, idx}.render),
 		// One VPS: each stream holds a composition tree and up to fifty rows
 		// per live list, and a connect costs the client nothing, so the default
 		// of ten thousand is an OOM lever. The cap 503s connects router-wide,
@@ -189,12 +195,14 @@ func fontURL(s *shell.Site, name string) string {
 }
 
 func cookieSuffix(base string) string {
-	return strings.Trim(strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return '_'
-	}, base), "_")
+	return strings.Trim(strings.Map(cookieRune, base), "_")
+}
+
+func cookieRune(r rune) rune {
+	if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+		return r
+	}
+	return '_'
 }
 
 func newApp(s *shell.Site, idx *search.Index) *via.Router {
@@ -225,73 +233,95 @@ func newApp(s *shell.Site, idx *search.Index) *via.Router {
 }
 
 func newMux(app http.Handler, s *shell.Site, version string) *http.ServeMux {
-	sitemap := s.Origin != "" && s.Base == ""
+	m := siteRoutes{s: s, version: version, sitemap: s.Origin != "" && s.Base == ""}
 	mux := http.NewServeMux()
 	mux.Handle("GET "+s.Base+"/static/", http.StripPrefix(s.Base, staticHandler()))
-	mux.HandleFunc("GET "+s.Href("/platform"), func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, s.Href("/security"), http.StatusMovedPermanently)
-	})
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Write([]byte("ok " + version + "\n"))
-	})
-	mux.HandleFunc("GET /robots.txt", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.Header().Set("Cache-Control", "public, max-age=3600")
-		w.Header().Set("X-Content-Type-Options", "nosniff")
-		body := "User-agent: *\nAllow: /\n"
-		if sitemap {
-			body += "Sitemap: " + s.Origin + "/sitemap.xml\n"
-		}
-		w.Write([]byte(body))
-	})
-	if sitemap {
-		mux.HandleFunc("GET /sitemap.xml", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/xml; charset=utf-8")
-			w.Header().Set("Cache-Control", "public, max-age=3600")
-			w.Header().Set("X-Content-Type-Options", "nosniff")
-			w.Write(sitemapXML(s))
-		})
+	mux.HandleFunc("GET "+s.Href("/platform"), m.platform)
+	mux.HandleFunc("GET /healthz", m.healthz)
+	mux.HandleFunc("GET /robots.txt", m.robots)
+	if m.sitemap {
+		mux.HandleFunc("GET /sitemap.xml", m.sitemapXML)
 	}
 	if s.Base == "" {
-		mux.HandleFunc("GET /latest", latestRedirect(s))
-		mux.HandleFunc("GET /latest/", latestRedirect(s))
+		mux.HandleFunc("GET /latest", m.latest)
+		mux.HandleFunc("GET /latest/", m.latest)
 	}
-	mux.HandleFunc("GET /favicon.ico", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, s.Href("/static/brand/icon-amber-ink.svg"), http.StatusMovedPermanently)
-	})
+	mux.HandleFunc("GET /favicon.ico", m.favicon)
 	root := canonicalSlash(app, s)
 	mux.Handle("POST "+s.Base+"/_via/a/{child}/{act}", limitCounter(root, demo.NewLimiter(counterPerMinute)))
 	mux.Handle("/", root)
 	return mux
 }
 
+// siteRoutes answers the mux's own routes, the ones outside the via router.
+type siteRoutes struct {
+	s       *shell.Site
+	version string
+	sitemap bool
+}
+
+func (m siteRoutes) platform(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, m.s.Href("/security"), http.StatusMovedPermanently)
+}
+
+func (m siteRoutes) healthz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write([]byte("ok " + m.version + "\n"))
+}
+
+func (m siteRoutes) robots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	body := "User-agent: *\nAllow: /\n"
+	if m.sitemap {
+		body += "Sitemap: " + m.s.Origin + "/sitemap.xml\n"
+	}
+	w.Write([]byte(body))
+}
+
+func (m siteRoutes) sitemapXML(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Write(sitemapXML(m.s))
+}
+
+func (m siteRoutes) favicon(w http.ResponseWriter, r *http.Request) {
+	http.Redirect(w, r, m.s.Href("/static/brand/icon-amber-ink.svg"), http.StatusMovedPermanently)
+}
+
 // limitCounter spends a token per front-page counter click. That page shows
 // landing_counter.go whole, so the check other demos make in their actions
 // runs here.
 func limitCounter(next http.Handler, lim *demo.Limiter) http.Handler {
-	acts := counterActs()
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if acts[r.PathValue("act")] && !lim.AllowRequest(r) {
-			w.Header().Set("Retry-After", strconv.Itoa(60/counterPerMinute))
-			http.Error(w, "too many requests", http.StatusTooManyRequests)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return counterLimit{next, lim, counterActs()}
+}
+
+type counterLimit struct {
+	next http.Handler
+	lim  *demo.Limiter
+	acts map[string]bool
+}
+
+func (c counterLimit) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if c.acts[r.PathValue("act")] && !c.lim.AllowRequest(r) {
+		w.Header().Set("Retry-After", strconv.Itoa(60/counterPerMinute))
+		http.Error(w, "too many requests", http.StatusTooManyRequests)
+		return
+	}
+	c.next.ServeHTTP(w, r)
 }
 
 var counterAct = regexp.MustCompile(`@post\('[^']*/_via/a/[^/']+/([^/']+)'\)`)
 
 // An action id hashes the handler and its receiver's path within its own unit,
 // so a mount of the counter alone yields the ids it has as the front page's
-// child. The session key is throwaway: NewRouter requires one.
+// child.
 func counterActs() map[string]bool {
-	key := make([]byte, 32)
-	rand.Read(key)
-	r := via.NewRouter(via.WithSessionKey(key), via.WithLogger(slog.New(slog.DiscardHandler)))
+	r := via.NewRouter(via.WithLogger(slog.New(slog.DiscardHandler)))
 	defer r.Close()
 	via.Mount(r, "/", demos.NewLandingCounter())
 	rec := httptest.NewRecorder()
@@ -316,35 +346,40 @@ func canonicalSlash(next http.Handler, s *shell.Site) http.Handler {
 			pages[s.Href(it.Path)] = true
 		}
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if p := strings.TrimSuffix(r.URL.Path, "/"); p != r.URL.Path && pages[p] {
-			u := *r.URL
-			u.Path, u.RawPath = p, ""
-			http.Redirect(w, r, u.RequestURI(), http.StatusPermanentRedirect)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+	return slashCanon{next, pages}
 }
 
-// latestRedirect sends /latest/<page> to that page on the newest version.
+type slashCanon struct {
+	next  http.Handler
+	pages map[string]bool
+}
+
+func (c slashCanon) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if p := strings.TrimSuffix(r.URL.Path, "/"); p != r.URL.Path && c.pages[p] {
+		u := *r.URL
+		u.Path, u.RawPath = p, ""
+		http.Redirect(w, r, u.RequestURI(), http.StatusPermanentRedirect)
+		return
+	}
+	c.next.ServeHTTP(w, r)
+}
+
+// latest sends /latest/<page> to that page on the newest version.
 // 302, not 308: the target changes with every release, and a cached
 // permanent redirect would pin readers to the old one.
-func latestRedirect(s *shell.Site) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		page := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/latest"))
-		// path.Clean keeps a backslash, and browsers read a leading /\ as //.
-		if strings.Contains(page, `\`) {
-			http.NotFound(w, r)
-			return
-		}
-		latest := s.Latest()
-		target := latest.Href(page)
-		if r.URL.RawQuery != "" && !strings.Contains(target, "://") {
-			target += "?" + r.URL.RawQuery
-		}
-		http.Redirect(w, r, target, http.StatusFound)
+func (m siteRoutes) latest(w http.ResponseWriter, r *http.Request) {
+	page := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/latest"))
+	// path.Clean keeps a backslash, and browsers read a leading /\ as //.
+	if strings.Contains(page, `\`) {
+		http.NotFound(w, r)
+		return
 	}
+	latest := m.s.Latest()
+	target := latest.Href(page)
+	if r.URL.RawQuery != "" && !strings.Contains(target, "://") {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // sitemapXML lists the pages. Only the latest build at the root

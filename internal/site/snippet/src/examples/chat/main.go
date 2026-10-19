@@ -68,8 +68,8 @@ func (c *Chat) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(c.room.bus, c.onMessage)
 	c.Online.Track(ctx, c.room.presence, c.room.count)
 
-	// Registered, not performed: OnInit also runs on the plain GET and on every
-	// action, and only a real connection gets an OnConnect/OnDispose pair.
+	// Registered, not performed: OnInit runs on the plain GET as well as the
+	// connect, and only a real connection gets an OnConnect/OnDispose pair.
 	ctx.OnConnect(c.room.join) // tell everyone the head-count rose
 	ctx.OnDispose(c.room.part) // …and that it fell when this tab leaves
 	return nil
