@@ -374,7 +374,7 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	writeSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	headersSent = true
-	stream.signals(`{"` + tabSignal + `":"` + id + `"}`)
+	stream.signals(tabSignals(id))
 
 	// The connect response is flushed now. A Tick/Listen handler runs against
 	// this same unit Ctx for the life of the connection, so leaving sessW set

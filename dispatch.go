@@ -53,6 +53,10 @@ const (
 // (declareSignal panics).
 const tabSignal = "viatab"
 
+// tabSignals is the signal object that hands a page or stream its tab id. id
+// is base64url, so it needs no JSON or attribute escaping.
+func tabSignals(id string) string { return `{"` + tabSignal + `":"` + id + `"}` }
+
 // tabFormField carries the tab id for a native <form> submit, which ships
 // neither Datastar's signal store nor its headers. Subject to the same
 // per-mount ownership check as the signal (see dispatch) — only where the id

@@ -14,10 +14,15 @@ import (
 	"time"
 )
 
+const (
+	patchElementsEvent = "event: datastar-patch-elements\n"
+	patchSignalsEvent  = "event: datastar-patch-signals\n"
+)
+
 // writePatchFrame writes one Datastar element-patch SSE event; the client
 // morphs the fragment into the live DOM by id (default mode).
 func writePatchFrame(w io.Writer, fragment []byte) {
-	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, patchElementsEvent)
 	writeElementLines(w, fragment)
 	_, _ = io.WriteString(w, "\n")
 }
@@ -28,7 +33,7 @@ func writePatchFrame(w io.Writer, fragment []byte) {
 // is how a live child's push still lands on a container the root-walk render
 // marked data-ignore-morph.
 func writeInnerPatchFrame(w io.Writer, id string, fragment []byte) {
-	_, _ = io.WriteString(w, "event: datastar-patch-elements\n")
+	_, _ = io.WriteString(w, patchElementsEvent)
 	_, _ = io.WriteString(w, "data: selector #"+id+"\n")
 	_, _ = io.WriteString(w, "data: mode inner\n")
 	writeElementLines(w, fragment)
@@ -399,7 +404,7 @@ func panicSite() string {
 // to hand the client its tab id, whose name must stay underscore-free (see
 // tabSignal).
 func writeSignalsFrame(w io.Writer, signalsJSON string) {
-	_, _ = io.WriteString(w, "event: datastar-patch-signals\ndata: signals ")
+	_, _ = io.WriteString(w, patchSignalsEvent+"data: signals ")
 	_, _ = io.WriteString(w, signalsJSON)
 	_, _ = io.WriteString(w, "\n\n")
 }

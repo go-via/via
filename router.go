@@ -639,9 +639,8 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	// sent (see tabSignal for why the name must stay underscore-free). On a
 	// plain page it stays "" and dispatch falls through to the plain path. A
 	// live page carries its id from the first byte, so a click before the
-	// stream connects already names the tab it will reach. tab is base64url:
-	// nothing in it needs JSON or attribute escaping.
-	bodyOpen := `<body data-signals='{"` + tabSignal + `":"` + tab + `"}'`
+	// stream connects already names the tab it will reach.
+	bodyOpen := `<body data-signals='` + tabSignals(tab) + `'`
 	if hasLive {
 		// data-signals first: Datastar applies an element's attributes in
 		// document order, and a data-init ahead of it would post the connect
