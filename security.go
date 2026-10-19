@@ -20,6 +20,13 @@ const maxActionBody = 1 << 20
 // maxActionBody of it is kept in RAM regardless. The default for WithMaxUpload.
 const maxUploadBytes = 8 << 20
 
+// setContentType is the only way via types a response: a type via sets is
+// never left for the browser to second-guess.
+func setContentType(hdr http.Header, contentType string) {
+	hdr.Set("Content-Type", contentType)
+	hdr.Set("X-Content-Type-Options", "nosniff")
+}
+
 // originAllowed is the "origin floor": the check that a state-changing request
 // comes from a host the app trusts, read off Origin/Sec-Fetch-Site. Every
 // action and the SSE connect pass through it. By default every origin is

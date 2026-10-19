@@ -278,25 +278,21 @@ func (r *Router) writeErrorPage(w http.ResponseWriter, req *http.Request, pe Pag
 	body, ok := r.renderErrorPage(req, pe)
 	hdr := w.Header()
 	hdr.Del("Content-Length")
-	hdr.Set("X-Content-Type-Options", "nosniff")
 	if !ok {
-		hdr.Set("Content-Type", "text/plain; charset=utf-8")
+		setContentType(hdr, "text/plain; charset=utf-8")
 		w.WriteHeader(pe.Status)
 		w.Write([]byte(pe.Detail + "\n"))
 		return
 	}
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
+	setContentType(hdr, "text/html; charset=utf-8")
 	hdr.Set("Content-Security-Policy", r.errCSP)
-	var head strings.Builder
-	head.WriteString(`<!doctype html>` + r.cfg.head.htmlOpen("", r.cfg.head.HTMLAttrs) + `<head><meta charset="utf-8">`)
-	head.WriteString(`<title>` + html.EscapeString(strconv.Itoa(pe.Status)+" "+http.StatusText(pe.Status)) + `</title>`)
-	head.WriteString(r.cfg.head.Raw)
-	r.cfg.head.Assets.render(&head)
-	head.WriteString(`</head><body` + attrString(r.cfg.head.BodyAttrs) + `>`)
 	w.WriteHeader(pe.Status)
-	w.Write([]byte(head.String()))
-	w.Write(body)
-	w.Write([]byte(`</body></html>`))
+	r.cfg.head.writeDocument(w, document{
+		htmlAttrs: r.cfg.head.HTMLAttrs,
+		pageHead:  `<title>` + html.EscapeString(strconv.Itoa(pe.Status)+" "+http.StatusText(pe.Status)) + `</title>`,
+		bodyOpen:  `<body` + attrString(r.cfg.head.BodyAttrs) + `>`,
+		body:      body,
+	})
 }
 
 // renderErrorPage runs the app's handler behind a recover: an error page that

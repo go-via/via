@@ -2,6 +2,7 @@ package via
 
 import (
 	"html"
+	"io"
 	"maps"
 	"net/url"
 	"slices"
@@ -469,6 +470,29 @@ func (a Assets) render(b *strings.Builder) {
 		}
 		b.WriteString("<script" + attrs + ">" + s.Inline + "</script>")
 	}
+}
+
+// document is an HTML response via renders whole: a page or an error page.
+// Head contributes the parts every document shares; the fields carry the rest.
+type document struct {
+	nonce     string
+	htmlAttrs []Attr
+	pageHead  string // ahead of the router-wide head: title and meta tags
+	tail      string // after the router-wide head: page assets and via's scripts
+	bodyOpen  string // the <body> tag
+	body      []byte
+}
+
+func (hd Head) writeDocument(w io.Writer, d document) {
+	var b strings.Builder
+	b.WriteString(`<!doctype html>` + hd.htmlOpen(d.nonce, d.htmlAttrs) + `<head><meta charset="utf-8">`)
+	b.WriteString(d.pageHead)
+	b.WriteString(hd.Raw)
+	hd.Assets.render(&b)
+	b.WriteString(d.tail + `</head>` + d.bodyOpen)
+	w.Write([]byte(b.String()))
+	w.Write(d.body)
+	w.Write([]byte(`</body></html>`))
 }
 
 // htmlOpen renders <html>, carrying nonce for Datastar to compile expressions

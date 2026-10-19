@@ -1246,8 +1246,7 @@ func writeRedirectScript(w http.ResponseWriter, target string) {
 		return
 	}
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/javascript; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/javascript; charset=utf-8")
 	hdr.Set("Datastar-Script-Attributes", string(attrs))
 	w.Write([]byte(redirectInit))
 }
@@ -1300,8 +1299,7 @@ func writePatch(w http.ResponseWriter, b []byte) {
 		return
 	}
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/html; charset=utf-8")
 	hdr.Set("Content-Security-Policy", cspHeader)
 	w.Write(b)
 }

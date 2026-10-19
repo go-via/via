@@ -325,8 +325,7 @@ func (r *Router) build() {
 
 func (r *Router) serveDatastar(w http.ResponseWriter, req *http.Request) {
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/javascript")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/javascript")
 	body, etag := datastarJS, datastarHash
 	if e, ok := negotiate(req.Header.Get("Accept-Encoding"), r.cfg.pageEnc); ok {
 		body, etag = r.datastarEncoded(e)
@@ -621,8 +620,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 			" depends on request data; assets must be a constant of the type")
 	}
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/html; charset=utf-8")
-	hdr.Set("X-Content-Type-Options", "nosniff")
+	setContentType(hdr, "text/html; charset=utf-8")
 	// Fresh per document, never per mount: a nonce shared across responses is
 	// a token an injection could learn from one page and replay in the next.
 	nonce := randomToken()
@@ -643,7 +641,7 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	// live page carries its id from the first byte, so a click before the
 	// stream connects already names the tab it will reach. tab is base64url:
 	// nothing in it needs JSON or attribute escaping.
-	bodyOpen := `</head><body data-signals='{"` + tabSignal + `":"` + tab + `"}'`
+	bodyOpen := `<body data-signals='{"` + tabSignal + `":"` + tab + `"}'`
 	if hasLive {
 		// data-signals first: Datastar applies an element's attributes in
 		// document order, and a data-init ahead of it would post the connect
@@ -654,19 +652,20 @@ func writeHTMLPage(w http.ResponseWriter, m *mount, body []byte, base string, ta
 	}
 	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))
 	bodyOpen += attrString(mergeAttrs(m.cfg.head.BodyAttrs, pageAttrs(m.cfg.log, root, "BodyAttrs", meta.BodyAttrs))) + ">"
-	var head strings.Builder
-	head.WriteString(`<!doctype html>` + m.cfg.head.htmlOpen(nonce, htmlAttrs) + `<head><meta charset="utf-8">`)
-	meta.render(&head)
-	head.WriteString(m.cfg.head.Raw)
-	m.cfg.head.Assets.render(&head)
-	meta.Assets.render(&head)
-	head.WriteString(`<script type="module" src="` + datastarRoute + `?v=` + datastarHash + `"></script>` +
+	var pageHead, tail strings.Builder
+	meta.render(&pageHead)
+	meta.Assets.render(&tail)
+	tail.WriteString(`<script type="module" src="` + datastarRoute + `?v=` + datastarHash + `"></script>` +
 		eventsScript() +
-		reconnectScript(hasLive) +
-		bodyOpen)
-	w.Write([]byte(head.String()))
-	w.Write(body)
-	w.Write([]byte(`</body></html>`))
+		reconnectScript(hasLive))
+	m.cfg.head.writeDocument(w, document{
+		nonce:     nonce,
+		htmlAttrs: htmlAttrs,
+		pageHead:  pageHead.String(),
+		tail:      tail.String(),
+		bodyOpen:  bodyOpen,
+		body:      body,
+	})
 }
 
 // pageAttrs rechecks a page's attributes per render, because Mount saw only

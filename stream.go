@@ -409,11 +409,10 @@ func writeSignalsFrame(w io.Writer, signalsJSON string) {
 // is replaced.
 func writeSSEHeaders(w http.ResponseWriter) {
 	hdr := w.Header()
-	hdr.Set("Content-Type", "text/event-stream")
+	setContentType(hdr, "text/event-stream")
 	if hdr.Get("Cache-Control") != noStoreValue {
 		hdr.Set("Cache-Control", "no-cache")
 	}
-	hdr.Set("X-Content-Type-Options", "nosniff")
 }
 
 // canFlush reports whether w can stream, looking through wrappers the way
