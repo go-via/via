@@ -552,14 +552,6 @@ type ptrViewer[T any] = interface {
 	viewer
 }
 
-// Ctx is the per-request binder: it keys signal slots by field offset and
-// actions by handler identity during a render pass, hydrates signals from the
-// request, and records per-slot initial values.
-//
-// Not safe for concurrent use. Call it only from the via callback it was
-// handed to; to reach a live unit from a goroutine of your own, publish to a
-// [topic.Topic] the unit Listens to. See the package doc for the goroutine
-// model.
 // reqScope is the request a Ctx answers. Every Ctx derived for the same
 // request copies it whole, so a field added here reaches each derived Ctx.
 type reqScope struct {
@@ -569,6 +561,14 @@ type reqScope struct {
 	sessW    http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
 }
 
+// Ctx is the per-request binder: it keys signal slots by field offset and
+// actions by handler identity during a render pass, hydrates signals from the
+// request, and records per-slot initial values.
+//
+// Not safe for concurrent use. Call it only from the via callback it was
+// handed to; to reach a live unit from a goroutine of your own, publish to a
+// [topic.Topic] the unit Listens to. See the package doc for the goroutine
+// model.
 type Ctx struct {
 	unitPass
 	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
