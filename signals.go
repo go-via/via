@@ -14,27 +14,9 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
-// writeSignalsAttr writes the Datastar signal declaration as a single-quoted
-// attribute: data-signals='{...}'.
-//
-// json.Marshal already unicode-escapes <, > and & inside string values, so the
-// single quote is the only HTML-significant character left raw — and left
-// verbatim a signal carrying an apostrophe would close this attribute early and
-// let an attacker graft a data-on-* expression onto <div id="root">. Double
-// quotes stay intact: legal inside a single-quoted attribute, and the browser
-// hands Datastar the same decoded value either way.
-//
-// Datastar compiles the attribute as an expression, not JSON.parse, and
-// rewrites @name( into an action call. v1.0.4 skips string literals, but every @
-// still goes out as \u0040 so a compiler that did not would find none; JSON
-// puts @ only inside strings, where it reads back as @.
-//
-// only nil declares every slot (the GET first paint). Non-nil declares only the
-// slots named, so a plain action patch ships what it wrote without clobbering a
-// value the user is mid-edit; if that leaves nothing, no attribute is written.
 // encodeSlots writes want as one JSON object, n slots in it. Marshalled one
 // slot at a time, not as one map: a single unmarshalable value used to fail the
-// whole object and emit data-signals=”, wiping the client store for every
+// whole object and emit data-signals='', wiping the client store for every
 // signal on the page with nothing in the log. Drop the offender, keep the rest
 // — the same treatment an unmarshalable on.Bind arg gets.
 func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw []byte, n int) {
@@ -61,6 +43,24 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 	return obj.Bytes(), n
 }
 
+// writeSignalsAttr writes the Datastar signal declaration as a single-quoted
+// attribute: data-signals='{...}'.
+//
+// json.Marshal already unicode-escapes <, > and & inside string values, so the
+// single quote is the only HTML-significant character left raw — and left
+// verbatim a signal carrying an apostrophe would close this attribute early and
+// let an attacker graft a data-on-* expression onto <div id="root">. Double
+// quotes stay intact: legal inside a single-quoted attribute, and the browser
+// hands Datastar the same decoded value either way.
+//
+// Datastar compiles the attribute as an expression, not JSON.parse, and
+// rewrites @name( into an action call. v1.0.4 skips string literals, but every @
+// still goes out as \u0040 so a compiler that did not would find none; JSON
+// puts @ only inside strings, where it reads back as @.
+//
+// only nil declares every slot (the GET first paint). Non-nil declares only the
+// slots named, so a plain action patch ships what it wrote without clobbering a
+// value the user is mid-edit; if that leaves nothing, no attribute is written.
 func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial, only map[string]any, seen map[string]bool) {
 	want := make([]string, 0, len(order))
 	for _, slot := range order {

@@ -36,9 +36,10 @@ type Attr interface {
 	isAttr()
 }
 
-// Binder bridges h and on into the via package without an import cycle. A
-// rendered signal declares its slot and registers its hydrator through it, and
-// package on binds its actions through it. via names the slots itself (a
+// Binder is the via Ctx a render pass runs under. render sits below via, so a
+// Renderer can hold the Ctx only as this interface. A rendered signal declares
+// its slot and registers its hydrator through it, and package on binds its
+// actions through it. via names the slots itself (a
 // signal's field path, an action's handler-name hash), so the Binder allocates
 // nothing. The via package supplies the implementation; h and on depend only
 // on this interface.
