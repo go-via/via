@@ -369,7 +369,7 @@ func (c *tabStream) warnPinned(once *atomic.Bool) {
 type registry struct {
 	key       [32]byte // MACs the tab ids this process issues; see newTabID
 	maxParked int
-	parkWarn  atomic.Int64 // unix nanos of the last at-capacity log (see mount.warnParkedFull)
+	parkWarn  perMinute // see mount.warnParkedFull
 	mu        sync.Mutex
 	m         map[string]*tabSlot
 	parked    int

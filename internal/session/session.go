@@ -28,6 +28,7 @@ const (
 	// Expired is a well-formed blob past its own expiry. A store that ignores
 	// the ttl it was handed must not resurrect it.
 	Expired
+	// Live is a well-formed, unexpired blob.
 	Live
 )
 
@@ -61,6 +62,8 @@ func Tombstone(sid string) []byte {
 // Signer signs session ids into cookie values, so a tampered id is rejected.
 type Signer struct{ key []byte }
 
+// NewSigner signs with key, which the caller has already checked is long
+// enough for HMAC-SHA256.
 func NewSigner(key []byte) Signer { return Signer{key: key} }
 
 // Value is the cookie value that carries id.

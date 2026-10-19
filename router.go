@@ -299,7 +299,7 @@ type routerShared struct {
 	policy    *routerPolicy
 	reg       *registry    // tab id → stream goroutine, app-wide
 	liveCount atomic.Int64 // concurrent SSE streams across the whole router, capped at cfg.maxSSEConn
-	capWarn   atomic.Int64 // see mount.warnAtCapacity
+	capWarn   perMinute    // see mount.warnAtCapacity
 	// ctx bounds every stream this router opens; Close cancels it and waits on
 	// live, so a stream's own goroutine, its tickers and its disposers are all
 	// finished by the time Close returns.

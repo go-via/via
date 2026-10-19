@@ -26,14 +26,14 @@ import (
 // element-patch.
 type actionMode int
 
-func isDatastarRequest(req *http.Request) bool {
-	return req.Header.Get("Datastar-Request") == "true"
-}
-
 const (
 	modeDatastar actionMode = iota
 	modeNative
 )
+
+func isDatastarRequest(req *http.Request) bool {
+	return req.Header.Get("Datastar-Request") == "true"
+}
 
 // tabSignal is the wire name of the tab id, which an action on a live unit
 // must carry to reach its instance; a plain action never checks it, so only
@@ -88,6 +88,15 @@ func (m *mount) warnNoChange(act, name string, v any) {
 		"act", act, "name", name)
 }
 
+// perMinute admits one log line a minute across goroutines.
+type perMinute struct{ last atomic.Int64 } // unix nanos of the last line admitted
+
+func (p *perMinute) allow() bool {
+	now := time.Now().UnixNano()
+	last := p.last.Load()
+	return now-last >= int64(time.Minute) && p.last.CompareAndSwap(last, now)
+}
+
 // warnAtCapacity breaks the silence of a router-wide refusal. The cap is
 // router-wide with no per-IP share, so one client can fill it and lock every
 // other tab out; a per-IP cap is a 1.0 change, but the operator at least has to
@@ -97,9 +106,7 @@ func (m *mount) warnNoChange(act, name string, v any) {
 // process: unlike a wiring mistake, being at capacity comes and goes, and a
 // refusal storm would otherwise be the loudest thing in the log.
 func (m *mount) warnAtCapacity(open int64) {
-	now := time.Now().UnixNano()
-	last := m.capWarn.Load()
-	if now-last < int64(time.Minute) || !m.capWarn.CompareAndSwap(last, now) {
+	if !m.capWarn.allow() {
 		return
 	}
 	m.cfg.log.Warn("via: refusing an SSE connect with 503: the router is at its live-stream cap. "+
@@ -111,9 +118,7 @@ func (m *mount) warnAtCapacity(open int64) {
 // warnParkedFull is warnAtCapacity for parked actions: the cap is router-wide
 // and a single client can fill it, so the operator is told once a minute.
 func (m *mount) warnParkedFull() {
-	now := time.Now().UnixNano()
-	last := m.reg.parkWarn.Load()
-	if now-last < int64(time.Minute) || !m.reg.parkWarn.CompareAndSwap(last, now) {
+	if !m.reg.parkWarn.allow() {
 		return
 	}
 	m.cfg.log.Warn("via: refusing an action with 503: the router already holds its cap of actions parked "+
