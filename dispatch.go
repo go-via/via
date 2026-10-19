@@ -130,19 +130,41 @@ func (m *mount) warnParkedFull() {
 // happens on the connection's own goroutine, so every outcome has to be
 // carried back across the channel rather than answered where it occurred.
 type actionResult struct {
-	redirect  redirectTo
-	panicked  error       // the action panicked — 500, and the error page reads it
-	badArg    error       // ?a= failed to decode (badActionArg) — 400, not 500
-	pushWork  *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
-	session   *Session    // live only: the action's handle, so a native answer's OnInit sees what the action wrote
-	gone      string      // the unit/action lookup came up invalid; the reason is the response body
-	reloadErr error       // live only: the post-action OnReload failed (see reloadUnit)
-	forbidden string      // live only: the session-bound check rejected the request
-	paramMiss bool        // a Param segment did not decode — 404
-	// unavailable is a 503: the request was well-formed and the tab is live,
-	// but a dependency (the session store) could not answer. Distinct from
-	// forbidden so a store blip stops being reported as a security rejection.
-	unavailable string
+	redirect redirectTo
+	fail     *actionFail // nil when the action ran; otherwise the whole answer
+	pushWork *unitPusher // live only: the dirty-signals + element push, run by tabStream.run right after acking
+	session  *Session    // live only: the action's handle, so a native answer's OnInit sees what the action wrote
+}
+
+// actionFail is an action that did not run to a normal answer. It carries its
+// own status, so both transports answer a failure the same way.
+type actionFail struct {
+	status int
+	body   string
+	note   error // what the error page reads, when it gets a reason
+	// hookErr is a failed post-action OnReload, answered like any hook error
+	// (see answerHookError) rather than with status and body.
+	hookErr error
+}
+
+func (f *actionFail) answer(log *slog.Logger, w http.ResponseWriter) {
+	if f.hookErr != nil {
+		answerHookError(log, w, f.hookErr, "via: OnReload after an action failed")
+		return
+	}
+	if f.note != nil {
+		noteErr(w, f.note)
+	}
+	http.Error(w, f.body, f.status)
+}
+
+// failGone is a unit or action lookup that came up invalid; body says why.
+func failGone(body string) *actionFail { return &actionFail{status: http.StatusGone, body: body} }
+
+// failPanic is an action that panicked: a 500 whose error the error page reads.
+func failPanic(rec any) *actionFail {
+	err := fmt.Errorf("via: action panic: %v", rec)
+	return &actionFail{status: http.StatusInternalServerError, body: "action failed", note: err}
 }
 
 // mount bundles a page's per-request wiring, shared by its GET, action, and
@@ -433,26 +455,8 @@ func (m *mount) dispatchOverStream(w http.ResponseWriter, req *http.Request, mod
 		http.Error(w, "request abandoned", http.StatusGone)
 		return
 	}
-	if res.unavailable != "" {
-		// A store that could not answer is the only producer of unavailable.
-		noteErr(w, ErrStoreDown)
-		http.Error(w, res.unavailable, http.StatusServiceUnavailable)
-		return
-	}
-	if res.forbidden != "" {
-		http.Error(w, res.forbidden, http.StatusForbidden)
-		return
-	}
-	if res.reloadErr != nil {
-		answerHookError(m.cfg.log, w, res.reloadErr, "via: OnReload after an action failed")
-		return
-	}
-	if answerSentinel(w, res) {
-		return
-	}
-	if res.panicked != nil {
-		noteErr(w, res.panicked)
-		http.Error(w, "action failed", http.StatusInternalServerError)
+	if res.fail != nil {
+		res.fail.answer(m.cfg.log, w)
 		return
 	}
 	if m.answerRedirect(w, req, mode, res.redirect) {
@@ -500,7 +504,7 @@ func (a *liveAction) recoverPanic(res *actionResult) {
 	if rec := recover(); rec != nil {
 		a.lc.mount.cfg.log.Error("via: live action panic",
 			"tab", a.lc.id, "unit", a.lc.unitType(), "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{panicked: fmt.Errorf("via: action panic: %v", rec)}
+		*res = actionResult{fail: failPanic(rec)}
 	}
 }
 
@@ -508,7 +512,7 @@ func (a *liveAction) apply() actionResult {
 	// The client hung up between the handoff and now: applying the action
 	// would double-apply on its retry, and nobody reads this answer.
 	if a.req.Context().Err() != nil {
-		return actionResult{gone: "request abandoned"}
+		return actionResult{fail: failGone("request abandoned")}
 	}
 	// Checked here, not before the action was posted: a cookieless
 	// dispatch that passed a pre-queue check while the connection was
@@ -520,7 +524,9 @@ func (a *liveAction) apply() actionResult {
 	// prior session") rather than an outage.
 	sessID, sess, err := a.m.sessions.resolve(a.req)
 	if err != nil {
-		return actionResult{unavailable: "session store unavailable"}
+		// 503, not 403: the request is well-formed and the tab is live, so a
+		// store blip must not read as a security rejection.
+		return actionResult{fail: &actionFail{status: http.StatusServiceUnavailable, body: "session store unavailable", note: ErrStoreDown}}
 	}
 	if bound := a.lc.boundSession(); bound != "" {
 		// A dispatch must carry the same session, compared by sid (a Rotate
@@ -528,7 +534,7 @@ func (a *liveAction) apply() actionResult {
 		// bearer credential good from any request, session or none, once
 		// the origin floor is open.
 		if sess == nil || sess.sid != bound {
-			return actionResult{forbidden: "session mismatch"}
+			return actionResult{fail: &actionFail{status: http.StatusForbidden, body: "session mismatch"}}
 		}
 	}
 	// Also looked up here, not before the action was posted: a concurrent
@@ -538,11 +544,11 @@ func (a *liveAction) apply() actionResult {
 	// to a Ctx nothing downstream reads, silently dropping the patch.
 	u := a.lc.unit(a.child)
 	if u == nil || u.unitV.ident != a.req.URL.Query().Get(unitIdentParam) {
-		return actionResult{gone: "no such child"}
+		return actionResult{fail: failGone("no such child")}
 	}
 	act, ok := u.actions[a.act]
 	if !ok {
-		return actionResult{gone: a.m.unknownAction(u, a.act)}
+		return actionResult{fail: failGone(a.m.unknownAction(u, a.act))}
 	}
 	return liveRunAction(a.w, a.req, a.m.sessions, a.m.policy, sessID, sess, a.lc, u, a.in, act)
 }
@@ -616,7 +622,7 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 	if rc.redirect.url == "" {
 		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{reloadErr: err, pushWork: unit.pusher}
+			return actionResult{fail: &actionFail{hookErr: err}, pushWork: unit.pusher}
 		}
 		rc.redirect = rl.redirect
 	}
@@ -649,54 +655,38 @@ func liveRunAction(w http.ResponseWriter, req *http.Request, sessions *sessionMa
 // as a handler fault.
 func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
 	if rec := recover(); rec != nil {
-		if r, ok := sentinelResult(c.mount.cfg.log, rec); ok {
+		if f := sentinelFail(c.mount.cfg.log, rec); f != nil {
+			*res = actionResult{fail: f}
 			// Param panics from inside the handler, which may already have
 			// Set state; as after a handler panic, the push flushes it.
-			if r.paramMiss {
-				r.pushWork = unit.pusher
+			if _, miss := rec.(paramMiss); miss {
+				res.pushWork = unit.pusher
 			}
-			*res = r
 			return
 		}
 		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
 			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{panicked: fmt.Errorf("via: action panic: %v", rec), pushWork: unit.pusher}
+		*res = actionResult{fail: failPanic(rec), pushWork: unit.pusher}
 	}
 }
 
-// sentinelResult sorts a recovered panic that is one of via's request
-// sentinels into the actionResult field that answers it. ok is false for
-// anything else, which is a handler fault. Both transports answer through it,
-// so a sentinel means the same status on a plain request and over a stream.
-func sentinelResult(log *slog.Logger, rec any) (res actionResult, ok bool) {
+// sentinelFail turns a recovered panic that is one of via's request sentinels
+// into its answer, or nil for anything else, which is a handler fault. Both
+// transports answer through it, so a sentinel means the same status on a plain
+// request and over a stream.
+func sentinelFail(log *slog.Logger, rec any) *actionFail {
 	switch v := rec.(type) {
 	case badActionArg:
-		return actionResult{badArg: v.err}, true
+		// 400, not 500: the client sent an arg that does not decode.
+		return &actionFail{status: http.StatusBadRequest, body: "bad action arg: " + v.err.Error()}
 	case unrenderedArg:
-		return actionResult{gone: v.body(log)}, true
+		return failGone(v.body(log))
 	case paramMiss:
 		// The URL names something that does not exist: a 404, not a server
 		// fault worth a stack dump.
-		return actionResult{paramMiss: true}, true
+		return &actionFail{status: http.StatusNotFound, body: "not found", note: ErrNotFound}
 	}
-	return actionResult{}, false
-}
-
-// answerSentinel writes the answer for res's sentinel field and reports
-// whether it had one.
-func answerSentinel(w http.ResponseWriter, res actionResult) bool {
-	switch {
-	case res.gone != "":
-		http.Error(w, res.gone, http.StatusGone)
-	case res.badArg != nil:
-		http.Error(w, "bad action arg: "+res.badArg.Error(), http.StatusBadRequest)
-	case res.paramMiss:
-		noteErr(w, ErrNotFound)
-		http.Error(w, "not found", http.StatusNotFound)
-	default:
-		return false
-	}
-	return true
+	return nil
 }
 
 // unknownAction is the 410 body for an id this render does not bind — a branch

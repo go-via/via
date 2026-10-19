@@ -208,8 +208,8 @@ func recoverToHTTP(log *slog.Logger, w http.ResponseWriter, req *http.Request, r
 		answerInitFailure(log, w, req, ci, sse)
 		return
 	}
-	if res, ok := sentinelResult(log, rec); ok {
-		answerSentinel(w, res)
+	if f := sentinelFail(log, rec); f != nil {
+		f.answer(log, w)
 		return
 	}
 	attrs := []any{"err", rec, "stack", string(debug.Stack())}
