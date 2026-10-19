@@ -4,7 +4,17 @@ updates:
     directories: ["/", "/vtbrowser", "/internal/site"]
     schedule:
       interval: weekly
+    # One PR per dependency across all three modules: the nested modules
+    # replace the root, so a root-only bump breaks their go.mod.
+    groups:
+      gomod:
+        patterns: ["*"]
+        group-by: dependency-name
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # CodeQL refuses to run with init, autobuild and analyze on mixed versions.
+    groups:
+      codeql:
+        patterns: ["github/codeql-action*"]
