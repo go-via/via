@@ -139,7 +139,7 @@ It is the release gate: green means releasable. It runs every check on all
 three modules, including the browser tier in `vtbrowser`, which needs
 Chromium or Chrome on `PATH` or in `VIA_CHROME`. It reports, never rewrites.
 A PR also runs `./mutation.sh origin/main`, which mutates the changed lines
-and fails when the tests kill too few of the mutants.
+in the root module and fails when the tests kill too few of the mutants.
 
 [`CONVENTIONS.md`](CONVENTIONS.md) has the code and test conventions,
 including the bar for a new duck-typed method.

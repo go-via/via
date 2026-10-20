@@ -25,10 +25,7 @@ jobs:
         with:
           go-version: stable
           cache: true
-          cache-dependency-path: |
-            go.sum
-            internal/site/go.sum
-            vtbrowser/go.sum
+          cache-dependency-path: go.sum
 
       - name: Mutate changed lines
         run: bash ./mutation.sh "origin/${{ github.base_ref }}"
