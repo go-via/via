@@ -168,3 +168,61 @@ func TestIndex_snippetCutsOnWordBoundaries(t *testing.T) {
 		assert.Contains(t, whole, w, "snippet word %q is cut", w)
 	}
 }
+
+func snippetOf(t *testing.T, text, q string) string {
+	t.Helper()
+	idx := &search.Index{}
+	idx.Add(search.Doc{Title: "Deploy", Href: "/deploy", Sections: []search.Section{{Text: text}}})
+	hits := idx.Find(q, 8)
+	require.Len(t, hits, 1)
+	return hits[0].Snippet
+}
+
+func TestIndex_snippetMarksOnlyTheEndsItCut(t *testing.T) {
+	t.Parallel()
+
+	filler := strings.Repeat("alpha bravo charlie delta ", 12)
+	tests := []struct {
+		name, text        string
+		leading, trailing bool
+	}{
+		{"match at the start", "the readiness probe " + filler, false, true},
+		{"match at the end", filler + "the readiness probe", true, false},
+		{"match in the middle", filler + "the readiness probe " + filler, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := snippetOf(t, tt.text, "readiness")
+			assert.Contains(t, s, "readiness")
+			assert.Equal(t, tt.leading, strings.HasPrefix(s, "…"), s)
+			assert.Equal(t, tt.trailing, strings.HasSuffix(s, "…"), s)
+		})
+	}
+}
+
+func TestIndex_snippetOpensAtTheEarliestQueryWord(t *testing.T) {
+	t.Parallel()
+
+	filler := strings.Repeat("alpha bravo charlie delta ", 12)
+	text := "readiness " + filler + "probe " + filler
+	for _, q := range []string{"readiness probe", "probe readiness"} {
+		t.Run(q, func(t *testing.T) {
+			t.Parallel()
+			s := snippetOf(t, text, q)
+			assert.True(t, strings.HasPrefix(s, "readiness"), s)
+		})
+	}
+}
+
+func TestIndex_snippetKeepsTheWordItsStartFallsIn(t *testing.T) {
+	t.Parallel()
+
+	// The window opens about a third of a snippet before the match, which
+	// lands inside long; a start moved forward instead would drop it.
+	long := strings.Repeat("x", 29)
+	text := strings.Repeat("ab ", 40) + long + " cd ef gh ij kl mn op qr readiness " + strings.Repeat("ab ", 50)
+
+	s := snippetOf(t, text, "readiness")
+	assert.True(t, strings.HasPrefix(s, "…"+long+" "), s)
+}
