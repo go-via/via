@@ -200,6 +200,7 @@ func TestErrorPage_rendersOnNativeFormFailure(t *testing.T) {
 }
 
 func TestErrorPage_fallsBackWhenHandlerPanics(t *testing.T) {
+	// sequential: swaps the global log writer
 	r := via.NewRouter(via.WithErrorPage(func(*via.Ctx, via.PageError) h.H { panic("handler boom") }))
 	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
@@ -217,6 +218,7 @@ func TestErrorPage_fallsBackWhenHandlerPanics(t *testing.T) {
 }
 
 func TestErrorPage_fallsBackWhenHandlerReturnsNil(t *testing.T) {
+	// sequential: swaps the global log writer
 	r := via.NewRouter(via.WithErrorPage(func(*via.Ctx, via.PageError) h.H { return nil }))
 	via.Mount(r, "/gone", errMissing{})
 	t.Cleanup(r.Close)
@@ -348,6 +350,7 @@ func TestErrorPage_paramReturnsZeroOnAnUndecodableSegment(t *testing.T) {
 }
 
 func TestErrorPage_sessionWriteNamesTheErrorPageAsTheCause(t *testing.T) {
+	// sequential: swaps the global log writer
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)

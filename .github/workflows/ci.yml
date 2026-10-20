@@ -34,56 +34,12 @@ jobs:
           # made govulncheck fail on already-patched stdlib vulns.
           go-version: stable
           cache: true
+          cache-dependency-path: |
+            go.sum
+            internal/site/go.sum
+            vtbrowser/go.sum
 
       - name: Run CI checks
-        # --no-browser because the tier has its own job below; hosted runners
-        # ship Chrome, so ci.sh would otherwise run it a second time uncached.
-        run: bash ./ci.sh --no-browser
-
-      - name: govulncheck
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-          govulncheck ./...
-          (cd vtbrowser && govulncheck -tags browser ./...)
-          (cd internal/site && govulncheck ./...)
-
-  browser-test:
-    name: Browser Tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: stable
-          cache: true
-          cache-dependency-path: vtbrowser/go.sum
-
-      - name: Install Chromium
-        # ubuntu-latest runners ship Google Chrome preinstalled; install
-        # Chromium only when no browser is present so the job stays fast
-        # on hosted runners but still works on bare self-hosted ones. The
-        # pick goes to VIA_CHROME so the tests run the binary checked here.
-        run: |
-          find_chrome() {
-            for c in chromium chromium-browser chrome google-chrome google-chrome-stable headless-shell; do
-              if command -v "$c" >/dev/null 2>&1; then
-                command -v "$c"
-                return 0
-              fi
-            done
-            return 1
-          }
-          if ! chrome=$(find_chrome); then
-            sudo apt-get update
-            sudo apt-get install -y chromium-browser
-            # Fail loudly here rather than letting the tier skip or flake later.
-            chrome=$(find_chrome) || { echo "no browser binary after install" >&2; exit 1; }
-          fi
-          echo "using $chrome"
-          echo "VIA_CHROME=$chrome" >> "$GITHUB_ENV"
-
-      - name: Run browser tier (vtbrowser, -tags browser)
-        run: cd vtbrowser && go test -race -tags browser ./...
+        # ubuntu-latest ships Chrome on PATH, which ci.sh's browser tier needs.
+        # Installing one is the runner's job, not this workflow's.
+        run: bash ./ci.sh

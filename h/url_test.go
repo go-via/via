@@ -155,6 +155,7 @@ func TestRawAttr_rejectsSrcdocOutright(t *testing.T) {
 }
 
 func TestURLPolicy_typedAttributesNeutralizeThroughASingleGate(t *testing.T) {
+	// sequential: swaps the global log writer
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })

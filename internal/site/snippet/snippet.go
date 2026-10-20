@@ -68,50 +68,71 @@ func embeddable(name string) bool {
 }
 
 func add(name, src string) {
-	f := &file{regions: map[string][2]int{}}
-	type open struct {
-		name  string
-		start int
-	}
-	var stack []open
+	p := parser{name: name, f: &file{regions: map[string][2]int{}}}
 	for _, line := range strings.Split(strings.TrimSuffix(src, "\n"), "\n") {
-		marker, ok := strings.CutPrefix(strings.TrimSpace(line), "// snippet:")
-		switch {
-		case !ok:
-			// A dropped marker between two blank lines would otherwise leave
-			// a double one, which gofmt never writes.
-			if strings.TrimSpace(line) == "" && len(f.lines) > 0 && strings.TrimSpace(f.lines[len(f.lines)-1]) == "" {
-				continue
-			}
-			f.lines = append(f.lines, line)
-		case strings.HasPrefix(marker, "start "):
-			region := strings.TrimSpace(strings.TrimPrefix(marker, "start "))
-			if region == "" {
-				panic("snippet: " + name + ": snippet:start with no region name")
-			}
-			_, dup := f.regions[region]
-			for _, o := range stack {
-				dup = dup || o.name == region
-			}
-			if dup {
-				panic("snippet: " + name + ": region " + `"` + region + `"` + " is declared twice")
-			}
-			stack = append(stack, open{region, len(f.lines)})
-		case marker == "end":
-			if len(stack) == 0 {
-				panic("snippet: " + name + ": snippet:end with no open region")
-			}
-			o := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			f.regions[o.name] = [2]int{o.start, len(f.lines)}
-		default:
-			panic("snippet: " + name + ": unknown marker " + `"// snippet:` + marker + `"`)
-		}
+		p.line(line)
 	}
-	if len(stack) > 0 {
-		panic("snippet: " + name + ": region " + `"` + stack[len(stack)-1].name + `"` + " is never closed")
+	if len(p.stack) > 0 {
+		panic("snippet: " + name + ": region " + `"` + p.stack[len(p.stack)-1].name + `"` + " is never closed")
 	}
-	files[name] = f
+	files[name] = p.f
+}
+
+type openRegion struct {
+	name  string
+	start int
+}
+
+type parser struct {
+	name  string
+	f     *file
+	stack []openRegion
+}
+
+func (p *parser) line(line string) {
+	marker, ok := strings.CutPrefix(strings.TrimSpace(line), "// snippet:")
+	switch {
+	case !ok:
+		p.text(line)
+	case strings.HasPrefix(marker, "start "):
+		p.start(strings.TrimSpace(strings.TrimPrefix(marker, "start ")))
+	case marker == "end":
+		p.end()
+	default:
+		panic("snippet: " + p.name + ": unknown marker " + `"// snippet:` + marker + `"`)
+	}
+}
+
+func (p *parser) text(line string) {
+	// A dropped marker between two blank lines would otherwise leave
+	// a double one, which gofmt never writes.
+	if strings.TrimSpace(line) == "" && len(p.f.lines) > 0 && strings.TrimSpace(p.f.lines[len(p.f.lines)-1]) == "" {
+		return
+	}
+	p.f.lines = append(p.f.lines, line)
+}
+
+func (p *parser) start(region string) {
+	if region == "" {
+		panic("snippet: " + p.name + ": snippet:start with no region name")
+	}
+	_, dup := p.f.regions[region]
+	for _, o := range p.stack {
+		dup = dup || o.name == region
+	}
+	if dup {
+		panic("snippet: " + p.name + ": region " + `"` + region + `"` + " is declared twice")
+	}
+	p.stack = append(p.stack, openRegion{region, len(p.f.lines)})
+}
+
+func (p *parser) end() {
+	if len(p.stack) == 0 {
+		panic("snippet: " + p.name + ": snippet:end with no open region")
+	}
+	o := p.stack[len(p.stack)-1]
+	p.stack = p.stack[:len(p.stack)-1]
+	p.f.regions[o.name] = [2]int{o.start, len(p.f.lines)}
 }
 
 // Option adjusts one rendered block.

@@ -1,39 +1,31 @@
 #!/usr/bin/env bash
-# CI gate for the repo, run from its root. It checks and never rewrites files:
-# gofmt over every module; vet, staticcheck, build and race tests for via and
-# the site module (internal/site); a complexity cap on via's non-test code; vet
-# and staticcheck for vtbrowser; then vtbrowser's real-browser tier.
+# CI and release gate for the repo, run from its root: green means releasable.
+# It checks and never rewrites files. Every module gets build, vet,
+# staticcheck, a complexity cap, a tidy check, govulncheck and race tests run
+# shuffled twice; vtbrowser's tests drive a real browser, which must be there.
+# The source lints, API pins and dead-code check live in sourcelint_test.go.
 set -euo pipefail
 
 GO="${GO:-go}"
 
-browser=auto   # auto | on | off
-chrome=""
-usage() {
-	cat <<'USAGE'
-usage: ci.sh [--browser|--no-browser] [--chrome=PATH]
+if [ $# -gt 0 ]; then
+	echo "usage: ci.sh (no flags; VIA_CHROME names the browser binary, else PATH is searched)" >&2
+	exit 2
+fi
 
-  --browser       require the real-browser tier; fail if no binary is found
-  --no-browser    skip the browser tier
-  --chrome=PATH   use PATH as the browser binary (implies --browser)
-
-With no flags the tier runs when VIA_CHROME or a Chromium/Chrome binary on PATH
-is present, and skips loudly when neither is.
-USAGE
-}
-while [ $# -gt 0 ]; do
-	case "$1" in
-	--browser) browser=on ;;
-	--no-browser) browser=off ;;
-	--chrome=*) chrome="${1#--chrome=}"; browser=on ;;
-	--chrome) shift; chrome="${1:-}"; browser=on ;;
-	-h | --help) usage; exit 0 ;;
-	*) echo "ci.sh: unknown argument: $1" >&2; usage >&2; exit 2 ;;
-	esac
-	shift
-done
-# vtbrowser reads VIA_CHROME before PATH; a --chrome flag wins over both.
-chrome="${chrome:-${VIA_CHROME:-}}"
+# Same names as vtbrowser's browserNames, so ci.sh finds the binary vtbrowser
+# would run. vtbrowser reads VIA_CHROME before PATH, and so does this.
+chrome="${VIA_CHROME:-}"
+if [ -z "$chrome" ]; then
+	for c in chromium chromium-browser chrome google-chrome google-chrome-stable headless-shell /bin/chromium; do
+		if command -v "$c" >/dev/null 2>&1; then chrome="$(command -v "$c")"; break; fi
+	done
+fi
+if [ -z "$chrome" ] || ! [ -x "$chrome" ]; then
+	echo "ci.sh: no browser binary: set VIA_CHROME to Chromium or Chrome, or put one on PATH" >&2
+	exit 1
+fi
+export VIA_CHROME="$chrome"
 
 # gofmt, not go fmt: go fmt rewrites in place and stops at nested modules.
 echo "== gofmt =="
@@ -44,60 +36,35 @@ if [ -n "$unformatted" ]; then
 	exit 1
 fi
 
-echo "== go vet =="
-$GO vet ./...
+# check runs every per-module gate in one module. A branchy func does several
+# jobs, so complexity is capped; length is not, since a long func with one
+# concern is fine. The complexity tools are declared in root's go.mod, so they
+# run from root on the module's files; go list keeps out tests, nested modules
+# and dot-dirs, which a bare path would walk into.
+check() {
+	local dir="$1" tags="$2"
+	echo "== $dir: build, vet, staticcheck =="
+	( cd "$dir" && $GO build $tags ./... && $GO vet $tags ./... && $GO tool staticcheck $tags ./... )
 
-echo "== staticcheck =="
-$GO tool staticcheck ./...
+	echo "== $dir: gocyclo (over 10), gocognit (over 15) =="
+	local srcs
+	srcs="$(cd "$dir" && $GO list $tags -f '{{range .GoFiles}}{{$.Dir}}/{{.}} {{end}}' ./...)"
+	$GO tool gocyclo -over 10 $srcs
+	$GO tool gocognit -over 15 $srcs
 
-# go list keeps out tests, nested modules and dot-dirs, which a bare path
-# argument would walk into.
-echo "== gocyclo (over 10), gocognit (over 15) =="
-srcs="$($GO list -f '{{range .GoFiles}}{{$.Dir}}/{{.}} {{end}}' ./...)"
-$GO tool gocyclo -over 10 $srcs
-$GO tool gocognit -over 15 $srcs
+	echo "== $dir: go mod tidy, govulncheck =="
+	( cd "$dir" && $GO mod tidy -diff && $GO run golang.org/x/vuln/cmd/govulncheck@v1.9.0 $tags ./... )
 
-echo "== go build =="
-$GO build ./...
+	# Shuffled and run twice, so a test that passes only in one order or only
+	# on a fresh process fails here.
+	echo "== $dir: go test -race -shuffle=on -count=2 =="
+	( cd "$dir" && $GO test -race -shuffle=on -count=2 $tags ./... )
+}
 
-echo "== go test -race =="
-$GO test -race ./...
-
+check . ""
 # Separate module: it pulls chroma, which via's own go.mod must not see.
-echo "== site module (internal/site) =="
-( cd internal/site && $GO build ./... && $GO vet ./... && $GO tool staticcheck ./... && $GO test -race ./... )
-
-# The tests need a browser; vet and staticcheck don't, so they run regardless.
-echo "== vtbrowser module (vet, staticcheck) =="
-( cd vtbrowser && $GO vet -tags browser ./... && $GO tool staticcheck -tags browser ./... )
-
-# Real-browser tier (separate module, chromedp). A missing binary skips loudly
-# rather than silently: vtbrowser's own t.Skip is invisible in CI output, so an
-# unrun tier reads as a pass.
-if [ -n "$chrome" ] && ! [ -x "$chrome" ]; then
-	echo "ci.sh: browser $chrome (--chrome or VIA_CHROME) is not an executable" >&2
-	exit 1
-fi
-if [ -z "$chrome" ] && [ "$browser" != "off" ]; then
-	# Same names as vtbrowser's browserNames, so ci.sh never skips a tier
-	# vtbrowser would have run.
-	for c in chromium chromium-browser chrome google-chrome google-chrome-stable headless-shell /bin/chromium; do
-		if command -v "$c" >/dev/null 2>&1; then chrome="$(command -v "$c")"; break; fi
-	done
-fi
-
-if [ "$browser" = "off" ]; then
-	echo "== browser tier SKIPPED (--no-browser) =="
-elif [ -n "$chrome" ]; then
-	echo "== browser tier (chromedp, -tags browser) =="
-	# vtbrowser reads VIA_CHROME itself, so the flag is plumbed in as env.
-	( cd vtbrowser && VIA_CHROME="$chrome" $GO test -race -tags browser ./... )
-elif [ "$browser" = "on" ]; then
-	echo "ci.sh: --browser given but no Chromium/Chrome binary found" >&2
-	exit 1
-else
-	echo "!! WARNING: browser tier SKIPPED — no Chromium/Chrome binary found." >&2
-	echo "!! Pass --chrome=/path/to/chromium, or --no-browser to silence this." >&2
-fi
+check internal/site ""
+# Separate module: chromedp. Its tests need the browser tag.
+check vtbrowser -tags=browser
 
 echo "OK"

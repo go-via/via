@@ -192,7 +192,8 @@ the store holds the value, the topic announces each change, and the tracked
 
 `StateSess[T]` is a topic per user, keyed by `ctx.Session().Ensure()` — the
 stable identity behind the cookie, minted if the visitor has none yet, where
-`ID()` would be `""` and put every first visit on one topic — and `State.Track` in `OnInit` (the method, not the
+`ID()` would be `""` and put every first visit on one topic — and `State.Track`
+in `OnInit` (the method, not the
 literal: the topic depends on the request). Data that only has to be read, not
 pushed, still belongs in the typed session.
 
@@ -292,7 +293,8 @@ child's warning waits for its first render), or nothing.
   `.Rotate()`. Caught by: compiler.
 - one session value per type → one value per session: a second `Put` replaces
   the first, so put one struct. Caught by: silent.
-- `StateSess[T]` → a topic per `ctx.Session().Ensure()`, followed with `State.Track`
+- `StateSess[T]` → a topic per `ctx.Session().Ensure()`, followed with
+  `State.Track`
   in `OnInit`. Caught by: compiler.
 - `StateApp[T]` → your own store, injected; a `topic.Topic[T]` and
   `via.StateTrack` to push its changes. Caught by: compiler.
@@ -420,7 +422,8 @@ func (p *Profile) OnInit(ctx *via.Ctx) error {
 already-open stream, so it does not see a session revoked after connect. The
 stream checks its session on every keepalive instead: once the session is
 rotated, deleted or expired, the stream ends within one beat and the tab's
-reload runs `OnInit` against whatever the cookie names now. A `Redirect` set inside `OnInit` answers the GET with a 303.
+reload runs `OnInit` against whatever the cookie names now. A `Redirect` set
+inside `OnInit` answers the GET with a 303.
 
 ## Worked example: the counter, both ways
 
@@ -594,9 +597,11 @@ A plain nested struct joins its path with one underscore (`c_s`), a child
 boundary with two (`c__s`). A parent cannot bind its child's signal itself:
 with `C` a composition, `p.C.S` in the parent's View has no slot in the
 parent's unit and panics at `Mount`. A parent holding two fields of the
-child's type, or one plus a nested struct, slice or map that holds it, is ambiguous (`Child`'s argument order need not match
+child's type, or one plus a nested struct, slice or map that holds it, is
+ambiguous (`Child`'s argument order need not match
 declaration order), so those children fall back to the positional key:
-`i0__s`, `i1__s`, and `i0__i0_0__s` for one nested inside the first. The key's own depth
+`i0__s`, `i1__s`, and `i0__i0_0__s` for one nested inside the first. The key's
+own depth
 separator is `-` (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS
 identifier character and `Ref()` hands slot names straight to Datastar
 expressions, so the slot spells it `_`.

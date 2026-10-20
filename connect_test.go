@@ -32,7 +32,7 @@ func (t *tickSessionWriter) beat(ctx *via.Ctx) {
 func (t *tickSessionWriter) View() h.H { return h.Div(t.n.Display()) }
 
 func TestConnectUnit_tickSessionWriteWarnsInsteadOfWritingADeadResponse(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
@@ -65,6 +65,7 @@ func (t *tickSessionWriterOnConnectRead) beat(ctx *via.Ctx) {
 func (t *tickSessionWriterOnConnectRead) View() h.H { return h.Div(t.n.Display()) }
 
 func TestConnectUnit_tickSessionWriteWarnsEvenAfterOnInitReadTheSession(t *testing.T) {
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
@@ -102,7 +103,7 @@ func heapInUse() int64 {
 }
 
 func TestConnect_keepsNoConnectBodyValueTheUnitCannotUse(t *testing.T) {
-	// Sequential: it measures the heap. A real socket, not vt's in-memory one,
+	// sequential: measures the heap. A real socket, not vt's in-memory one,
 	// which buffers what the client wrote and would hide what via keeps.
 	srv := httptest.NewServer(via.Handler(boundInt{}))
 	t.Cleanup(srv.Close)

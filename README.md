@@ -135,10 +135,11 @@ Pre-1.0: the API can change between minor versions.
 ./ci.sh
 ```
 
-It runs gofmt, vet, staticcheck and the race tests for via and the site
-module (`internal/site`), caps via's cyclomatic and cognitive complexity at 15
-(gocyclo, gocognit), then the browser tier in `vtbrowser`, which needs
-Chromium or Chrome; `--no-browser` skips it. It reports, never rewrites.
+It is the release gate: green means releasable. It runs every check on all
+three modules, including the browser tier in `vtbrowser`, which needs
+Chromium or Chrome on `PATH` or in `VIA_CHROME`. It reports, never rewrites.
+A PR also runs `./mutation.sh origin/main`, which mutates the changed lines
+and fails when the tests kill too few of the mutants.
 
 [`CONVENTIONS.md`](CONVENTIONS.md) has the code and test conventions,
 including the bar for a new duck-typed method.

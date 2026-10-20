@@ -84,18 +84,7 @@ func CSS() string {
 		panic("chromagen: no chroma style " + snippet.ChromaStyle)
 	}
 
-	used := map[string]bool{}
-	for _, src := range append(snippet.Sources(), chromaSample) {
-		it, err := lexers.Get("go").Tokenise(nil, src)
-		if err != nil {
-			panic(err)
-		}
-		for _, t := range it.Tokens() {
-			if cls := snippet.Class(t.Type); cls != "" {
-				used[cls] = true
-			}
-		}
-	}
+	used := usedClasses()
 
 	bg := style.Get(chroma.Background)
 	var b strings.Builder
@@ -109,17 +98,38 @@ func CSS() string {
 	}
 	slices.Sort(types)
 	for _, i := range types {
-		t := chroma.TokenType(i)
-		cls := chroma.StandardTypes[t]
-		if cls == "" || !used[snippet.ChromaPrefix+cls] {
-			continue
-		}
-		// Sub(bg): as chroma's formatter, don't repeat what the background carries.
-		css := html.StyleEntryToCSS(style.Get(t).Sub(bg))
-		if css == "" {
-			continue
-		}
-		fmt.Fprintf(&b, "/* %s */ .%schroma .%s%s { %s }\n", t, snippet.ChromaPrefix, snippet.ChromaPrefix, cls, css)
+		b.WriteString(rule(style, chroma.TokenType(i), bg, used))
 	}
 	return b.String()
+}
+
+// usedClasses is every class the snippet sources and the sample emit.
+func usedClasses() map[string]bool {
+	used := map[string]bool{}
+	for _, src := range append(snippet.Sources(), chromaSample) {
+		it, err := lexers.Get("go").Tokenise(nil, src)
+		if err != nil {
+			panic(err)
+		}
+		for _, t := range it.Tokens() {
+			if cls := snippet.Class(t.Type); cls != "" {
+				used[cls] = true
+			}
+		}
+	}
+	return used
+}
+
+// rule is t's CSS rule, or "" when t is unused or its style is the background's.
+func rule(style *chroma.Style, t chroma.TokenType, bg chroma.StyleEntry, used map[string]bool) string {
+	cls := chroma.StandardTypes[t]
+	if cls == "" || !used[snippet.ChromaPrefix+cls] {
+		return ""
+	}
+	// Sub(bg): as chroma's formatter, don't repeat what the background carries.
+	css := html.StyleEntryToCSS(style.Get(t).Sub(bg))
+	if css == "" {
+		return ""
+	}
+	return fmt.Sprintf("/* %s */ .%schroma .%s%s { %s }\n", t, snippet.ChromaPrefix, snippet.ChromaPrefix, cls, css)
 }

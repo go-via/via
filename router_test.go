@@ -915,17 +915,20 @@ func TestMount_panicsOnAPageMetaCarryingTheWrongSignature(t *testing.T) {
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedPageMeta(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedMeta{}) })
 	assert.Contains(t, logged, "misnamedMeta.Metadata looks like a mis-named PageMeta")
 	assert.Contains(t, logged, "Rename it to PageMeta.")
 }
 
 func TestMount_staysQuietWhenThePageMetaLookalikeIsAHelperItCalls(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", metaHelper{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
 func TestMount_warnsOnALeftoverTitleMethod(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", legacyTitle{}) })
 	assert.Contains(t, logged, "legacyTitle.Title is no longer a via hook")
 }
@@ -939,17 +942,20 @@ func TestMount_panicsOnAHookNameCarryingTheWrongSignature(t *testing.T) {
 }
 
 func TestMount_warnsOnAMethodShapedLikeAMisnamedHook(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", misnamedReload{}) })
 	assert.Contains(t, logged, "misnamedReload.Reload looks like a mis-named OnReload")
 	assert.Contains(t, logged, "Rename it to OnReload.")
 }
 
 func TestMount_staysQuietWhenTheLookalikeIsJustAHelperTheRealHookCalls(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", reloadHelper{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
 
 func TestMount_staysQuietForAnOrdinaryActionThatSharesAHookLookalikeName(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", refreshAction{}) })
 	assert.NotContains(t, logged, "mis-named")
 }
@@ -1153,6 +1159,7 @@ func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
 }
 
 func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
+	// sequential: swaps the global log writer
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
@@ -1283,6 +1290,7 @@ func (p *tickingReload) View() h.H {
 }
 
 func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
+	// sequential: swaps the global log writer
 	var logs bytes.Buffer
 	log.SetOutput(&logs)
 	defer log.SetOutput(os.Stderr)
@@ -1497,11 +1505,13 @@ func (d *droppedLetterConnect) OnConect(*via.Ctx) error { return nil }
 func (d *droppedLetterConnect) View() h.H               { return h.Div(d.N.Display()) }
 
 func TestMount_warnsOnAMiscasedHookName(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", miscasedInit{}) })
 	assert.Contains(t, logged, "miscasedInit.Oninit looks like a mis-named OnInit")
 }
 
 func TestMount_warnsOnAOneLetterSlipOfTheV07OnConnect(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", droppedLetterConnect{}) })
 	assert.Contains(t, logged, "droppedLetterConnect.OnConect is shaped like the v0.7 OnConnect hook")
 }
@@ -1515,6 +1525,7 @@ func (u *unrelatedHookShapedMethod) Save(*via.Ctx) error     { return nil }
 func (u *unrelatedHookShapedMethod) View() h.H               { return h.Div(u.N.Display()) }
 
 func TestMount_staysQuietForUnrelatedMethodsWithAHookSignature(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", unrelatedHookShapedMethod{}) })
 	assert.NotContains(t, logged, "mis-named")
 }

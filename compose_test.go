@@ -37,7 +37,7 @@ func TestEach_rendersEveryItemInOrderInPlace(t *testing.T) {
 }
 
 func TestWhen_rendersOnlyWhenTrueAndIsLazy(t *testing.T) {
-	// Sequential, not Parallel: it reads the shared lazyBuildCalls counter.
+	// sequential: reads the shared lazyBuildCalls counter
 	_, on := vt.Serve(t, via.Handler(listComp{show: true})).Get("/")
 	assert.Contains(t, on, "lazybuilt", "When(true) must render the built node")
 

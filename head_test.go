@@ -306,6 +306,7 @@ func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 }
 
 func TestPageMeta_warnsWhenAChildDeclaresOne(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := warnChildOnce(t)
 
 	assert.Contains(t, logged, "warnChild.PageMeta is ignored")
@@ -457,6 +458,7 @@ func (p *lateAssetPage) PageMeta() via.Meta {
 func (p *lateAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
 func TestPageMeta_panicsOnRenderWhenAssetsTheProbeCannotSeeMove(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() {
 		resp, _ := metaBody(t, lateAssetPage{})
 		assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
@@ -564,6 +566,7 @@ func (p *probeRefusingPage) PageMeta() via.Meta {
 func (p *probeRefusingPage) View() h.H { return h.Div(h.Str("x")) }
 
 func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
+	// sequential: swaps the global log writer
 	logged := captureLog(t, func() {
 		require.NotPanics(t, func() { via.Mount(via.NewRouter(), "/", probeRefusingPage{}) })
 	})
@@ -746,6 +749,7 @@ func (p *lateAttrPage) PageMeta() via.Meta {
 func (p *lateAttrPage) View() h.H { return h.Div(h.Str("x")) }
 
 func TestPageMeta_dropsAnAttrRefusedOnlyAtRender(t *testing.T) {
+	// sequential: swaps the global log writer
 	tests := []struct {
 		name, field     string
 		late            []via.Attr
@@ -759,6 +763,7 @@ func TestPageMeta_dropsAnAttrRefusedOnlyAtRender(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// sequential: swaps the global log writer
 			var body string
 			logged := captureLog(t, func() {
 				var resp *http.Response

@@ -244,7 +244,7 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 }
 
 func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	srv := newCounter(t)
@@ -784,9 +784,7 @@ func BenchmarkEachArgSet(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		resp, err := srv.Client().Get(srv.URL)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
@@ -983,6 +981,7 @@ func (p *nilArgPage) View() h.H {
 }
 
 func TestBind_aNilArgDropsTheBindingAndSaysSo(t *testing.T) {
+	// sequential: swaps the global log writer
 	logs := globalLog(t)
 	_, page := do(t, serve(t, via.Handler(nilArgPage{})), http.MethodGet, "/", "")
 	assert.NotContains(t, page, "data-on:click", "a null arg answers 400 on every click, so it must not render")
