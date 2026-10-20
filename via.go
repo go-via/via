@@ -10,8 +10,8 @@
 // either, no any in element/child signatures. The library is stdlib-only.
 // Identifier strings do appear at the edges the caller controls directly —
 // ctx.Param[T]("id"), FormFile("avatar"), Mount("/thread/{id}") — but never
-// as an internal wire-name a caller could desync (see the Field-Embeddable
-// Types convention).
+// as an internal wire-name a caller could desync: a handle keeps its fields
+// unexported.
 //
 // # Lifecycle hooks
 //

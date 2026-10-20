@@ -1335,7 +1335,7 @@ func TestSession_rotateInvalidatesOldIDWhenDeleteFails(t *testing.T) {
 }
 
 func TestSession_rotateFails500WhenOldIDCannotBeInvalidated(t *testing.T) {
-	// Not t.Parallel(): it reads the package log writer.
+	// sequential: swaps the global log writer
 	fs := newFailStore()
 	base, acts := auditServer(t, via.WithSessionStore(fs))
 	c := jarClient(t)
@@ -1575,7 +1575,7 @@ func TestSession_nilValsSessionReadsAndWritesAlike(t *testing.T) {
 }
 
 func TestSession_droppedWriteThroughARetiredHandleIsLogged(t *testing.T) {
-	// Not t.Parallel(): it reads the package log writer.
+	// sequential: swaps the global log writer
 	store := newCASGap(via.NewMemorySessionStore())
 	base, acts := auditServer(t, via.WithSessionStore(store))
 	c := jarClient(t)
@@ -1783,7 +1783,7 @@ func (u *tickEnsurer) OnInit(ctx *via.Ctx) error {
 func (u *tickEnsurer) View() h.H { return h.Div(u.got.Display()) }
 
 func TestSession_ensureFromATickReturnsEmptyAndMintsNothing(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
@@ -2058,7 +2058,7 @@ func TestSession_anAnonymousRotateWarnsLikeAnyMint(t *testing.T) {
 	assert.Contains(t, logs.String(), "random per-process key")
 }
 
-func TestSession_VIA_SESSION_KEYSignsCookiesEveryRouterAccepts(t *testing.T) {
+func TestSession_envKeySignsCookiesEveryRouterAccepts(t *testing.T) {
 	t.Setenv("VIA_SESSION_KEY", "an-env-signing-key-32-bytes-long")
 	store := via.WithSessionStore(via.NewMemorySessionStore())
 	a, b := sessionServer(t, store), sessionServer(t, store)
@@ -2070,7 +2070,7 @@ func TestSession_VIA_SESSION_KEYSignsCookiesEveryRouterAccepts(t *testing.T) {
 	assert.Contains(t, body, "hi alice")
 }
 
-func TestSession_aShortVIA_SESSION_KEYPanics(t *testing.T) {
+func TestSession_aShortEnvKeyPanics(t *testing.T) {
 	t.Setenv("VIA_SESSION_KEY", "short")
 	assert.PanicsWithValue(t, "via: session key must be at least 16 bytes (got 5)", func() {
 		via.Handler(loginComp{}, via.WithSessionTTL(time.Hour))

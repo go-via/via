@@ -19,31 +19,71 @@
 
 ### Fixed
 
-- A live push whose signal changes include one value `encoding/json` cannot marshal ships the others and logs the one it drops, as a page render does; it dropped the whole signal patch without a word.
-- A child whose type the parent also holds inside a nested struct, slice or map takes the positional slot prefix; it took the direct field's name, so two children shared one client signal.
-- A plain child's action patch declares the signals of a grandchild it opened; the client store had no value for them.
-- A grandchild's signals are declared on the page; only a direct child's were, so a grandchild's `Display` or `Ref` read `undefined` client-side.
-- A live push seeds a signal slot its render newly declares, such as one in a branch an action opened; the client store had no value for it, so its `Display` showed `undefined`.
-- A native form submit on a plain child answers with a live page when the root is live through a `Tick` or `Listen`; the page had no stream, so the root stopped updating.
-- A leading newline in `<textarea>`, `<pre>` or `<listing>` content survives the render; the HTML parser dropped it, so a textarea lost its first blank line on every render and patch.
-- `WithTrustedOrigin` panics on a wildcard host or an empty port, which no browser Origin header can match; it accepted them and refused every request they were meant to admit.
-- `Session.Rotate` on a request with no session logs the random-key and in-memory-store warnings, as any other first write does.
-- `expr.CopyToClipboard` does nothing outside a secure context, where `navigator.clipboard` is undefined; it threw a TypeError there.
-- The reconnect banner stops probing after 20 failed probes, as documented; it ran a 21st.
-- A live unit's native form submit answers with a page whose OnInit sees the session its action wrote; it read the request's pre-action cookie, so a login there rendered logged out.
-- A plain grandchild that a live child's push reveals runs its `OnInit`, as it does under a live root. A live grandchild revealed under a unit that is live through a `Tick` or `Listen` alone now aborts the push, as it does when the unit renders `State`.
-- A `Signal.Set` inside an `OnConnect` fn reaches the client. The baseline render taken before `OnConnect` runs bound the handles to a throwaway copy, so the Set never shipped.
-- A relative `Redirect` from an action reached by a native form submit resolves against the page, as the `@post` path does. It resolved against the action URL, so `Redirect("?step=2")` landed under `/_via/a/`.
-- A live action that calls `Redirect` no longer pushes its unit's render over the stream, as `Redirect` documents.
-- A native form submit whose text fields or part count exceed multipart's limits answers 413, not 400 "malformed form".
-- A live child's warnings after its first push go to `WithLogger`. They went to `slog.Default`.
-- `List.Append` always builds a new array. A list `Set` from a slice with spare capacity, such as a shared store snapshot, appended into that slice's array, so tabs holding the same snapshot overwrote each other.
-- `vt`: an action whose `Body` is `null` and carries a `Tab` posts the body as given instead of panicking.
-- `Mount` panics on a path that does not start with "/". A host-qualified pattern used to mount and render action URLs relative to the page, which missed.
-- A nil handler passed to an `on` event or to `on.Bind` panics where it is bound. It used to render a binding whose every click answered 500.
-- A live action's `Ctx.Context` is the tab's stream context, as documented. It was the POST's, so it ended with the request and `Router.Shutdown` never cancelled it.
-- A live action's panic now sets `PageError.Err`, as a plain action's already did.
-- A `Param` that `OnInit`, a child's `OnInit` or an action cannot decode now sets `PageError.Err` to `ErrNotFound`, as the same miss in `OnReload` already did.
+- A live push whose signal changes include one value `encoding/json` cannot
+  marshal ships the others and logs the one it drops, as a page render does; it
+  dropped the whole signal patch without a word.
+- A child whose type the parent also holds inside a nested struct, slice or map
+  takes the positional slot prefix; it took the direct field's name, so two
+  children shared one client signal.
+- A plain child's action patch declares the signals of a grandchild it opened;
+  the client store had no value for them.
+- A grandchild's signals are declared on the page; only a direct child's were,
+  so a grandchild's `Display` or `Ref` read `undefined` client-side.
+- A live push seeds a signal slot its render newly declares, such as one in a
+  branch an action opened; the client store had no value for it, so its
+  `Display` showed `undefined`.
+- A native form submit on a plain child answers with a live page when the root
+  is live through a `Tick` or `Listen`; the page had no stream, so the root
+  stopped updating.
+- A leading newline in `<textarea>`, `<pre>` or `<listing>` content survives the
+  render; the HTML parser dropped it, so a textarea lost its first blank line on
+  every render and patch.
+- `WithTrustedOrigin` panics on a wildcard host or an empty port, which no
+  browser Origin header can match; it accepted them and refused every request
+  they were meant to admit.
+- `Session.Rotate` on a request with no session logs the random-key and
+  in-memory-store warnings, as any other first write does.
+- `expr.CopyToClipboard` does nothing outside a secure context, where
+  `navigator.clipboard` is undefined; it threw a TypeError there.
+- The reconnect banner stops probing after 20 failed probes, as documented; it
+  ran a 21st.
+- A live unit's native form submit answers with a page whose OnInit sees the
+  session its action wrote; it read the request's pre-action cookie, so a login
+  there rendered logged out.
+- A plain grandchild that a live child's push reveals runs its `OnInit`, as it
+  does under a live root. A live grandchild revealed under a unit that is live
+  through a `Tick` or `Listen` alone now aborts the push, as it does when the
+  unit renders `State`.
+- A `Signal.Set` inside an `OnConnect` fn reaches the client. The baseline
+  render taken before `OnConnect` runs bound the handles to a throwaway copy, so
+  the Set never shipped.
+- A relative `Redirect` from an action reached by a native form submit resolves
+  against the page, as the `@post` path does. It resolved against the action
+  URL, so `Redirect("?step=2")` landed under `/_via/a/`.
+- A live action that calls `Redirect` no longer pushes its unit's render over
+  the stream, as `Redirect` documents.
+- A native form submit whose text fields or part count exceed multipart's limits
+  answers 413, not 400 "malformed form".
+- A live child's warnings after its first push go to `WithLogger`. They went to
+  `slog.Default`.
+- `List.Append` always builds a new array. A list `Set` from a slice with spare
+  capacity, such as a shared store snapshot, appended into that slice's array,
+  so tabs holding the same snapshot overwrote each other.
+- `vt`: an action whose `Body` is `null` and carries a `Tab` posts the body as
+  given instead of panicking.
+- `Mount` panics on a path that does not start with "/". A host-qualified
+  pattern used to mount and render action URLs relative to the page, which
+  missed.
+- A nil handler passed to an `on` event or to `on.Bind` panics where it is
+  bound. It used to render a binding whose every click answered 500.
+- A live action's `Ctx.Context` is the tab's stream context, as documented. It
+  was the POST's, so it ended with the request and `Router.Shutdown` never
+  cancelled it.
+- A live action's panic now sets `PageError.Err`, as a plain action's already
+  did.
+- A `Param` that `OnInit`, a child's `OnInit` or an action cannot decode now
+  sets `PageError.Err` to `ErrNotFound`, as the same miss in `OnReload` already
+  did.
 - `h.El` with a void tag in upper case (`"BR"`), or `"base"`, renders without
   a closing tag, as `"br"` already did.
 - `on.WithDebounce` and `on.WithThrottle` with a duration near the maximum no
@@ -1595,7 +1635,8 @@ as a re-read of the README rather than a diff.
   stream, and `Rotate` on it is refused rather than re-issuing a cookie over
   the one the browser now holds. Reads still serve the connect-time snapshot.
   Reconnecting the stream picks up the new id.
-  **Since v0.9.0:** a `Rotate` ends the stream of every other tab on the session,
+  **Since v0.9.0:** a `Rotate` ends the stream of every other tab on the
+  session,
   the rotating tab's handles follow the new id, and a session write reaches
   every tab's `Tick` and `Listen` handlers. A `Rotate` in another process
   sharing the store is seen on the next keepalive, so for up to 25s those

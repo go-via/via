@@ -58,14 +58,36 @@ func goPre(src string, hl []bool, lined bool) h.H {
 		return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(h.Str(src)))
 	}
 	if !lined {
-		var spans []h.H
-		for _, t := range it.Tokens() {
-			spans = append(spans, token(t.Type, t.Value))
-		}
-		return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(spans...))
+		return flatPre(it.Tokens())
 	}
+	return linedPre(it.Tokens(), hl)
+}
+
+func flatPre(tokens []chroma.Token) h.H {
+	var spans []h.H
+	for _, t := range tokens {
+		spans = append(spans, token(t.Type, t.Value))
+	}
+	return h.Pre(h.Class(ChromaPrefix+"chroma"), h.Code(spans...))
+}
+
+func linedPre(tokens []chroma.Token, hl []bool) h.H {
+	lines := splitLines(tokens)
+	rows := make([]h.H, 0, len(lines))
+	for i, parts := range lines {
+		mark := ""
+		if i < len(hl) && hl[i] {
+			mark = "hl"
+		}
+		rows = append(rows, h.Span(append([]h.H{h.Class("ln", mark)}, append(parts, h.Str("\n"))...)...))
+	}
+	return h.Pre(h.Class(ChromaPrefix+"chroma", "code-hl"), h.Code(rows...))
+}
+
+// splitLines cuts the tokens at newlines into one slice of spans per line.
+func splitLines(tokens []chroma.Token) [][]h.H {
 	lines := [][]h.H{nil}
-	for _, t := range it.Tokens() {
+	for _, t := range tokens {
 		for i, part := range strings.Split(t.Value, "\n") {
 			if i > 0 {
 				lines = append(lines, nil)
@@ -78,15 +100,7 @@ func goPre(src string, hl []bool, lined bool) h.H {
 	if len(lines[len(lines)-1]) == 0 {
 		lines = lines[:len(lines)-1]
 	}
-	rows := make([]h.H, 0, len(lines))
-	for i, parts := range lines {
-		mark := ""
-		if i < len(hl) && hl[i] {
-			mark = "hl"
-		}
-		rows = append(rows, h.Span(append([]h.H{h.Class("ln", mark)}, append(parts, h.Str("\n"))...)...))
-	}
-	return h.Pre(h.Class(ChromaPrefix+"chroma", "code-hl"), h.Code(rows...))
+	return lines
 }
 
 func token(t chroma.TokenType, v string) h.H {

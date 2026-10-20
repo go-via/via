@@ -173,17 +173,15 @@ func (p *Testing) View() h.H {
 			h.A(h.Href(repo+"vtbrowser/vtbrowser_test.go"), h.Code(h.Str("vtbrowser_test.go"))),
 			h.Str(" is a working set of examples.")),
 		snippet.Text("", "cd vtbrowser && VIA_CHROME=/usr/bin/chromium go test -race -tags browser ./...\n"+
-			"./ci.sh --browser    # fail if no browser is found\n"+
-			"./ci.sh --chrome=/path/to/chromium"),
+			"./ci.sh    # the whole gate; fails when no browser is found"),
 		h.P(API("vtbrowser.Open"), h.Str(" looks for chromium, chromium-browser, chrome, google-chrome, google-chrome-stable or headless-shell on "),
 			Code("PATH"), h.Str(", or uses "), Code("VIA_CHROME"), h.Str(", and skips the test when it finds none. "+
 				"In the via repo the browser tests carry "), Code("//go:build browser"), h.Str(", so plain "),
 			Code("go test ./..."), h.Str(" never starts Chromium; "), Code("ci.sh"),
-			h.Str(" runs them when a browser is present and warns when one is not.")),
+			h.Str(" runs them and fails when it finds no browser.")),
 		Callout(Warning, "A skip reads as a pass",
-			h.P(h.Str("On a machine without Chromium every browser test skips and the run is green. In CI, run "),
-				Code("./ci.sh --browser"), h.Str(" or pass "), Code("VIA_CHROME"),
-				h.Str(" so a missing browser fails the job instead.")),
+			h.P(h.Str("On a machine without Chromium every browser test skips and the run is green. In CI, set "),
+				Code("VIA_CHROME"), h.Str(" so a missing browser fails the job instead.")),
 		),
 
 		d.H2("What vt does not simulate"),

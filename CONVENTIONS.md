@@ -1,22 +1,5 @@
 # Conventions
 
-## Test Names
-
-Reasoning: Consistent naming makes tests discoverable and clarifies what
-each test verifies.
-
-Rule: Use `Test` + PascalCase subject + underscore + camelCase behavior
-(present tense verb). The underscore separates *what* from *does what*.
-
-- ✅ `TestSignal_panicsAtMountOnAMalformedSeedTag`
-- ✅ `TestPage_setsContentTypeAndNosniff`
-- ✅ `TestMount_panicsOnAnUnknownTagKey`
-- ❌ `TestSignal` (vague — what about it?)
-- ❌ `Test_signal_return_as_string` (wrong casing)
-
-The name should read as a behavioral claim, not a description of what the
-test does internally.
-
 ## Test-First
 
 Reasoning: Writing the test first forces you to define the contract before
@@ -30,10 +13,12 @@ write test → confirm it fails correctly → implement → confirm it passes.
 Reasoning: Tests coupled to internals break on refactors, not on
 regressions. The public API is the contract — that's what matters.
 
-Rule: All tests enter the system through exported symbols. Use
-`package foo_test` (external test package) as the default. Only drop into
-`package foo` (internal) when testing unexported behavior that cannot be
-observed through the public API at all — and treat this as a last resort.
+Rule: All tests enter the system through exported symbols. Behaviour the
+plain HTTP idiom can't reach cleanly (a controlled request Host, a TLS
+request, the per-connection tab handshake, a live render) is exercised through
+the `vt` harness, not by reaching into unexported state. If a behaviour cannot
+be observed through the public surface even with `vt`, that is a design
+signal: change the surface, not the test boundary.
 
 ## Mocking Preference: Real > Stub > Mock
 
@@ -102,67 +87,15 @@ for _, tt := range tests {
 }
 ```
 
-## Parallel Tests
-
-Reasoning: Parallel execution surfaces data races and speeds up the suite.
-
-Rule: Call `t.Parallel()` at the top of every test and subtest that does
-not share mutable state (package-level variables, shared servers, test
-databases, on-disk fixtures). When in doubt, don't parallelize — a correct
-slow test beats a flaky fast one.
-
-Always run tests with `-race` (`go test -race ./...`).
-
-### Carve-out: `testing/synctest`
-
-`synctest.Test`'s doc is explicit: "T.Run, T.Parallel, and T.Deadline must
-not be called" on the `*testing.T` it hands to the bubble callback. When a
-test's entire body is that one `synctest.Test(t, func(t *testing.T) {…})`
-call, there is no outer `t` left to call `Parallel` on — omit it.
-
-If a test runs plain code before entering the bubble (e.g. an ordinary GET
-against a real listener, which needs no fake clock), call `t.Parallel()` as
-the first line as usual — it runs on the outer `*testing.T`, before the
-bubble exists, and is unaffected by the restriction.
-
 ## Test Helpers
 
-Reasoning: Test helpers that don't call `t.Helper()` produce misleading
-failure line numbers. Helpers in production files pollute the public API.
+Reasoning: Helpers in production files pollute the public API.
 
 Rule:
 
 - All test helpers live in `_test.go` files.
-- Helpers that call `t.Fatal` or `t.Error` must call `t.Helper()` as
-  their first statement.
 - Use setup helpers (e.g. `serveCounter(t)`) to reduce repetition,
   not `TestMain` unless truly necessary.
-
-## Field-Embeddable Types Keep Fields Unexported
-
-Reasoning: Callers should work with behavior, not struct internals.
-Composition handles like `Signal[T]` / `State[T]` are *exported* because
-users declare them as struct fields (`Step via.Signal[int]`), but their
-wire identity comes from the runtime: before `OnInit` and the `View` run,
-via stamps each handle with a wire name derived from its field path.
-Exposing fields would let a caller desync that name from the stored value,
-or forge one.
-
-Rule: For handle types whose binding is established by the runtime
-(`Signal`, `SignalCS`, `State`, `List`), keep all stored state in unexported
-fields. The type name is exported; the contents aren't. `List[E]` embeds
-`State[[]E]`, so `l.State` is reachable, but its fields stay unexported.
-
-```go
-// ✅ Exported type, unexported fields — the runtime stamps the wire name
-type Signal[T any] struct {
-    slotID // wire name, derived from the field path
-    val    T
-}
-
-// ❌ Exported fields — caller can desync the wire name from the value
-type Signal[T any] struct { ID string; Val T }
-```
 
 ## Functional Options
 
@@ -196,48 +129,14 @@ func (darkMode) apply(cfg *config) {
 Rule: Export the option type; keep the config it mutates unexported and
 in the same package. Callers must be able to name the option type — to
 hold one in a variable, build a `[]Option` slice, or write a helper that
-returns options — so a constructor's signature may not reference an
-unexported or `internal/` type. The `apply` method stays unexported
-because the option set is closed: users compose the provided `WithX`
-constructors, they never author an option by hand.
+returns options. The `apply` method stays unexported because the option set
+is closed: users compose the provided `WithX` constructors, they never author
+an option by hand.
 
 - ✅ `type Option interface{ apply(*config) }` — `config` unexported, same
   package
 - ✅ `type MountOption interface{ applyMount(*mountConfig) }` — no
   constructors yet; it keeps `Mount`'s signature stable for when one lands
-- ❌ `func Debounce(d string) spec.Option` (leaks `internal/spec` — a
-  downstream module can't name the return type)
-
-A package that needs the same option type a sibling already defines
-should re-export it with an alias (`type Option = spec.Option`) rather
-than expose the shared internal type in its signatures.
-
-## No Func Literals
-
-Non-test code holds no func literals. A callback is a named func, a method
-value, or a small type with a method (an `http.Handler`, a `sort` comparator
-named for its order). Named code has a name in a stack trace and a profile,
-and a typed value states what it captures; a closure on a hot path also
-allocates per call.
-
-`TestSources_holdNoFuncLiterals` in `sourcelint_test.go` enforces this across
-all three modules. Tests are exempt (`t.Run`, `assert.Eventually`), and so is
-`internal/site/snippet/src`, which shows readers plain `net/http` code.
-
-## Fitness Functions
-
-Reasoning: A long parameter list or a branchy function is a sign that one
-function does several jobs, and review misses it once the code works. Length
-is not such a sign: a long function or file with one cohesive concern is fine
-(see Files).
-
-Rule: Non-test code keeps cyclomatic complexity at 10 or less and takes at
-most five parameters, the receiver not counted. Params that travel together
-become a struct; branches split into named helpers. There is no allowlist.
-
-`ci.sh` enforces complexity with `gocyclo -over 10` on via's root module.
-`TestSources_takeAtMostFiveParams` in `sourcelint_test.go` enforces params
-across all three modules. There is no line limit on functions or files.
 
 ## Panic on Invalid Registration
 
@@ -372,7 +271,9 @@ work that has started.
 
 ## Assertions
 
-Rule: Use `github.com/stretchr/testify/assert` for all assertions.
+Rule: Use `github.com/stretchr/testify/assert` for all assertions. The
+importable helpers (`vt`, `vtbrowser`) fail through `testing.TB` instead, so
+importing them doesn't pull testify into a user's build.
 
 - Use `require` for preconditions that guard the rest of the test (nil
   checks, status codes before reading a body, setup that must succeed).
@@ -380,10 +281,6 @@ Rule: Use `github.com/stretchr/testify/assert` for all assertions.
   want to see all of, even when one fails.
 - Use `assert.JSONEq` for JSON comparison — it is order-insensitive.
 - Use `assert.Contains` for partial string/slice membership.
-- Do not use raw `t.Error`, `t.Fatal`, or `t.Log` for assertion failures in
-  `_test.go` files — use testify. The importable helpers (`vt`, `vtbrowser`)
-  fail through `testing.TB` instead, so importing them doesn't pull testify
-  into a user's build.
 
 ## Comments
 
@@ -392,10 +289,9 @@ code already says, delete it.
 
 ### Exported symbols
 
-Document every exported type, function, method, and constant with a godoc
-comment. The comment must add information beyond the name — if the name is
-fully self-explanatory, one sentence stating the contract or caveat is
-enough. Omit filler like "X is a…" when the sentence reads better without
+An exported symbol's godoc must add information beyond the name — if the
+name is fully self-explanatory, one sentence stating the contract or caveat
+is enough. Omit filler like "X is a…" when the sentence reads better without
 it.
 
 ```go
@@ -513,48 +409,6 @@ concern, not the type (`state.go`, not `signal_of.go`).
 Split a file when it contains two concerns that change for different
 reasons — not when it merely gets large. Don't split preemptively.
 
-### Concern/test parity
-
-Reasoning: When tests live beside the source they exercise and share its
-name, the test for any concern is found by name, and a `_test.go` whose name
-matches no source is a smell — it means the test was grouped by feature
-("chat", "sugar") rather than by the file whose code it actually drives.
-
-Rule: Every `<concern>_test.go` pairs with a `<concern>.go` of the same name.
-No dangling test files — a `*_test.go` with no matching source is not allowed.
-If a test has no home, either the concern it covers belongs in a source file
-of that name, or the test belongs in the `_test.go` for the file whose code it
-actually exercises. A behavioral claim about `live.go`'s runtime lives in
-`live_test.go`; it does not get its own `chat_test.go`.
-
-Parity is one-directional: tests pair to source, source need not pair to
-tests. A pure-wiring or trivial-helper file may have no `_test.go` — it is
-verified by build/vet and by the behavioral tests that drive it, not by a
-unit test of its own.
-
-Tests are black-box: a `_test.go` beside package `<x>` is in
-`package <x>_test`. `TestTests_areBlackBox` in `sourcelint_test.go` enforces
-this across all three modules; a directory holding only tests has no package
-to reach into, so it is skipped. Behavior that the plain HTTP idiom can't reach
-cleanly (a controlled request Host, a TLS request, the per-connection tab
-handshake, a live render) is still exercised as a black box through the `vt`
-harness rather than by reaching into unexported state. If a behavior genuinely
-cannot be observed through the public surface even with `vt`, that is a design
-signal — change the surface, not the test boundary.
-
-Pairing has three exemptions. The first is `sourcelint_test.go`: its lints
-(the reflect allowlist, the no-`&`/no-closure guard over the site's demos and
-snippets, the guard that keeps `internal/render`'s binder plumbing off every
-public package, the black-box test lint, the func-literal lint and the param
-lint) parse the tree and assert on what it says, so they pair with every
-source file and therefore with none. A failure there means the source drifted
-from a design rule, not a behavioral regression.
-
-The other two are in `internal/site`. A snippet package (`snippet/src/<pkg>`)
-is the set of files one page shows, tested together from `<pkg>_test.go`. A
-test-only directory (`demos/storetest`, `snippet/src/tutorial`) has no
-source to pair with.
-
 ### No tests of package main
 
 Reasoning: package main cannot be imported, so a test of it has to sit inside
@@ -562,9 +416,6 @@ it, which is a white-box test by another name.
 
 Rule: Keep `main` to wiring: flags, environment, calling into a package. The
 logic goes in an importable package with its own `package <x>_test` tests.
-`TestTests_areBlackBox` fails on any `_test.go` beside a package main. A
-test-only directory that builds or compares displayed mains without
-importing them (`snippet/src/tutorial`) is not beside one, so it passes.
 
 - ✅ `content/gen/main.go` calls `apigen`, and `apigen_test.go` tests it.
 - ❌ The generator's logic in `content/gen`, tested from `package main`.
@@ -578,8 +429,8 @@ the compiler checks.
 
 Rule: Use `internal/` for code that must not be imported by consumers and
 either is shared across packages within the module, or is split out of root
-to hide one decision. A package split out of root never imports `via`. Do
-not use `internal/` as a dumping ground — the same responsibility rules apply.
+to hide one decision. Do not use `internal/` as a dumping ground — the same
+responsibility rules apply.
 
 - ✅ `internal/render` holds the binder plumbing that root, `h` and `on`
   share.
@@ -622,14 +473,12 @@ for good, so a tag cannot be taken back.
 
 Rule: A release tags every importable module in the repo on the same commit,
 annotated: `vX.Y.Z` for root and `<dir>/vX.Y.Z` for each nested module whose
-path sits under `github.com/go-via/via`. On that commit, each nested
-`go.mod` requires the root at `vX.Y.Z`. Push all of a release's tags
+path sits under `github.com/go-via/via`. Push all of a release's tags
 together. A wrong tag is fixed by a new patch version, never by moving or
 deleting it. A module with a path outside the repo's, like `internal/site`,
 is deployed, not imported, so it gets no tag.
 
-- ✅ `v0.9.1` and `vtbrowser/v0.9.1` on `6e37e04`, whose `vtbrowser/go.mod`
-  requires `via v0.9.1`.
+- ✅ `v0.9.1` and `vtbrowser/v0.9.1` on `6e37e04`.
 - ❌ Tag `v0.9.2` alone: `go get .../vtbrowser@v0.9.2` fails, and
   pkg.go.dev shows `vtbrowser` at v0.9.1.
 
@@ -637,12 +486,10 @@ is deployed, not imported, so it gets no tag.
 
 Reasoning: Consistent markdown style improves readability and enables linting.
 
-### Line Length
+### Tables
 
-Rule: Keep lines to 80 characters or fewer. Break long lines at logical
-points — especially in lists, code examples, and bullet points. Avoid tables
-for large data representations; they force excessive line wrapping or violate
-the limit. Use lists, prose, or code blocks instead.
+Rule: Avoid tables for large data; they force excessive line wrapping. Use
+lists, prose, or code blocks instead.
 
 ### Lists
 

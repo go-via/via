@@ -36,6 +36,7 @@ func hammer(tab func() (inc, dec func(*via.Ctx))) {
 }
 
 func TestStartCounter_publishesTheFinalCountLast(t *testing.T) {
+	// sequential: resets the demo counters every test in the package shares
 	demos.ResetAll()
 	moved, load := demos.StartStore()
 	sub := moved.Subscribe()
@@ -52,6 +53,7 @@ func TestStartCounter_publishesTheFinalCountLast(t *testing.T) {
 }
 
 func TestShared_publishesTheFinalCountLast(t *testing.T) {
+	// sequential: resets the demo counters every test in the package shares
 	demos.ResetAll()
 	moved, load := demos.SharedStore()
 	sub := moved.Subscribe()
@@ -68,6 +70,7 @@ func TestShared_publishesTheFinalCountLast(t *testing.T) {
 }
 
 func TestLivePresence_publishesTheFinalCountLast(t *testing.T) {
+	t.Parallel()
 	moved, load, add := demos.PresenceStore()
 	sub := moved.Subscribe()
 	defer sub.Stop()
@@ -82,6 +85,7 @@ func TestLivePresence_publishesTheFinalCountLast(t *testing.T) {
 }
 
 func TestTutorialChat_publishesTheFinalHeadCountLast(t *testing.T) {
+	t.Parallel()
 	moved, load, add := demos.ChatPresenceStore()
 	sub := moved.Subscribe()
 	defer sub.Stop()
@@ -96,6 +100,7 @@ func TestTutorialChat_publishesTheFinalHeadCountLast(t *testing.T) {
 }
 
 func TestResetAll_zeroesEveryCounter(t *testing.T) {
+	// sequential: resets the demo counters every test in the package shares
 	c := demos.NewStartCounter(allowAll{})
 	s := demos.NewShared(allowAll{})
 	l := demos.NewLandingCounter()

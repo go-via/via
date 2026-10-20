@@ -61,6 +61,46 @@ func TestEvent_wiresANamedEvent(t *testing.T) {
 	assert.Contains(t, page, `data-on:pointerdown="@post('`)
 }
 
+type wirePage struct {
+	wire func(func(*via.Ctx)) h.Attr
+	got  string
+}
+
+func (p *wirePage) Hit(ctx *via.Ctx) { p.got = "hit" }
+func (p *wirePage) View() h.H {
+	return h.Div(h.Button(p.wire(p.Hit)), h.P(h.Str(p.got)))
+}
+
+func TestNamedEvents_wireTheirDOMEventToAPostAction(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		want string
+		wire func(func(*via.Ctx)) h.Attr
+	}{
+		{"dblclick", `data-on:dblclick="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.DblClick(fn) }},
+		{"keydown", `data-on:keydown="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Keydown(fn) }},
+		{"keyup", `data-on:keyup="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Keyup(fn) }},
+		{"focus", `data-on:focus="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Focus(fn) }},
+		{"blur", `data-on:blur="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Blur(fn) }},
+		{"load", `data-on:load="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Load(fn) }},
+		{"mouseenter", `data-on:mouseenter="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.MouseEnter(fn) }},
+		{"mouseleave", `data-on:mouseleave="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.MouseLeave(fn) }},
+		{"scroll", `data-on:scroll__throttle.100ms="@post('`, func(fn func(*via.Ctx)) h.Attr { return on.Scroll(fn, on.WithThrottle(100*time.Millisecond)) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			app := vt.Serve(t, via.Handler(wirePage{wire: tt.wire}))
+			_, page := app.Get("/")
+			assert.Contains(t, page, tt.want)
+
+			_, body := app.Action(0).Fire()
+			assert.Contains(t, body, "<p>hit</p>")
+		})
+	}
+}
+
 type csPage struct{ attr h.Attr }
 
 func (p *csPage) View() h.H { return h.Div(p.attr) }

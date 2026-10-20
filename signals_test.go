@@ -582,7 +582,7 @@ func (f *dropForm) View() h.H {
 }
 
 func TestSignal_undecodableValueIsDroppedAndLogged(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	app := vt.Serve(t, via.Handler(dropForm{}))
 	_, page := app.Get("/")
 	slot := bindSlots(page)[0]
@@ -616,7 +616,7 @@ func (f *dropFormLive) View() h.H {
 }
 
 func TestSignal_undecodableValueIsLoggedOncePerConnection(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	app := vt.Serve(t, via.Handler(dropFormLive{}))
 	conn := app.Connect()
 	defer conn.Close()
@@ -652,7 +652,7 @@ func (f *dropFormWide) View() h.H {
 }
 
 func TestSignal_undecodableValuesAreLoggedOncePerRequest(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	app := vt.Serve(t, via.Handler(dropFormWide{}))
 	_, page := app.Get("/")
 	slots := bindSlots(page)[:4] // A, B, C, D — Bump stays well-formed

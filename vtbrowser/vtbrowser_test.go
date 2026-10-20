@@ -222,7 +222,7 @@ func TestOpen_aHungLaunchFailsBeforeTheTestDeadlineWithTheBrowserOutput(t *testi
 	case msg := <-stub.fatal:
 		assert.Contains(t, msg, "fake-chrome: still starting", "launch failure omits the browser output")
 	case <-time.After(15 * time.Second):
-		t.Fatal("launch still waiting: nothing bounds it by the test deadline")
+		require.Fail(t, "launch still waiting: nothing bounds it by the test deadline")
 	}
 }
 
@@ -235,6 +235,31 @@ func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
 	s.Eval(`!!document.getElementById('root')`, &hasRoot)
 	assert.True(t, hasRoot, "page is missing the #root morph target")
 	s.RequireCleanConsole()
+}
+
+// returning renders whether the request carried a session, so the cookie set
+// on one load shows only on the next.
+type returning struct{ known via.State[string] }
+
+type visit struct{}
+
+func (p *returning) OnInit(ctx *via.Ctx) error {
+	_, ok := ctx.Session().Get[visit]()
+	p.known.Set(strconv.FormatBool(ok))
+	ctx.Session().Put(visit{})
+	return nil
+}
+func (p *returning) View() h.H { return h.Div(h.P(h.Str("returning: "), p.known.Display())) }
+
+func TestReload_rendersAgainstTheCookieThePriorLoadSet(t *testing.T) {
+	t.Parallel()
+	app := via.Handler(returning{}, via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long")))
+	s := vtbrowser.Open(t, app)
+	require.Equal(t, "returning: false", s.Text("p"), "the first load has no cookie")
+
+	s.Reload()
+
+	assert.Equal(t, "returning: true", s.Text("p"), "Reload did not send the cookie the first load set")
 }
 
 func TestWaitFor_observesServerPushMorph(t *testing.T) {

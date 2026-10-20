@@ -99,35 +99,7 @@ func (x *Index) Find(q string, n int) []Hit {
 		if d.NoIndex && x.indexable > 0 {
 			continue
 		}
-		for i, s := range d.Sections {
-			w := d.sections[i]
-			heading := w.heading
-			if s.Heading == "" {
-				heading = d.title
-			}
-			score, all := 0, true
-			for _, t := range terms {
-				ts := field(heading, t, headingExact, headingPrefix) +
-					field(d.title, t, titleExact, titlePrefix) +
-					field(w.body, t, bodyExact, bodyPrefix)
-				if ts == 0 {
-					all = false
-					break
-				}
-				score += ts
-			}
-			if !all {
-				continue
-			}
-			href := d.Href
-			if s.Anchor != "" {
-				href += "#" + s.Anchor
-			}
-			found = append(found, scored{
-				hit:   Hit{Title: d.Title, Heading: s.Heading, Href: href, Snippet: snippet(s.Text, strings.ToLower(s.Text), terms)},
-				score: score,
-			})
-		}
+		found = append(found, d.match(terms)...)
 	}
 	slices.SortStableFunc(found, byScore)
 	if len(found) > n {
@@ -138,6 +110,47 @@ func (x *Index) Find(q string, n int) []Hit {
 		hits[i] = f.hit
 	}
 	return hits
+}
+
+// match scores each of d's sections that holds every term.
+func (d entry) match(terms []string) []scored {
+	var found []scored
+	for i, s := range d.Sections {
+		score, ok := d.score(s, d.sections[i], terms)
+		if !ok {
+			continue
+		}
+		found = append(found, scored{hit: d.hit(s, terms), score: score})
+	}
+	return found
+}
+
+// score sums, over the terms, the best of each field's score; a term that
+// matches nowhere fails the section.
+func (d entry) score(s Section, w sectionTokens, terms []string) (int, bool) {
+	heading := w.heading
+	if s.Heading == "" {
+		heading = d.title
+	}
+	total := 0
+	for _, t := range terms {
+		ts := field(heading, t, headingExact, headingPrefix) +
+			field(d.title, t, titleExact, titlePrefix) +
+			field(w.body, t, bodyExact, bodyPrefix)
+		if ts == 0 {
+			return 0, false
+		}
+		total += ts
+	}
+	return total, true
+}
+
+func (d entry) hit(s Section, terms []string) Hit {
+	href := d.Href
+	if s.Anchor != "" {
+		href += "#" + s.Anchor
+	}
+	return Hit{Title: d.Title, Heading: s.Heading, Href: href, Snippet: snippet(s.Text, strings.ToLower(s.Text), terms)}
 }
 
 type scored struct {
@@ -228,34 +241,10 @@ func snippet(text, lower string, words []string) string {
 	if len(rt) != len(rl) {
 		rl = rt
 	}
-	at := -1
-	for _, w := range words {
-		if i := runeIndex(rl, []rune(w)); i >= 0 && (at < 0 || i < at) {
-			at = i
-		}
-	}
 	if len(rt) <= snippetRunes {
 		return text
 	}
-	start := max(0, at-snippetRunes/3)
-	end := min(len(rt), start+snippetRunes)
-	start = max(0, end-snippetRunes)
-	// Widen the start and pull in the end to whitespace, so neither cuts a
-	// word; the end only moves forward when pulling it in would drop the match.
-	for start > 0 && !unicode.IsSpace(rt[start-1]) {
-		start--
-	}
-	if end < len(rt) && !unicode.IsSpace(rt[end]) {
-		e := end
-		for e > at && !unicode.IsSpace(rt[e]) {
-			e--
-		}
-		if e <= at {
-			for e = end; e < len(rt) && !unicode.IsSpace(rt[e]); e++ {
-			}
-		}
-		end = e
-	}
+	start, end := window(rt, firstMatch(rl, words))
 	out := strings.TrimSpace(string(rt[start:end]))
 	if start > 0 {
 		out = "…" + out
@@ -264,6 +253,47 @@ func snippet(text, lower string, words []string) string {
 		out += "…"
 	}
 	return out
+}
+
+// firstMatch is the rune offset of the earliest word in rl, or -1.
+func firstMatch(rl []rune, words []string) int {
+	at := -1
+	for _, w := range words {
+		if i := runeIndex(rl, []rune(w)); i >= 0 && (at < 0 || i < at) {
+			at = i
+		}
+	}
+	return at
+}
+
+// window is the snippetRunes of rt around the match at, widened at the start
+// to whitespace so it does not cut a word.
+func window(rt []rune, at int) (start, end int) {
+	start = max(0, at-snippetRunes/3)
+	end = min(len(rt), start+snippetRunes)
+	start = max(0, end-snippetRunes)
+	for start > 0 && !unicode.IsSpace(rt[start-1]) {
+		start--
+	}
+	return start, wordEnd(rt, end, at)
+}
+
+// wordEnd pulls end in to whitespace so it does not cut a word; it only moves
+// forward when pulling it in would drop the match.
+func wordEnd(rt []rune, end, at int) int {
+	if end >= len(rt) || unicode.IsSpace(rt[end]) {
+		return end
+	}
+	e := end
+	for e > at && !unicode.IsSpace(rt[e]) {
+		e--
+	}
+	if e > at {
+		return e
+	}
+	for e = end; e < len(rt) && !unicode.IsSpace(rt[e]); e++ {
+	}
+	return e
 }
 
 func runeIndex(s, sub []rune) int {

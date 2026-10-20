@@ -355,7 +355,7 @@ func (r *reTicker) beat(ctx *via.Ctx) {
 func (r *reTicker) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_tickCalledAfterConnectIsALoudNoOp(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
@@ -389,7 +389,7 @@ func (r *reListener) recv(ctx *via.Ctx, msg string) {
 func (r *reListener) View() h.H { return h.Div(r.last.Display()) }
 
 func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	room := topic.New[string]()
@@ -425,7 +425,7 @@ func (r *lateRegistrar) beat(ctx *via.Ctx) {
 func (r *lateRegistrar) View() h.H { return h.Div(r.n.Display()) }
 
 func TestLive_onConnectAndOnDisposeAfterConnectAreLoudNoOps(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	synctest.Test(t, func(t *testing.T) {
@@ -895,9 +895,7 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := srv.Client().Do(req)
-	if err != nil {
-		b.Fatal(err)
-	}
+	require.NoError(b, err)
 	defer resp.Body.Close()
 	go func() {
 		buf := make([]byte, 4096)
@@ -1005,9 +1003,7 @@ func BenchmarkListen_goroutinesPerConnection(b *testing.B) {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", nil)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		resp, err := srv.Client().Do(req)
-		if err != nil {
-			b.Fatal(err)
-		}
+		require.NoError(b, err)
 		go func() {
 			defer resp.Body.Close()
 			buf := make([]byte, 4096)
@@ -1286,7 +1282,7 @@ func (a *actionTicker) View() h.H {
 }
 
 func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	beats := &atomic.Int64{}
@@ -1329,7 +1325,7 @@ func (p *plainTicker) View() h.H {
 }
 
 func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	beats := &atomic.Int64{}

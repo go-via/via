@@ -38,7 +38,7 @@ func decode(t *testing.T, coding string, r io.Reader) string {
 	case "deflate":
 		dr = flate.NewReader(r)
 	default:
-		t.Fatalf("unexpected Content-Encoding %q", coding)
+		require.Failf(t, "unexpected Content-Encoding", "%q", coding)
 	}
 	b, err := io.ReadAll(dr)
 	require.NoError(t, err)
@@ -180,7 +180,7 @@ func TestSSECompression_eachFrameDecodesAsItArrives(t *testing.T) {
 	case line := <-got:
 		assert.Equal(t, "event: datastar-patch-signals", line)
 	case <-time.After(2 * time.Second):
-		t.Fatal("no frame decoded while the stream was open")
+		require.Fail(t, "no frame decoded while the stream was open")
 	}
 }
 

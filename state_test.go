@@ -225,7 +225,7 @@ func (p *lateLive) View() h.H {
 }
 
 func TestState_actionThatTurnsThePageLiveFails(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	app := via.Handler(lateLive{})
 	rec := httptest.NewRecorder()
 	rec.Body = &bytes.Buffer{}
@@ -472,7 +472,7 @@ func (w *trackLater) View() h.H {
 }
 
 func TestState_trackAfterOnInitIsIgnored(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	n := &atomic.Int64{}
@@ -517,7 +517,7 @@ func (w *trackFromAction) View() h.H {
 }
 
 func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
-	// Sequential: it captures the global log output.
+	// sequential: swaps the global log writer
 	buf := globalLog(t)
 
 	n := &atomic.Int64{}
@@ -672,6 +672,7 @@ func (p *sharedSeed) View() h.H {
 func seedItem(s string) h.H { return h.Str(s + ",") }
 
 func TestList_aTabsRemoveLeavesTheSeedOtherTabsGet(t *testing.T) {
+	t.Parallel()
 	app := vt.Serve(t, via.Handler(sharedSeed{Lit: via.ListOf("a", "b", "c")}))
 	conn := app.Connect()
 	status, _ := app.Action(0).Over(conn).Fire()

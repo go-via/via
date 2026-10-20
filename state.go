@@ -103,8 +103,8 @@ func (a stateSeed[T]) apply(handle unsafe.Pointer) any {
 //	type Page struct{ Chat Chat }
 //	p := Page{Chat: Chat{Room: via.StateOf("lobby")}}
 //
-// The stored value is unexported (see the Field-Embeddable Types convention),
-// so this constructor is the only way to write one outside a callback.
+// The stored value is unexported, so this constructor is the only way to
+// write one outside a callback.
 func StateOf[T any](v T) State[T] { return State[T]{val: v, lit: true} }
 
 // Get returns this connection's value. It is server-authoritative: nothing the

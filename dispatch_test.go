@@ -2425,6 +2425,7 @@ func (s *sessBoundLive) View() h.H {
 }
 
 func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
+	// sequential: swaps the global log writer
 	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}))
@@ -2534,6 +2535,7 @@ func (b *bumpLive) View() h.H {
 }
 
 func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
+	// sequential: swaps the global log writer
 	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(bumpLive{}, via.WithMaxSSEConn(1)))
@@ -2555,6 +2557,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 }
 
 func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
+	// sequential: swaps the global log writer
 	logs := globalLog(t)
 
 	app := vt.Serve(t, via.Handler(panicLive{}))
