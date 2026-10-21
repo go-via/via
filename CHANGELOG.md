@@ -2,7 +2,20 @@
 
 ## Unreleased
 
+### New
+
+- **`vtbrowser.OpenURL(t, url)`** drives the browser at a server the test owns,
+  such as one built with its own URL for `WithTrustedOrigin`, and loads `url`.
+  `Session.Restart` fails the test on such a session.
+
+- **`vtbrowser.Session.GoTo(path)`** loads a path on the session's server;
+  **`Session.SetViewport(width, height)`** resizes the tab's viewport, as often
+  as a test needs.
+
 ### Changed
+
+- `vtbrowser.Session.Reload` reloads the tab's current page. It used to go
+  back to the root.
 
 - `via.Option`, `via.MountOption` and `on.Option` are interfaces with an
   unexported method instead of `func` types. Code that passes, stores or

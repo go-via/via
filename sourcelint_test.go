@@ -2482,10 +2482,12 @@ type Conn struct{}
 func (*Session) Click(string)
 func (*Session) ConsoleErrors() []string
 func (*Session) Eval(string, any)
+func (*Session) GoTo(string)
 func (*Session) NewTab() *Session
 func (*Session) Reload()
 func (*Session) RequireCleanConsole()
 func (*Session) Restart(time.Duration, http.Handler)
+func (*Session) SetViewport(int, int)
 func (*Session) Sleep(time.Duration)
 func (*Session) Text(string) string
 func (*Session) Type(string, string)
@@ -2498,6 +2500,7 @@ func (*Session) WaitLoaded()
 func (*Session) WaitTextContains(string, string)
 func (*Session) WaitValue(string, string)
 func Open(testing.TB, http.Handler) *Session
+func OpenURL(testing.TB, string) *Session
 type Session struct{}
 `,
 }

@@ -157,15 +157,18 @@ func (p *Testing) View() h.H {
 		h.P(API("vtbrowser.Open"), h.Str(" starts an "), Code("httptest"), h.Str(" server for your handler, launches headless "+
 			"Chromium through chromedp, and loads the root. The test then runs against a live DOM with Datastar executing "+
 			"under via's CSP. Use it for what vt cannot see: a click reaching the handler, an SSE patch morphing the DOM, "+
-			"a bound input, focus surviving a patch, the reconnect banner.")),
+			"a bound input, focus surviving a patch, the reconnect banner. "), API("vtbrowser.OpenURL"),
+			h.Str(" drives a server the test started itself instead, for an app that needs its own URL before it is built.")),
 		table([]string{"Helper", "Does"},
 			[]h.H{h.Span(API("vtbrowser.Session.Click"), h.Str(", "), API("vtbrowser.Session.Type")), h.Str("A real mouse click; real key events, so binds and key handlers fire.")},
 			[]h.H{h.Span(API("vtbrowser.Session.WaitTextContains"), h.Str(", "), API("vtbrowser.Session.WaitValue"), h.Str(", "), API("vtbrowser.Session.WaitFor")), h.Str("Poll the DOM until it matches, for up to 20s. No sleeps.")},
 			[]h.H{API("vtbrowser.Session.WaitLiveConnected"), h.Str("Block until the tab's stream is open.")},
 			[]h.H{API("vtbrowser.Session.WaitBoundSignal"), h.Str("Block until the Datastar signal behind an input holds a value.")},
 			[]h.H{h.Span(API("vtbrowser.Session.Eval"), h.Str(", "), API("vtbrowser.Session.WaitEvalTrue")), h.Str("Run JavaScript for what the other helpers don't read.")},
+			[]h.H{h.Span(API("vtbrowser.Session.GoTo"), h.Str(", "), API("vtbrowser.Session.Reload")), h.Str("Load another path on the server; reload the current page.")},
+			[]h.H{API("vtbrowser.Session.SetViewport"), h.Str("Resize the tab, to check a layout at phone and desk widths.")},
 			[]h.H{API("vtbrowser.Session.NewTab"), h.Str("A second tab in the same browser: same cookies, its own stream.")},
-			[]h.H{API("vtbrowser.Session.Restart"), h.Str("Take the server down for a gap and bring a new handler up on the same port, like a deploy.")},
+			[]h.H{API("vtbrowser.Session.Restart"), h.Str("Take the server down for a gap and bring a new handler up on the same port, like a deploy. Open sessions only.")},
 			[]h.H{API("vtbrowser.Session.RequireCleanConsole"), h.Str("Fail on any console.error or uncaught exception. End every browser test with it.")},
 		),
 		h.P(Code("vtbrowser"), h.Str(" is its own Go module, so chromedp never enters the dependency graph of via or of your "+
@@ -174,8 +177,8 @@ func (p *Testing) View() h.H {
 			h.Str(" is a working set of examples.")),
 		snippet.Text("", "cd vtbrowser && VIA_CHROME=/usr/bin/chromium go test -race -tags browser ./...\n"+
 			"./ci.sh    # the whole gate; fails when no browser is found"),
-		h.P(API("vtbrowser.Open"), h.Str(" looks for chromium, chromium-browser, chrome, google-chrome, google-chrome-stable or headless-shell on "),
-			Code("PATH"), h.Str(", or uses "), Code("VIA_CHROME"), h.Str(", and skips the test when it finds none. "+
+		h.P(API("vtbrowser.Open"), h.Str(" and "), API("vtbrowser.OpenURL"), h.Str(" look for chromium, chromium-browser, chrome, google-chrome, google-chrome-stable or headless-shell on "),
+			Code("PATH"), h.Str(", or use "), Code("VIA_CHROME"), h.Str(", and skip the test when it finds none. "+
 				"In the via repo the browser tests carry "), Code("//go:build browser"), h.Str(", so plain "),
 			Code("go test ./..."), h.Str(" never starts Chromium; "), Code("ci.sh"),
 			h.Str(" runs them and fails when it finds no browser.")),

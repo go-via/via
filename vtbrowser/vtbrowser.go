@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 )
@@ -49,14 +51,15 @@ const launchMargin = 5 * time.Second
 
 var browserNames = []string{"chromium", "chromium-browser", "chrome", "google-chrome", "google-chrome-stable", "headless-shell"}
 
-// Session is a live headless-browser tab bound to an httptest server running the
-// handler. Every helper fails the test on error; browser and server shutdown are
-// registered with t.Cleanup.
+// Session is a live headless-browser tab bound to one server: the httptest
+// server Open starts, or the one a test passed to OpenURL. Every helper fails
+// the test on error; browser and server shutdown are registered with t.Cleanup.
 type Session struct {
 	t      testing.TB
-	ctx    context.Context // this tab's context
-	srv    *httptest.Server
-	browse context.Context // the browser context, for spawning sibling tabs
+	ctx    context.Context  // this tab's context
+	srv    *httptest.Server // nil for a session from OpenURL
+	base   string           // scheme://host:port that GoTo and NewTab resolve against
+	browse context.Context  // the browser context, for spawning sibling tabs
 
 	mu          sync.Mutex
 	consoleErrs []string
@@ -70,15 +73,29 @@ type Session struct {
 // browser's output.
 func Open(t testing.TB, handler http.Handler) *Session {
 	t.Helper()
-	exe := findBrowser()
-	if exe == "" {
-		t.Skipf("vtbrowser: no browser binary found (looked for %s; set VIA_CHROME to override)",
-			strings.Join(browserNames, ", "))
-	}
+	exe := browserOrSkip(t)
 
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
+	return launch(t, exe, srv, srv.URL, srv.URL+"/")
+}
 
+// OpenURL drives headless Chromium at a server the test owns, such as one whose
+// app needed its URL for WithTrustedOrigin, and loads rawURL. GoTo and NewTab
+// resolve against rawURL's origin, and Restart fails the test. The browser
+// lookup and launch bound are Open's.
+func OpenURL(t testing.TB, rawURL string) *Session {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		t.Fatalf("vtbrowser: OpenURL %q: want an absolute http(s) URL", rawURL)
+	}
+	exe := browserOrSkip(t)
+	return launch(t, exe, nil, u.Scheme+"://"+u.Host, rawURL)
+}
+
+func launch(t testing.TB, exe string, srv *httptest.Server, base, first string) *Session {
+	t.Helper()
 	// no-sandbox: runners commonly run as root, where Chrome's sandbox refuses
 	// to start. disable-dev-shm-usage: a small container /dev/shm crashes the
 	// renderer.
@@ -113,32 +130,32 @@ func Open(t testing.TB, handler http.Handler) *Session {
 		t.Fatalf("vtbrowser: start browser %s: %v", exe, err)
 	}
 
-	s := &Session{t: t, ctx: browse, srv: srv, browse: browse}
+	s := &Session{t: t, ctx: browse, srv: srv, base: base, browse: browse}
 	go s.collectConsole(chromedp.Console(browse))
 	s.watchStream()
-	s.navigate()
+	s.navigate(first)
 	return s
 }
 
-// NewTab opens a second tab in the same browser, pointed at the same server —
-// the way to drive multi-user behavior (fan-out, presence) where two live
-// connections must coexist.
+// NewTab opens a second tab in the same browser at the root of the same server,
+// at the default viewport size — the way to drive multi-user behavior
+// (fan-out, presence) where two live connections must coexist.
 func (s *Session) NewTab() *Session {
 	s.t.Helper()
 	ctx, cancel := chromedp.NewContext(s.browse)
 	s.t.Cleanup(cancel)
 	// Bind the new target to its long-lived context with an untimed Run, exactly
-	// as Open does for the first tab. The first Run on a context creates and
+	// as launch does for the first tab. The first Run on a context creates and
 	// binds its target; if that first Run were the per-op-timeout navigate
 	// below, cancelling that timeout child would tear the tab down the moment
 	// navigate returned — and every later op on it would hang.
 	if err := chromedp.Do(ctx); err != nil {
 		s.t.Fatalf("vtbrowser: open new tab: %v", err)
 	}
-	n := &Session{t: s.t, ctx: ctx, srv: s.srv, browse: s.browse}
+	n := &Session{t: s.t, ctx: ctx, srv: s.srv, base: s.base, browse: s.browse}
 	go n.collectConsole(chromedp.Console(ctx))
 	n.watchStream()
-	n.navigate()
+	n.navigate(s.base + "/")
 	return n
 }
 
@@ -160,20 +177,48 @@ func installStreamWatch(ctx context.Context, t *chromedp.Target) error {
 	return err
 }
 
-func (s *Session) navigate() {
+func (s *Session) navigate(to string) {
 	s.t.Helper()
-	s.run(fmt.Sprintf("navigate to %s/", s.srv.URL),
-		chromedp.Navigate(s.srv.URL+"/"),
+	s.run("navigate to "+to,
+		chromedp.Navigate(to),
 		chromedp.WaitReady(chromedp.CSS("body")),
 	)
 }
 
-// Reload re-navigates the tab to the app root — a fresh document load, so a
-// cookie set on the prior load (e.g. a session established in OnInit) is now
-// sent with the GET and the server can render against it.
+// GoTo loads path on the session's server and waits for the body. path must
+// start with "/"; anything else fails the test, so a typo can't send the tab
+// off-site.
+func (s *Session) GoTo(path string) {
+	s.t.Helper()
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") {
+		s.t.Fatalf("vtbrowser: GoTo %q: want a path starting with \"/\"", path)
+	}
+	s.navigate(s.base + path)
+}
+
+// Reload reloads the tab's current page — a fresh document load, so a cookie
+// set on the prior load (e.g. a session established in OnInit) is now sent with
+// the GET and the server can render against it.
 func (s *Session) Reload() {
 	s.t.Helper()
-	s.navigate()
+	s.run("reload", chromedp.Reload(), chromedp.WaitReady(chromedp.CSS("body")))
+}
+
+// SetViewport resizes this tab's layout viewport to width×height CSS pixels,
+// so media queries and window.innerWidth follow. Call it again to check another
+// width in the same session.
+func (s *Session) SetViewport(width, height int) {
+	s.t.Helper()
+	s.run(fmt.Sprintf("set viewport %dx%d", width, height),
+		chromedp.Func(viewport{width, height}.set))
+}
+
+type viewport struct{ width, height int }
+
+func (v viewport) set(ctx context.Context, t *chromedp.Target) error {
+	_, err := cdp.Call(ctx, t, emulation.SetDeviceMetricsOverride,
+		emulation.SetDeviceMetricsOverrideParams{Width: int64(v.width), Height: int64(v.height), DeviceScaleFactor: 1})
+	return err
 }
 
 // Restart is a deploy: it takes the app's server off the air, leaves it down
@@ -185,6 +230,9 @@ func (s *Session) Reload() {
 // httptest.Server, which would pick a new port and prove nothing.
 func (s *Session) Restart(gap time.Duration, handler http.Handler) {
 	s.t.Helper()
+	if s.srv == nil {
+		s.t.Fatalf("vtbrowser: Restart needs a session from Open; this one drives a server the test owns")
+	}
 	addr := s.srv.Listener.Addr().String()
 	// The browser keeps its HTTP/1.1 connections alive, and httptest.Server.Close
 	// waits for every one of them; a kept-alive socket the tab is not using
@@ -502,6 +550,16 @@ func (o *launchOutput) stop() string {
 	defer o.mu.Unlock()
 	o.stopped = true
 	return o.buf.String()
+}
+
+func browserOrSkip(t testing.TB) string {
+	t.Helper()
+	exe := findBrowser()
+	if exe == "" {
+		t.Skipf("vtbrowser: no browser binary found (looked for %s; set VIA_CHROME to override)",
+			strings.Join(browserNames, ", "))
+	}
+	return exe
 }
 
 func findBrowser() string {
