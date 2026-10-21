@@ -32,6 +32,11 @@
 
 ### Fixed
 
+- A live page's first stream connect carries its signals. The connect's
+  `@post` ran before Datastar applied any nested `data-signals`, so the body
+  held only `viatab` and the first push rendered every signal on the page as
+  its zero value: a filter the GET set from the query string went blank. The
+  body's `data-init` is now `data-init__delay.1ms`. (#174)
 - A live push whose signal changes include one value `encoding/json` cannot
   marshal ships the others and logs the one it drops, as a page render does; it
   dropped the whole signal patch without a word.
@@ -123,6 +128,9 @@
 
 ### Documented (behaviour unchanged)
 
+- `Ctx.Param`, `Ctx.Request`, `/live`, `/actions` and `/reference` say a live
+  unit's stream connect, like an action, carries none of the page's query, and
+  advise keeping page state in path params or the session (#175).
 - `/start`, the README, the counter example and tutorial steps 1 to 3 no
   longer call `r.Close()` after `ListenAndServe`, which Ctrl-C never reaches;
   `/start` points to the tutorial's step 4 for the Close-then-Shutdown order.

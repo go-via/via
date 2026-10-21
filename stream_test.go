@@ -521,7 +521,7 @@ func TestLivePage_serverRendersAndBootstrapsTheStream(t *testing.T) {
 	assert.Contains(t, body, `<div id="root"`)
 	assert.Contains(t, body, "beats: 0",
 		"State must render its zero value at first paint (before OnInit) without panicking")
-	assert.Contains(t, body, `data-init="@post('/_via/sse')"`, "page must bootstrap the SSE stream")
+	assert.Contains(t, body, `data-init__delay.1ms="@post('/_via/sse')"`, "page must bootstrap the SSE stream")
 }
 
 func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {

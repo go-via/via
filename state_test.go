@@ -42,7 +42,7 @@ func TestState_makesItsUnitLiveWithNoHook(t *testing.T) {
 
 	status, body := app.Get("/")
 	require.Equal(t, http.StatusOK, status)
-	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
+	assert.Contains(t, body, `data-init__delay.1ms="@post('/_via/sse')"`,
 		"a page whose View renders State must bootstrap the stream")
 
 	// Connect fails the test unless the stream answers with a tab id.

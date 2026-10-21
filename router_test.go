@@ -772,7 +772,7 @@ func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) 
 	srv := liveServer(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/job/7", "")
-	m := regexp.MustCompile(`data-init="@post\('([^']+)'\)"`).FindStringSubmatch(page)
+	m := regexp.MustCompile(`data-init__delay.1ms="@post\('([^']+)'\)"`).FindStringSubmatch(page)
 	require.NotNil(t, m, "a streaming page must bootstrap its stream:\n%s", page)
 	assert.Equal(t, "/job/7/_via/sse", m[1], "the advertised stream URL must be the concrete request path")
 
@@ -783,7 +783,7 @@ func TestMount_advertisesTheConcreteSSEURLUnderAParametrisedMount(t *testing.T) 
 }
 
 // slugPage is a live page under a param'd mount: it holds a Tick (so the page
-// gets the data-init="@post('…/_via/sse')" bootstrap), an action binding (so
+// gets the data-init__delay.1ms="@post('…/_via/sse')" bootstrap), an action binding (so
 // every data-on:@post URL carries the segment too), and a PostForm (so the
 // form action attribute does), and it echoes the raw segment through
 // Param[string] so the escaping can be proven not to corrupt the value.
@@ -817,7 +817,7 @@ func TestRouter_paramCannotBreakOutOfADatastarExpression(t *testing.T) {
 
 	_, page := do(t, srv, http.MethodGet, "/t/x%27%2Balert(1)%2B%27y", "")
 
-	assert.Contains(t, page, `data-init="@post('/t/x%27+alert%281%29+%27y/_via/sse')"`,
+	assert.Contains(t, page, `data-init__delay.1ms="@post('/t/x%27+alert%281%29+%27y/_via/sse')"`,
 		"the SSE bootstrap must carry the segment percent-encoded, inside one quoted literal")
 	assert.Regexp(t, `data-on:click="@post\('/t/x%27\+alert%281%29\+%27y/_via/a/r/[A-Za-z0-9_-]+'\)"`, page,
 		"every action URL must carry the segment percent-encoded")
@@ -832,7 +832,7 @@ func TestRouter_paramCannotBreakOutOfTheAttribute(t *testing.T) {
 
 	_, page := do(t, srv, http.MethodGet, `/t/a%22%20onload=alert(1)%20x=%22b`, "")
 
-	assert.Contains(t, page, `data-init="@post('/t/a%22%20onload=alert%281%29%20x=%22b/_via/sse')"`)
+	assert.Contains(t, page, `data-init__delay.1ms="@post('/t/a%22%20onload=alert%281%29%20x=%22b/_via/sse')"`)
 	assert.NotContains(t, page, `" onload=`, "an unescaped quote would graft a live attribute into <body>")
 }
 
@@ -841,11 +841,11 @@ func TestRouter_paramAmpersandAndTagAreEscaped(t *testing.T) {
 	srv := slugServer(t)
 
 	_, page := do(t, srv, http.MethodGet, `/t/a%26amp%3Bb`, "")
-	assert.Contains(t, page, `data-init="@post('/t/a&amp;amp%3Bb/_via/sse')"`,
+	assert.Contains(t, page, `data-init__delay.1ms="@post('/t/a&amp;amp%3Bb/_via/sse')"`,
 		"'&' must be HTML-escaped in the attribute; PathEscape leaves it alone")
 
 	_, page2 := do(t, srv, http.MethodGet, `/t/%3C%2Fscript%3E`, "")
-	assert.Contains(t, page2, `data-init="@post('/t/%3C%2Fscript%3E/_via/sse')"`)
+	assert.Contains(t, page2, `data-init__delay.1ms="@post('/t/%3C%2Fscript%3E/_via/sse')"`)
 	assert.NotContains(t, page2, "@post('/t/</script>", "no raw tag may reach an attribute from a segment")
 }
 
@@ -856,7 +856,7 @@ func TestRouter_nonASCIIParamRoundTrips(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/t/caf%C3%A9-%F0%9F%8E%89", "")
 
 	assert.Contains(t, page, "slug=[café-🎉]", "Param[string] must see the decoded segment")
-	assert.Contains(t, page, `data-init="@post('/t/caf%C3%A9-%F0%9F%8E%89/_via/sse')"`,
+	assert.Contains(t, page, `data-init__delay.1ms="@post('/t/caf%C3%A9-%F0%9F%8E%89/_via/sse')"`,
 		"the minted URL must be the percent-encoded form the mux decodes back")
 }
 

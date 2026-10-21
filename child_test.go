@@ -330,7 +330,7 @@ func TestChild_plainRootPatchLeavesLiveChildRegionAlone(t *testing.T) {
 func TestChild_parentWithLiveChildrenEmitsTheBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(duo{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-init="@post('/_via/sse')"`,
+	assert.Contains(t, body, `data-init__delay.1ms="@post('/_via/sse')"`,
 		"a parent with live children must bootstrap the stream")
 }
 

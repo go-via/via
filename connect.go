@@ -68,7 +68,8 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPus
 // connection must be the one a later Set writes through.
 //
 // Cost: two renders per push on any page carrying a Bind() — a real Datastar
-// connect body is the whole signal store, so lc.client holds every bindable
+// connect body is the whole signal store (writeHTMLPage delays the connect
+// until every data-signals is applied), so lc.client holds every bindable
 // slot from the first connect on. Each extra render re-runs every plain child's
 // OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
 func livePush(lc *tabStream, p *unitPusher) (*Ctx, []byte) {

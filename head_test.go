@@ -676,7 +676,7 @@ func (p *attrLivePage) View() h.H { return h.Div(p.v.Display()) }
 func TestPageMeta_bodyAttrsFollowTheStreamBootstrap(t *testing.T) {
 	t.Parallel()
 	_, body := metaBody(t, attrLivePage{})
-	assert.Regexp(t, `<body data-signals='[^']*' data-init="@post\('/_via/sse'\)" class="live">`, body)
+	assert.Regexp(t, `<body data-signals='[^']*' data-init__delay.1ms="@post\('/_via/sse'\)" class="live">`, body)
 }
 
 func TestErrorPage_carriesTheRoutersAttrs(t *testing.T) {
