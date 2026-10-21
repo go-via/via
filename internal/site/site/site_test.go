@@ -42,7 +42,7 @@ func get(t *testing.T, srv *httptest.Server, path string, hdr http.Header) (*htt
 	for k, v := range hdr {
 		req.Header[k] = v
 	}
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+	client := &http.Client{Transport: srv.Client().Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 	resp, err := client.Do(req)
@@ -177,7 +177,7 @@ func sessionCookie(t *testing.T, srv *httptest.Server) *http.Cookie {
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", srv.URL)
-	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+	client := &http.Client{Transport: srv.Client().Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}}
 	resp, err := client.Do(req)

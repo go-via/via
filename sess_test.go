@@ -101,12 +101,12 @@ func cookieValue(t *testing.T, c *http.Client, base, name string) string {
 // value, so a test can replay a stale session id the jar has already replaced.
 func greetWithRawCookie(t *testing.T, base, name, value string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 1), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "r", 1), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Cookie", name+"="+value)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -127,16 +127,31 @@ func actionPath(t *testing.T, c *http.Client, base string, child string, n int) 
 	return actionURL(t, string(b), child, n)
 }
 
+// ownTransport is a test's own copy of http.DefaultTransport. Every
+// httptest.Server.Close closes the shared one's idle connections, so one
+// parallel test's teardown broke another's request mid-flight.
+func ownTransport(t *testing.T) *http.Transport {
+	t.Helper()
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	t.Cleanup(tr.CloseIdleConnections)
+	return tr
+}
+
+func plainClient(t *testing.T) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: ownTransport(t)}
+}
+
+func noFollowClient(t *testing.T) *http.Client {
+	t.Helper()
+	return &http.Client{Transport: ownTransport(t), CheckRedirect: noFollow}
+}
+
 func jarClient(t *testing.T) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	// Its own transport: a nil Transport means http.DefaultTransport, shared with
-	// every other parallel test, so one test's server teardown closed this
-	// client's idle connections mid-request.
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	t.Cleanup(tr.CloseIdleConnections)
-	return &http.Client{Jar: jar, Transport: tr}
+	return &http.Client{Jar: jar, Transport: ownTransport(t)}
 }
 
 func fireAction(t *testing.T, c *http.Client, base string, n int) (int, string) {
@@ -315,11 +330,11 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 
 	// Fire the first session access on a raw request so we can read the
 	// Set-Cookie attributes the cookiejar would otherwise hide.
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, http.DefaultClient, base, "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -453,7 +468,7 @@ var testSessionKey = via.WithSessionKey([]byte("a-test-signing-key-32-bytes-long
 // caller can read the Set-Cookie attributes the jar hides.
 func firstActionSessionCookie(t *testing.T, base string, headers ...map[string]string) *http.Cookie {
 	t.Helper()
-	for _, ck := range sessionActionResponse(t, http.DefaultClient, base, 0, headers...).Cookies() {
+	for _, ck := range sessionActionResponse(t, plainClient(t), base, 0, headers...).Cookies() {
 		if ck.Name == "via_session" {
 			return ck
 		}
@@ -546,7 +561,7 @@ func TestSession_onInitPutEstablishesTheCookieOnTheStreamConnect(t *testing.T) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/_via/sse", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode, "the connect must open a stream, not answer 404 with the cookie")
@@ -645,11 +660,11 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, http.DefaultClient, srv.URL, "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, plainClient(t), srv.URL, "r", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	resp.Body.Close()
 
@@ -1079,7 +1094,7 @@ func auditServer(t *testing.T, opts ...via.Option) (base string, acts []string) 
 	srv := httptest.NewServer(via.Handler(auditPage{},
 		append([]via.Option{via.WithSessionKey([]byte(auditKey))}, opts...)...))
 	t.Cleanup(srv.Close)
-	resp, err := http.Get(srv.URL + "/")
+	resp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)
@@ -1115,7 +1130,7 @@ func auditPostAs(t *testing.T, base, act, cookie string) (*http.Response, string
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Cookie", "via_session="+cookie)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
@@ -1939,7 +1954,7 @@ func TestSession_streamThatSetsTheCookieIsNotStored(t *testing.T) {
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/_via/sse", nil)
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))

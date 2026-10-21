@@ -96,6 +96,11 @@ Rule:
 - All test helpers live in `_test.go` files.
 - Use setup helpers (e.g. `serveCounter(t)`) to reduce repetition,
   not `TestMain` unless truly necessary.
+- Send test requests through `srv.Client()` or a cloned transport
+  (`plainClient(t)`, `jarClient(t)` in the root package), never
+  `http.DefaultClient`, `http.Get` or a `Client` with no `Transport`. Every
+  `httptest.Server.Close` closes `http.DefaultTransport`'s idle connections,
+  so a parallel test's teardown breaks the request. A lint enforces it.
 
 ## Functional Options
 

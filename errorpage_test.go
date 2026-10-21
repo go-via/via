@@ -60,7 +60,7 @@ func errGet(t *testing.T, r *via.Router, path string) (*http.Response, string) {
 	t.Helper()
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
-	resp, err := http.Get(srv.URL + path)
+	resp, err := plainClient(t).Get(srv.URL + path)
 	require.NoError(t, err)
 	t.Cleanup(func() { resp.Body.Close() })
 	var b bytes.Buffer
@@ -166,7 +166,7 @@ func TestErrorPage_skipsDatastarActionResponse(t *testing.T) {
 
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/r/nope", strings.NewReader("{}"))
 	req.Header.Set("Datastar-Request", "true")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var b bytes.Buffer
@@ -188,7 +188,7 @@ func TestErrorPage_rendersOnNativeFormFailure(t *testing.T) {
 
 	// A native submit carries no Datastar-Request header; a non-multipart body
 	// is the shortest way to fail one, and the browser renders the answer.
-	resp, err := http.Post(srv.URL+"/_via/a/r/nope", "application/x-www-form-urlencoded", strings.NewReader("a=1"))
+	resp, err := plainClient(t).Post(srv.URL+"/_via/a/r/nope", "application/x-www-form-urlencoded", strings.NewReader("a=1"))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var b bytes.Buffer
@@ -521,9 +521,7 @@ func TestErrorPage_passesARedirectThroughUntouched(t *testing.T) {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	c := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
-		return http.ErrUseLastResponse
-	}}
+	c := noFollowClient(t)
 	resp, err := c.Get(srv.URL + "/secret")
 	require.NoError(t, err)
 	defer resp.Body.Close()

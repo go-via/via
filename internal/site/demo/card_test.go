@@ -42,7 +42,7 @@ func render(t *testing.T, mount func(*via.Router)) string {
 	srv := httptest.NewServer(app)
 	t.Cleanup(srv.Close)
 
-	resp, err := http.Get(srv.URL + "/")
+	resp, err := srv.Client().Get(srv.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)

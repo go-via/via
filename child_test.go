@@ -972,7 +972,7 @@ func (p *redirectHost) View() h.H { return h.Div(via.Child(p.Kid)) }
 func TestChild_childOnInitRedirectGatesThePage(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(redirectHost{}))
-	resp, err := (&http.Client{CheckRedirect: noFollow}).Get(srv.URL + "/")
+	resp, err := noFollowClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

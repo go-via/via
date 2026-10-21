@@ -141,7 +141,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 
 	req := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	// No cookie at all on this request — the stolen-tab-id, no-session attack.
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -167,14 +167,14 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
 	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie anywhere
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -231,7 +231,7 @@ func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.
 	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
 	defer cancel()
 	tab := awaitTabID(t, lines)
-	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
+	getResp, err := plainClient(t).Get(srv.URL + "/live")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
@@ -274,7 +274,7 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 	lines, cancel := openStreamAt(t, srv, "/live/_via/sse")
 	defer cancel()
 	tab := awaitTabID(t, lines)
-	getResp, err := http.DefaultClient.Get(srv.URL + "/live")
+	getResp, err := plainClient(t).Get(srv.URL + "/live")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
@@ -287,7 +287,7 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 	ownResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, ownResp.StatusCode)
 
-	bareResp, err := http.DefaultClient.Do(liveActionRequest(t, srv, string(page), tab, "r", 0)) // Bump, no cookie
+	bareResp, err := plainClient(t).Do(liveActionRequest(t, srv, string(page), tab, "r", 0)) // Bump, no cookie
 	require.NoError(t, err)
 	bareResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bareResp.StatusCode,
@@ -308,21 +308,21 @@ func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
 	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek, no cookie
-	peekResp, err := http.DefaultClient.Do(peekReq)
+	peekResp, err := plainClient(t).Do(peekReq)
 	require.NoError(t, err)
 	peekResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, peekResp.StatusCode, "Peek must run")
 	assert.Empty(t, peekResp.Header.Values("Set-Cookie"), "a Session().Get with no session must not mint one")
 
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, still no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
+	bumpResp, err := plainClient(t).Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, bumpResp.StatusCode,
@@ -359,20 +359,20 @@ func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispat
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
 	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
-	loginResp, err := http.DefaultClient.Do(loginReq)
+	loginResp, err := plainClient(t).Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	require.NotEmpty(t, loginResp.Header.Get("Set-Cookie"), "a live Login must still mint the session cookie")
 
 	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	bumpResp, err := http.DefaultClient.Do(bumpReq)
+	bumpResp, err := plainClient(t).Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bumpResp.StatusCode,
@@ -403,14 +403,14 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
 	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
@@ -429,25 +429,25 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	defer cancelB()
 	tabB := awaitTabID(t, linesB)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
 	loginReq := liveActionRequest(t, srv, string(page), tabA, "r", 1) // Login on A
-	loginResp, err := http.DefaultClient.Do(loginReq)
+	loginResp, err := plainClient(t).Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
 	bumpA := liveActionRequest(t, srv, string(page), tabA, "r", 0)
-	bumpAResp, err := http.DefaultClient.Do(bumpA)
+	bumpAResp, err := plainClient(t).Do(bumpA)
 	require.NoError(t, err)
 	bumpAResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bumpAResp.StatusCode, "the logged-in tab rejects a cookieless dispatch")
 
 	bumpB := liveActionRequest(t, srv, string(page), tabB, "r", 0)
-	bumpBResp, err := http.DefaultClient.Do(bumpB)
+	bumpBResp, err := plainClient(t).Do(bumpB)
 	require.NoError(t, err)
 	defer bumpBResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, bumpBResp.StatusCode,
@@ -493,7 +493,7 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 
 	staleReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
 	staleReq.AddCookie(&http.Cookie{Name: "via_session", Value: before})
-	staleResp, err := http.DefaultClient.Do(staleReq)
+	staleResp, err := plainClient(t).Do(staleReq)
 	require.NoError(t, err)
 	defer staleResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, staleResp.StatusCode,
@@ -535,7 +535,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	getResp, err := http.DefaultClient.Get(srv.URL + "/")
+	getResp, err := plainClient(t).Get(srv.URL + "/")
 	require.NoError(t, err)
 	page, err := io.ReadAll(getResp.Body)
 	require.NoError(t, err)
@@ -545,7 +545,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	loginDone := make(chan *http.Response, 1)
 	loginErr := make(chan error, 1)
 	go func() {
-		resp, err := http.DefaultClient.Do(loginReq)
+		resp, err := plainClient(t).Do(loginReq)
 		loginErr <- err
 		loginDone <- resp
 	}()
@@ -555,7 +555,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	bumpDone := make(chan *http.Response, 1)
 	bumpErr := make(chan error, 1)
 	go func() {
-		resp, err := http.DefaultClient.Do(bumpReq)
+		resp, err := plainClient(t).Do(bumpReq)
 		bumpErr <- err
 		bumpDone <- resp
 	}()
@@ -623,7 +623,7 @@ func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testi
 	getResp.Body.Close()
 
 	req := liveActionRequest(t, srv, string(page), tab, "0", 0) // Bump, no cookie at all
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
