@@ -9,7 +9,6 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
-	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -95,7 +94,7 @@ func TestRouter_cspIsStatelessAndKeyIndependent(t *testing.T) {
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
-	c := &http.Client{}
+	c := plainClient(t)
 	csp1 := cspOf(t, c, srv.URL+"/x")
 	assert.Equal(t, withoutNonce(csp1), withoutNonce(cspOf(t, c, srv.URL+"/x")),
 		"the policy must be stable across requests without any session")
@@ -113,7 +112,7 @@ func TestRouter_postActionRedirectNavigatesOnlySafeTargets(t *testing.T) {
 	via.Mount(r, "/x", redirectPage{})
 	srv := serve(t, r)
 
-	c := &http.Client{}
+	c := plainClient(t)
 	_, page := do(t, srv, http.MethodGet, "/x", "")
 
 	for i, target := range []string{"/dest", "javascript:alert(1)"} { // Go, Evil
@@ -145,8 +144,7 @@ func TestRouter_onInitLoadsSessionForRender(t *testing.T) {
 	r := via.NewRouter(testSessionKey)
 	via.Mount(r, "/p", profilePage{})
 	srv := serve(t, r)
-	jar, _ := cookiejar.New(nil)
-	c := &http.Client{Jar: jar}
+	c := jarClient(t)
 
 	page := jarGet(t, c, srv.URL+"/p")
 	assert.NotContains(t, page, "hi alice", "no session yet")
@@ -230,7 +228,7 @@ func TestPostForm_deliversMultipartFileToHandler(t *testing.T) {
 	assert.Contains(t, page, `enctype="multipart/form-data"`, "PostForm must always render a multipart form")
 	assert.Regexp(t, `action="/p/_via/a/r/[A-Za-z0-9_-]+"`, page, "posting to the form's own action endpoint")
 
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "me.png", "PNGBYTES")
+	resp := uploadPOST(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "me.png", "PNGBYTES")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "a Redirect in the handler must 303")
 	assert.Equal(t, "me.png", cap.name, "handler must receive the filename")
 	assert.Equal(t, "PNGBYTES", cap.body, "handler must receive the file bytes")
@@ -261,7 +259,7 @@ func TestPostForm_removesSpilledMultipartTempFilesAfterHandling(t *testing.T) {
 	before := multipartTempFiles(t)
 
 	big := strings.Repeat("x", 2<<20) // > maxActionBody (1 MiB): the part spills to a temp file
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "big.bin", big)
+	resp := uploadPOST(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "big.bin", big)
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
 
 	// The removal races the client observing the response (the server's own
@@ -280,7 +278,7 @@ func TestPostForm_rejectsOversizeUpload413(t *testing.T) {
 	srv := serve(t, r)
 
 	big := strings.Repeat("x", 9<<20) // > maxUploadBytes (8 MiB)
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/p/_via/a/r/0", "big.bin", big)
+	resp := uploadPOST(noFollowClient(t), t, srv.URL+"/p/_via/a/r/0", "big.bin", big)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
@@ -295,8 +293,6 @@ func (s *secret) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
-
-var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 	t.Parallel()
@@ -370,7 +366,7 @@ func TestRouter_onInitRedirectProtectsActionPost(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
-	resp, err := (&http.Client{CheckRedirect: noFollow}).Do(req)
+	resp, err := noFollowClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -394,7 +390,7 @@ func TestRouter_onInitRedirectRejectsUnsafeTarget(t *testing.T) {
 	via.Mount(r, "/secret", unsafeRedirectPage{})
 	srv := serve(t, r)
 
-	c := &http.Client{CheckRedirect: noFollow}
+	c := noFollowClient(t)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/secret", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := c.Do(req)
@@ -421,7 +417,7 @@ func TestRouter_onInitRedirectRefusesMailtoAndTel(t *testing.T) {
 			via.Mount(r, "/go", schemeRedirectPage{To: to})
 			srv := serve(t, r)
 
-			c := &http.Client{CheckRedirect: noFollow}
+			c := noFollowClient(t)
 			req, _ := http.NewRequest(http.MethodGet, srv.URL+"/go", nil)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			resp, err := c.Do(req)
@@ -448,7 +444,7 @@ func TestRouter_onInitParamMissWinsOverAQueuedRedirect(t *testing.T) {
 	via.Mount(r, "/thread/{id}", redirectThenMissPage{})
 	srv := serve(t, r)
 
-	c := &http.Client{CheckRedirect: noFollow}
+	c := noFollowClient(t)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/thread/abc", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := c.Do(req)
@@ -464,7 +460,7 @@ func TestRouter_onInitRedirectsWhenSessionAbsent(t *testing.T) {
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
-	c := &http.Client{CheckRedirect: noFollow}
+	c := noFollowClient(t)
 	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/secret", nil)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	resp, err := c.Do(req)
@@ -481,8 +477,8 @@ func TestRouter_onInitAllowsWhenSessionPresent(t *testing.T) {
 	via.Mount(r, "/secret", secret{})
 	srv := serve(t, r)
 
-	jar, _ := cookiejar.New(nil)
-	c := &http.Client{Jar: jar, CheckRedirect: noFollow}
+	c := jarClient(t)
+	c.CheckRedirect = noFollow
 	loginPage := jarGet(t, c, srv.URL+"/login")
 	postForm(c, t, srv.URL+actionURL(t, loginPage, "r", 0), "name", "alice") // sets acct in the session
 	assert.Contains(t, jarGet(t, c, srv.URL+"/secret"), "secret area",
@@ -537,7 +533,7 @@ func TestRouter_postFormRunsHandlerAndRedirects(t *testing.T) {
 	assert.Regexp(t, `<form method="post" enctype="multipart/form-data" action="/login/_via/a/r/[A-Za-z0-9_-]+"`, page,
 		"PostForm must render a native multipart form posting to the form endpoint")
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
+	resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "via.Redirect must 303")
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 	assert.Contains(t, resp.Header.Get("Set-Cookie"), "via_session",
@@ -557,7 +553,7 @@ func TestRouter_postFormRejectsCrossSiteOrigin(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/login/_via/a/r/0", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
@@ -571,7 +567,7 @@ func TestRouter_postFormUnknownActionIsGone(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/login", "")
 	url := swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz")
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+url, "name", "alice")
+	resp := postForm(noFollowClient(t), t, srv.URL+url, "name", "alice")
 	assert.Equal(t, http.StatusGone, resp.StatusCode)
 }
 
@@ -581,7 +577,7 @@ func TestRouter_postFormCapsBody(t *testing.T) {
 	via.Mount(r, "/login", loginForm{})
 	srv := serve(t, r)
 
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+"/login/_via/a/r/0", "name", strings.Repeat("x", 9<<20))
+	resp := postForm(noFollowClient(t), t, srv.URL+"/login/_via/a/r/0", "name", strings.Repeat("x", 9<<20))
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
@@ -592,7 +588,7 @@ func TestRouter_postFormWithoutRedirectReRenders(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "") // empty → no redirect
+	resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "") // empty → no redirect
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	b, _ := io.ReadAll(resp.Body)
 	assert.Contains(t, string(b), `<form method="post"`, "no-redirect form post must re-render the page")
@@ -605,7 +601,7 @@ func TestRouter_postFormRejectsUnsafeRedirectScheme(t *testing.T) {
 	srv := serve(t, r)
 
 	_, page := do(t, srv, http.MethodGet, "/login", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
+	resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 	assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode,
 		"an unsafe redirect target must not be shipped as a Location header")
 	assert.Empty(t, resp.Header.Get("Location"), "no Location header for a rejected redirect")
@@ -735,7 +731,7 @@ func TestHandler_isMountAtRootOneDispatchPipeline(t *testing.T) {
 	srv := serve(t, via.Handler(loginForm{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
+	resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "alice")
 	assert.Equal(t, http.StatusSeeOther, resp.StatusCode, "Handler must serve the form transport like any mount")
 	assert.Equal(t, "/welcome", resp.Header.Get("Location"))
 }
@@ -1016,7 +1012,7 @@ func TestLive_streamRunsOnInitRedirect(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, srv.URL+"/secret/_via/sse", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	resp, err := (&http.Client{CheckRedirect: noFollow}).Do(req)
+	resp, err := noFollowClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 

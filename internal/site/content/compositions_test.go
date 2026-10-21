@@ -57,7 +57,7 @@ func newBrowser(t *testing.T) *browser {
 	t.Cleanup(srv.Close)
 	jar, err := cookiejar.New(nil)
 	require.NoError(t, err)
-	return &browser{t: t, srv: srv, client: &http.Client{Jar: jar}}
+	return &browser{t: t, srv: srv, client: &http.Client{Jar: jar, Transport: srv.Client().Transport}}
 }
 
 func TestShiftBroken_answersGoneOnceTheBannerIsDismissed(t *testing.T) {

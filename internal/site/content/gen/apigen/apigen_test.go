@@ -100,7 +100,7 @@ func TestReference_hasARowForEverySymbol(t *testing.T) {
 	t.Cleanup(app.Close)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	resp, err := http.Get(srv.URL + "/reference")
+	resp, err := srv.Client().Get(srv.URL + "/reference")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)

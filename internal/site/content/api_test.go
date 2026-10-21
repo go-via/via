@@ -46,7 +46,7 @@ func requireLinked(t *testing.T, at map[string]string) {
 	}
 	srv := httptest.NewServer(via.Handler(linkPage{body: body}))
 	t.Cleanup(srv.Close)
-	resp, err := http.Get(srv.URL + "/")
+	resp, err := srv.Client().Get(srv.URL + "/")
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)

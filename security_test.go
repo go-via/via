@@ -482,7 +482,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(loginForm{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(&http.Client{CheckRedirect: noFollow}, t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
+		resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
 		assert.Empty(t, resp.Header.Get("Location"))
 	})
@@ -553,7 +553,7 @@ func TestRedirect_followsOnlyOnSiteTargets(t *testing.T) {
 
 func TestRedirect_dropsAnOffSiteTargetOnEveryTransport(t *testing.T) {
 	t.Parallel()
-	client := &http.Client{CheckRedirect: noFollow}
+	client := noFollowClient(t)
 
 	t.Run("native form", func(t *testing.T) {
 		t.Parallel()
@@ -578,7 +578,7 @@ func TestRedirect_dropsAnOffSiteTargetOnEveryTransport(t *testing.T) {
 func TestRedirectExternal_leavesTheSiteOnEveryTransport(t *testing.T) {
 	t.Parallel()
 	const target = "https://pay.example/checkout?o=1"
-	client := &http.Client{CheckRedirect: noFollow}
+	client := noFollowClient(t)
 
 	t.Run("native form", func(t *testing.T) {
 		t.Parallel()
@@ -883,7 +883,7 @@ func TestWithMaxUpload_refusesAMultipartBodyOverTheCap(t *testing.T) {
 	via.Mount(r, "/p", avatarPage{cap: &capture{}})
 	srv := serve(t, r)
 
-	resp := uploadPOST(&http.Client{CheckRedirect: noFollow}, t,
+	resp := uploadPOST(noFollowClient(t), t,
 		srv.URL+"/p/_via/a/r/0", "big.bin", strings.Repeat("x", 4096))
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)

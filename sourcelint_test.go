@@ -1037,6 +1037,105 @@ func rawFailures(root string) ([]string, error) {
 	return out, err
 }
 
+func TestTests_sendThroughTheirOwnTransport(t *testing.T) {
+	t.Parallel()
+	got, err := sharedTransports(".")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestSharedTransportLint_flagsWhatReachesHTTPDefaultTransport(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeTree(t, root, map[string]string{"p/p_test.go": `package p_test
+
+import (
+	nh "net/http"
+	"net/http/httptest"
+)
+
+func get(srv *httptest.Server) {
+	nh.Get(srv.URL)
+	nh.DefaultClient.Do(nil)
+	_ = &nh.Client{CheckRedirect: nil}
+	nh.DefaultTransport.RoundTrip(nil)
+	_ = nh.DefaultTransport.(*nh.Transport).Clone()
+	_ = &nh.Client{Transport: srv.Client().Transport}
+	srv.Client().Get(srv.URL)
+}`})
+	got, err := sharedTransports(root)
+	require.NoError(t, err)
+	const fix = ": sends through http.DefaultTransport, whose idle connections every httptest.Server.Close closes; use srv.Client() or a cloned transport"
+	file := filepath.Join("p", "p_test.go")
+	assert.Equal(t, []string{file + ":9:2: nh.Get" + fix, file + ":10:2: nh.DefaultClient" + fix, file + ":11:7: nh.Client{}" + fix, file + ":12:2: nh.DefaultTransport" + fix}, got)
+}
+
+// sharedTransports lists test code that sends through http.DefaultTransport:
+// DefaultClient, the package-level Get and kin, a Client with no Transport,
+// and DefaultTransport itself unless it is being cloned.
+func sharedTransports(root string) ([]string, error) {
+	files, err := parseFiles(root, true)
+	var out []string
+	for _, f := range files {
+		pkg := importName(f.File, "net/http")
+		if pkg == "" {
+			continue
+		}
+		cloned := map[ast.Node]bool{}
+		ast.Inspect(f.File, func(n ast.Node) bool {
+			if ta, ok := n.(*ast.TypeAssertExpr); ok {
+				cloned[ta.X] = true
+			}
+			name := ""
+			switch n := n.(type) {
+			case *ast.SelectorExpr:
+				if x, ok := n.X.(*ast.Ident); ok && x.Name == pkg && !cloned[n] {
+					switch n.Sel.Name {
+					case "DefaultClient", "DefaultTransport", "Get", "Post", "Head", "PostForm":
+						name = pkg + "." + n.Sel.Name
+					}
+				}
+			case *ast.CompositeLit:
+				if sel, ok := n.Type.(*ast.SelectorExpr); ok && sel.Sel.Name == "Client" && !hasKey(n, "Transport") {
+					if x, ok := sel.X.(*ast.Ident); ok && x.Name == pkg {
+						name = pkg + ".Client{}"
+					}
+				}
+			}
+			if name != "" {
+				out = append(out, f.at(n)+": "+name+": sends through http.DefaultTransport, whose idle connections every httptest.Server.Close closes; use srv.Client() or a cloned transport")
+			}
+			return true
+		})
+	}
+	return out, err
+}
+
+// importName is the name f refers to path by, or "" when f does not import it.
+func importName(f *ast.File, path string) string {
+	for _, imp := range f.Imports {
+		if strings.Trim(imp.Path.Value, `"`) != path {
+			continue
+		}
+		if imp.Name != nil {
+			return imp.Name.Name
+		}
+		return filepath.Base(path)
+	}
+	return ""
+}
+
+func hasKey(lit *ast.CompositeLit, key string) bool {
+	return slices.ContainsFunc(lit.Elts, func(e ast.Expr) bool {
+		kv, ok := e.(*ast.KeyValueExpr)
+		if !ok {
+			return false
+		}
+		id, ok := kv.Key.(*ast.Ident)
+		return ok && id.Name == key
+	})
+}
+
 func TestTests_runInParallelOrSayWhyNot(t *testing.T) {
 	t.Parallel()
 	got, err := sequentialTests(".")
