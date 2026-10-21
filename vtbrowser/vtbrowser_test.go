@@ -190,7 +190,7 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 }
 
 // deadlineTB reports a chosen test deadline and turns Fatal into a message on
-// fatal, so a test can watch Open fail without failing itself.
+// fatal, so a test can watch a helper fail without failing itself.
 type deadlineTB struct {
 	testing.TB
 	deadline time.Time
@@ -209,6 +209,17 @@ func (d deadlineTB) Fatalf(format string, args ...any) {
 	runtime.Goexit()
 }
 
+func awaitFatal(t *testing.T, d deadlineTB, within time.Duration, why string) string {
+	t.Helper()
+	select {
+	case msg := <-d.fatal:
+		return msg
+	case <-time.After(within):
+		require.Fail(t, why)
+		return ""
+	}
+}
+
 func TestOpen_aHungLaunchFailsBeforeTheTestDeadlineWithTheBrowserOutput(t *testing.T) {
 	fake := filepath.Join(t.TempDir(), "fake-chrome")
 	script := "#!/bin/sh\necho 'fake-chrome: still starting' >&2\nexec sleep 600\n"
@@ -218,12 +229,8 @@ func TestOpen_aHungLaunchFailsBeforeTheTestDeadlineWithTheBrowserOutput(t *testi
 	stub := deadlineTB{TB: t, deadline: time.Now().Add(7 * time.Second), fatal: make(chan string, 1)}
 	go vtbrowser.Open(stub, http.NotFoundHandler())
 
-	select {
-	case msg := <-stub.fatal:
-		assert.Contains(t, msg, "fake-chrome: still starting", "launch failure omits the browser output")
-	case <-time.After(15 * time.Second):
-		require.Fail(t, "launch still waiting: nothing bounds it by the test deadline")
-	}
+	msg := awaitFatal(t, stub, 15*time.Second, "launch still waiting: nothing bounds it by the test deadline")
+	assert.Contains(t, msg, "fake-chrome: still starting", "launch failure omits the browser output")
 }
 
 func TestOpen_servesSkeletonAndRunsDatastarCleanly(t *testing.T) {
@@ -1208,4 +1215,102 @@ func TestConsole_errorsAndUncaughtExceptionsAreCollected(t *testing.T) {
 	assert.Contains(t, errs, "console.error: boom")
 	assert.Contains(t, errs, "uncaught exception: ")
 	assert.Contains(t, errs, "kaboom")
+}
+
+type homePage struct{}
+
+func (homePage) View() h.H { return h.Div(h.P(h.Str("home"))) }
+
+type invitePage struct{}
+
+func (invitePage) View() h.H { return h.Div(h.P(h.Str("invite"))) }
+
+func twoPages() *via.Router {
+	r := via.NewRouter()
+	via.Mount(r, "/", homePage{})
+	via.Mount(r, "/invite", invitePage{})
+	return r
+}
+
+func TestSetViewport_resizesTheLayoutEachCall(t *testing.T) {
+	t.Parallel()
+	s := vtbrowser.Open(t, via.Handler(homePage{}))
+
+	for _, width := range []int{390, 1280} {
+		s.SetViewport(width, 800)
+		var got int
+		s.Eval(`window.innerWidth`, &got)
+		assert.Equal(t, width, got, "layout width after SetViewport(%d, 800)", width)
+	}
+}
+
+func TestGoTo_loadsAPathOnTheSessionServer(t *testing.T) {
+	t.Parallel()
+	s := vtbrowser.Open(t, twoPages())
+
+	s.GoTo("/invite")
+
+	assert.Equal(t, "invite", s.Text("p"))
+}
+
+func TestReload_staysOnThePageGoToLoaded(t *testing.T) {
+	t.Parallel()
+	s := vtbrowser.Open(t, twoPages())
+	s.GoTo("/invite")
+
+	s.Reload()
+
+	assert.Equal(t, "invite", s.Text("p"), "Reload went back to the root")
+}
+
+func TestOpenURL_drivesATestOwnedServerFromTheGivenPage(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(twoPages())
+	t.Cleanup(srv.Close)
+
+	s := vtbrowser.OpenURL(t, srv.URL+"/invite")
+	require.Equal(t, "invite", s.Text("p"), "OpenURL did not load the given page")
+
+	s.GoTo("/")
+	assert.Equal(t, "home", s.Text("p"), "GoTo did not resolve against the URL's origin")
+	assert.Equal(t, "home", s.NewTab().Text("p"), "NewTab did not open the origin's root")
+}
+
+func TestGoTo_refusesAnythingButAPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"absolute URL", "https://example.com/"},
+		{"protocol-relative URL", "//example.com/"},
+		{"relative path", "invite"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			stub := deadlineTB{TB: t, deadline: time.Now().Add(time.Minute), fatal: make(chan string, 1)}
+			go func() {
+				s := vtbrowser.Open(stub, via.Handler(homePage{}))
+				s.GoTo(tt.path)
+			}()
+
+			msg := awaitFatal(t, stub, 30*time.Second, "GoTo accepted "+tt.path)
+			assert.Contains(t, msg, fmt.Sprintf("GoTo %q", tt.path))
+		})
+	}
+}
+
+func TestRestart_failsOnASessionFromOpenURL(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(via.Handler(homePage{}))
+	t.Cleanup(srv.Close)
+	stub := deadlineTB{TB: t, deadline: time.Now().Add(time.Minute), fatal: make(chan string, 1)}
+	go func() {
+		s := vtbrowser.OpenURL(stub, srv.URL)
+		s.Restart(0, via.Handler(homePage{}))
+	}()
+
+	msg := awaitFatal(t, stub, 30*time.Second, "Restart ran on a server the test owns")
+	assert.Contains(t, msg, "Restart needs a session from Open")
 }
