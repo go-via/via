@@ -648,10 +648,13 @@ func (m *mount) writeHTMLPage(w http.ResponseWriter, body []byte, base string, t
 	if hasLive {
 		// data-signals first: Datastar applies an element's attributes in
 		// document order, and a data-init ahead of it would post the connect
-		// body before the id is in the store. Attribute-escaped here,
+		// body before the id is in the store. The delay covers the same walk
+		// one level down: it reaches <body> before any nested data-signals,
+		// and an undelayed @post snapshots the store there, sending viatab
+		// alone. Attribute-escaped here,
 		// path-escaped in concreteBase — both layers are needed; see
 		// concreteBase.
-		bodyOpen += ` data-init="@post('` + render.EscapeString(base+streamRoute) + `')"`
+		bodyOpen += ` data-init__delay.1ms="@post('` + render.EscapeString(base+streamRoute) + `')"`
 	}
 	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))
 	bodyOpen += attrString(mergeAttrs(m.cfg.head.BodyAttrs, pageAttrs(m.cfg.log, root, "BodyAttrs", meta.BodyAttrs))) + ">"

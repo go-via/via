@@ -1314,3 +1314,54 @@ func TestRestart_failsOnASessionFromOpenURL(t *testing.T) {
 	msg := awaitFatal(t, stub, 30*time.Second, "Restart ran on a server the test owns")
 	assert.Contains(t, msg, "Restart needs a session from Open")
 }
+
+// fBoard keeps a filter the GET took from its query string in a bound signal;
+// a ping push re-renders it from whatever the connect body carried.
+type fBoard struct {
+	ping   *topic.Topic[int]
+	Filter via.Signal[string]
+	pings  via.State[int]
+}
+
+func (b *fBoard) OnInit(ctx *via.Ctx) error {
+	if req := ctx.Request(); req.Method == http.MethodGet {
+		b.Filter.Set(req.URL.Query().Get("f"))
+	}
+	ctx.Listen(b.ping, func(_ *via.Ctx, n int) { b.pings.Set(n) })
+	return nil
+}
+func (b *fBoard) View() h.H {
+	return h.Div(h.Input(b.Filter.Bind()),
+		h.P(h.ID("filter"), h.Str("filter="+b.Filter.Get())),
+		h.P(h.ID("pings"), h.Str("pings="), b.pings.Display()))
+}
+
+type fPage struct{ Board fBoard }
+
+func (p *fPage) View() h.H { return h.Div(via.Child(p.Board)) }
+
+func TestSignal_serverSetFilterSurvivesTheFirstPush(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		handler func(*topic.Topic[int]) http.Handler
+	}{
+		{"live root", func(p *topic.Topic[int]) http.Handler { return via.Handler(fBoard{ping: p}) }},
+		{"live child", func(p *topic.Topic[int]) http.Handler { return via.Handler(fPage{Board: fBoard{ping: p}}) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ping := topic.New[int]()
+			s := vtbrowser.Open(t, tt.handler(ping))
+			s.GoTo("/?f=x")
+			s.WaitLiveConnected()
+
+			ping.Publish(1)
+
+			s.WaitTextContains("#pings", "pings=1")
+			assert.Equal(t, "filter=x", s.Text("#filter"), "the connect body lacked the nested signal")
+			s.RequireCleanConsole()
+		})
+	}
+}

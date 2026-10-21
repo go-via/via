@@ -196,6 +196,9 @@ func (p *Live) View() h.H {
 			[]h.H{h.Str("Too many streams"), h.Span(h.Str("A connect past "), API("via.WithMaxSSEConn"), h.Str(" (10,000 by default) answers 503. "+
 				"So does an action once as many actions, at most 1024, are already waiting for their streams."))},
 		),
+		h.P(h.Str("On a connect, OnInit's request is the stream's POST to {mount}/_via/sse, not the page's GET: "),
+			API("via.Ctx.Param"), h.Str(" reads the same path params and the page's signals arrive in the body, but the page's query string does not. "+
+				"Keep a filter, sort or page number in a path param or the session.")),
 		h.P(h.Str("A reconnect is a new connection: OnInit runs again and State starts from what it sets. After a "+
 			"server restart nothing of the old process remains, so a tab gets back whatever your stores and the "+
 			"session hold. Automatic reloads are capped per episode, and probing stops after about two and a half "+

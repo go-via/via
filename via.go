@@ -612,6 +612,10 @@ type Ctx struct {
 // cookies, URL, RemoteAddr, TLS. Nil when no request is in scope (a bare
 // render).
 //
+// Its query string is the page's only on the GET: actions and a live unit's
+// stream connect post to via's own URLs. Don't keep page state in the query;
+// see [Ctx.Param].
+//
 // Read-only: the body is already consumed into the request's signals. A live
 // action runs on the stream goroutine while the POST waits for it, and keeps
 // running if the client hangs up, so the request's Context may end mid-action.
@@ -880,7 +884,8 @@ type paramMiss struct {
 // the unfiltered page: a row that only exists under the filter binds no action
 // in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
 // therefore the page's on the GET; on an action it holds only via's own a and
-// u keys.
+// u keys. A live unit's OnInit on the stream connect sees no query either: the
+// connect POSTs to {mount}/_via/sse.
 //
 // So a page's list state — filter, page number, sort, tab — belongs in path
 // params or in the session, never in the query string:
