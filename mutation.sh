@@ -40,10 +40,10 @@ rc=0
 "$out/gomutants" "${flags[@]}" ./... || rc=$?
 
 # The threshold is skipped when nothing was judged, so a run where every
-# mutant timed out would pass.
+# mutant timed out would pass. The report can leave out a zero count.
 if [ "$rc" -eq 0 ] && [ -s "$json" ] &&
-	[ "$(jq '.mutants_killed + .mutants_lived' "$json")" -eq 0 ] &&
-	[ "$(jq '.mutants_timed_out' "$json")" -gt 0 ]; then
+	[ "$(jq '(.mutants_killed // 0) + (.mutants_lived // 0)' "$json")" -eq 0 ] &&
+	[ "$(jq '.mutants_timed_out // 0' "$json")" -gt 0 ]; then
 	echo "mutation.sh: every mutant timed out, so none was judged" >&2
 	exit 1
 fi
