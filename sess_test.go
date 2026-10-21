@@ -142,6 +142,8 @@ func plainClient(t *testing.T) *http.Client {
 	return &http.Client{Transport: ownTransport(t)}
 }
 
+var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 func noFollowClient(t *testing.T) *http.Client {
 	t.Helper()
 	return &http.Client{Transport: ownTransport(t), CheckRedirect: noFollow}

@@ -294,8 +294,6 @@ func (s *secret) OnInit(ctx *via.Ctx) error {
 }
 func (s *secret) View() h.H { return h.Div(h.Str("secret area")) }
 
-var noFollow = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-
 func TestRouter_paramByNameMatchesServeMux(t *testing.T) {
 	t.Parallel()
 	r := via.NewRouter()
