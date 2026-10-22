@@ -20,17 +20,21 @@ trap 'rm -rf "$out"' EXIT
 json="$out/root.json"
 
 # Built, not go run: go run reports the tool's exit 10 (under the floor) as 1.
-GOBIN="$out" $GO install github.com/gomutants/gomutants@v0.7.0
+GOBIN="$out" $GO install github.com/gomutants/gomutants@v0.7.2
 
 # --integration runs the tests of every package that imports the mutated one;
 # without it a package counts only its own tests. --cache=off keeps
 # .gomutants-cache.json out of the tree. --detect-equivalent drops mutants the
 # compiler folds away, which no test can kill; a mutant it misses gets a
 # "// gomutants:disable-next-line <MUTATOR> reason=..." line. The 2s default
-# timeout floor times mutants out on a loaded machine. Each run of via's suite
-# leaves hundreds of loopback sockets in TIME_WAIT; at 20 workers they exhaust
-# the ephemeral ports, httptest cannot listen, and gomutants reads that as tests
-# that fail together. 4 workers stay clear and match a GitHub runner's CPUs.
+# timeout floor times mutants out on a loaded machine. 4 workers match a GitHub
+# runner's CPUs. A 20-worker run has failed via's tests together. In a
+# standalone repro ephemeral ports never ran out; a full nf_conntrack table
+# stalled connects instead, at 4 workers as at 20.
+#
+# GOMUTANTS_TEST_SHORT=1 passes -short, which skips the deadcode lint; see
+# TestSources_holdNoDeadCode for why.
+export GOMUTANTS_TEST_SHORT=1
 flags=(--integration --cache=off --detect-equivalent --timeout-min 30s --workers 4
 	--changed-since "$1" --threshold-efficacy "$floor" -o "$json")
 if [ -n "${GITHUB_ACTIONS:-}" ]; then
