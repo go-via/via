@@ -211,7 +211,7 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.WithMaxBody"), h.Str("1 MiB"), h.Span(h.Str("An action POST body, and how much of a form submit's file parts stays in memory. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxUpload"), h.Str("8 MiB"), h.Span(h.Str("A PostForm submit's whole multipart body; file parts past WithMaxBody spill to a temp file, and text fields stay in RAM up to WithMaxBody plus 10 MiB. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxSSEConn"), h.Str("10000"), h.Span(h.Str("Open live streams across the Router. "), Code("503 stream capacity reached"), h.Str("."))},
-			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, "), Code("410"), h.Str("."))},
+			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, then "), Code("410"), h.Str(" for a live unit's action (a plain unit's runs)."))},
 		),
 		h.P(h.Str("The stream cap is router-wide, with no per-client share: one client can hold all of it. Set it to what the "+
 			"machine has memory for, since each stream holds a goroutine and a composition tree for the tab's life. A per-client "+
