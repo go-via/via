@@ -4,6 +4,12 @@
 
 ### New
 
+- **`Meta.Lang`** sets a page's `<html lang>`, overriding `Head.Lang`, so the
+  language can follow the signed-in person without a router per language.
+  Empty keeps `Head.Lang`; error pages always use it. A literal that is not a
+  language tag panics at Mount; one produced by request data is dropped and
+  logged, and the page gets `Head.Lang` (#176).
+
 - **`vtbrowser.OpenURL(t, url)`** drives the browser at a server the test owns,
   such as one built with its own URL for `WithTrustedOrigin`, and loads `url`.
   `Session.Restart` fails the test on such a session.
