@@ -141,6 +141,11 @@
   longer call `r.Close()` after `ListenAndServe`, which Ctrl-C never reaches;
   `/start` points to the tutorial's step 4 for the Close-then-Shutdown order.
   `MIGRATION.md` names v0.9.1 alongside v0.9.0 (#178).
+- `/live`, `/troubleshooting`, `/reference`, `/security`, `/deploy` and
+  `WithPinnedDeadline` say what happens when an action's stream has not
+  connected within 2s: an action on a live unit answers 410, one on a plain
+  unit runs. They said every such action answered 410, as did the v0.9.0
+  entry for clicks before the stream connects (#177).
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
   shorthand `encode br zstd gzip` runs it at quality 0, so each stream frame
   is compressed on its own (145 bytes against 13).

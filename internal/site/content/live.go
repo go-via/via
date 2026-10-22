@@ -183,14 +183,14 @@ func (p *Live) View() h.H {
 			[]h.H{h.Str("Slow session store"), h.Span(h.Str("A keepalive's session check waiting on the store past "),
 				API("via.WithPinnedDeadline"), h.Str(" is logged as pinned, and the tab's actions answer 503 until the store answers or "),
 				API("via.WithSessionStoreTimeout"), h.Str(" gives up."))},
-			[]h.H{h.Str("Click before the stream connects"), h.Str("The action waits up to 2 seconds for the stream, then runs; several run in click order. Past 2 seconds it answers 410 and the tab reloads.")},
+			[]h.H{h.Str("Click before the stream connects"), h.Str("The action waits up to 2 seconds for the stream, then runs; several run in click order. Past 2 seconds an action on a live unit answers 410 and the tab reloads; one on a plain unit runs without the stream.")},
 			[]h.H{h.Str("Session written elsewhere"), h.Str("A Put or Delete from any request reaches the Tick and Listen handlers of every open tab on the session: at once in this process, on the next keepalive from another process.")},
 			[]h.H{h.Str("Session rotated"), h.Str("Every other open tab on the session ends its stream and reloads under the new cookie. The tab whose action rotated keeps its stream.")},
 			[]h.H{h.Str("Session gone"), h.Str("On the keepalive, a stream whose session another process rotated away, deleted or let expire closes, and the tab reloads.")},
-			[]h.H{h.Str("Network drop"), h.Str("The browser retries the stream under the same tab id and shows a Reconnecting banner; a click in the gap waits up to 2 seconds for it, then answers 410 and the tab reloads. " +
-				"If the session cookie changed since the page loaded (a Rotate, or a session minted after the load), the retry gets a fresh id and a click in the gap answers 410.")},
+			[]h.H{h.Str("Network drop"), h.Str("The browser retries the stream under the same tab id and shows a Reconnecting banner; a click in the gap waits up to 2 seconds for it. Past that, a click on a live unit answers 410 and the tab reloads; one on a plain unit runs. " +
+				"If the session cookie changed since the page loaded (a Rotate, or a session minted after the load), the retry gets a fresh id and a click on a live unit in the gap answers 410.")},
 			[]h.H{h.Str("Stream ends"), h.Str("A clean close, from a deploy or r.Shutdown(ctx), shows a Disconnected banner, then probes the page URL with backoff from 0.5 to 8 seconds and reloads once the server answers.")},
-			[]h.H{h.Str("Action on a gone tab"), h.Span(h.Str("Waits up to 2 seconds, or "), API("via.WithPinnedDeadline"), h.Str(" if that is shorter, for the stream to come back, then answers 410 and the tab reloads once. "+
+			[]h.H{h.Str("Action on a gone tab"), h.Span(h.Str("Waits up to 2 seconds, or "), API("via.WithPinnedDeadline"), h.Str(" if that is shorter, for the stream to come back. Then an action on a live unit answers 410 and the tab reloads once; one on a plain unit runs. "+
 				"When via ended the stream itself (Rotate, a session gone, an aborted push), the 410 comes at once."))},
 			[]h.H{h.Str("Failed action"), h.Str("A 500 from a handler panic, a 503 or a 403 leaves the banner alone: the stream is fine. Datastar fires a datastar-fetch error event on the element that made the request.")},
 			[]h.H{h.Str("Too many streams"), h.Span(h.Str("A connect past "), API("via.WithMaxSSEConn"), h.Str(" (10,000 by default) answers 503. "+
