@@ -1980,6 +1980,13 @@ func releaseDrift(changelog, gomod string) string {
 
 func TestSources_holdNoDeadCode(t *testing.T) {
 	t.Parallel()
+	// Three deadcode runs hold ~2 GiB together, over gomutants' per-mutant
+	// memory cap: every mutant re-checked against the full suite would read
+	// TIMED OUT (gomutants/gomutants#124). mutation.sh passes -short; ci.sh
+	// does not, so the lint still gates there.
+	if testing.Short() {
+		t.Skip("deadcode is a ci.sh lint, not a mutation killer")
+	}
 	out, err := exec.Command("go", "tool", "-n", "deadcode").Output()
 	require.NoError(t, err)
 	bin := strings.TrimSpace(string(out))
