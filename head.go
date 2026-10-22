@@ -1,6 +1,7 @@
 package via
 
 import (
+	"cmp"
 	"html"
 	"io"
 	"maps"
@@ -23,7 +24,8 @@ import (
 // The zero Head means "inherit": an empty field is not rendered and does not
 // widen the policy, so a partially-filled Head is always valid.
 type Head struct {
-	// Lang is the <html lang> value (e.g. "en", "pt-PT"). Empty omits it.
+	// Lang is the <html lang> value (e.g. "en", "pt-PT"). Empty omits it. A
+	// page's [Meta].Lang overrides it.
 	Lang string
 
 	// HTMLAttrs and BodyAttrs are written on every page's <html> and <body>,
@@ -80,6 +82,12 @@ type Meta struct {
 	// constant of the type: see the type doc.
 	Assets Assets
 
+	// Lang is the <html lang> value, overriding [Head].Lang; empty keeps
+	// Head's. Error pages keep Head's too. A value that is not a language tag
+	// panics at Mount, or is dropped and logged if only request data produces
+	// it.
+	Lang string
+
 	// HTMLAttrs and BodyAttrs are laid over [Head]'s by name, replacing in
 	// place, with the rest appended; class values are joined instead. A
 	// refused one panics at Mount, or is dropped and logged if only request
@@ -135,7 +143,8 @@ type Preload struct {
 }
 
 // pageMetaer lets the root page composition describe its own document: title,
-// description, social cards, and the assets the page needs. It is a method
+// description, social cards, the assets the page needs, lang, and <html> and
+// <body> attributes. It is a method
 // rather than a struct field because real metadata is data-dependent, and it
 // is read after OnInit, so the data is already loaded.
 //
@@ -183,8 +192,8 @@ func (o headOption) apply(c *config) {
 // validate rejects a malformed Head at startup; each of these would otherwise
 // surface as a blocked browser request long after Handler returned.
 func (hd Head) validate() {
-	if hd.Lang != "" && !isLangTag(hd.Lang) {
-		panic("via: WithHead: Lang " + quote(hd.Lang) + " is not a language tag (want e.g. \"en\" or \"pt-PT\")")
+	if fault := langFault(hd.Lang); fault != "" {
+		panic("via: WithHead: Lang " + fault)
 	}
 	low := strings.ToLower(hd.Raw)
 	for _, bad := range []string{"<script", "<style"} {
@@ -234,7 +243,7 @@ func attrFault(name, low string, seen map[string]bool) string {
 	case !isAttrName(name):
 		return "is not an attribute name (want a letter, then letters, digits, ':', '.', '_' or '-')"
 	case low == "lang":
-		return "is written by via; set Head.Lang instead"
+		return "is written by via; set Head.Lang or Meta.Lang instead"
 	case low == "data-nonce" || low == "data-signals" || low == "data-init":
 		return "is written by via"
 	case strings.HasPrefix(low, "on"):
@@ -478,6 +487,7 @@ func (a Assets) render(b *strings.Builder) {
 // Head contributes the parts every document shares; the fields carry the rest.
 type document struct {
 	nonce     string
+	lang      string // overrides Head.Lang; empty keeps it
 	htmlAttrs []Attr
 	pageHead  string // ahead of the router-wide head: title and meta tags
 	tail      string // after the router-wide head: page assets and via's scripts
@@ -487,7 +497,7 @@ type document struct {
 
 func (hd Head) writeDocument(w io.Writer, d document) {
 	var b strings.Builder
-	b.WriteString(`<!doctype html>` + hd.htmlOpen(d.nonce, d.htmlAttrs) + `<head><meta charset="utf-8">`)
+	b.WriteString(`<!doctype html>` + htmlOpen(cmp.Or(d.lang, hd.Lang), d.nonce, d.htmlAttrs) + `<head><meta charset="utf-8">`)
 	b.WriteString(d.pageHead)
 	b.WriteString(hd.Raw)
 	hd.Assets.render(&b)
@@ -499,15 +509,23 @@ func (hd Head) writeDocument(w io.Writer, d document) {
 
 // htmlOpen renders <html>, carrying nonce for Datastar to compile expressions
 // under when the document runs Datastar ("" for one that does not), then attrs.
-func (hd Head) htmlOpen(nonce string, attrs []Attr) string {
+func htmlOpen(lang, nonce string, attrs []Attr) string {
 	open := "<html"
-	if hd.Lang != "" {
-		open += ` lang="` + html.EscapeString(hd.Lang) + `"`
+	if lang != "" {
+		open += ` lang="` + html.EscapeString(lang) + `"`
 	}
 	if nonce != "" {
 		open += ` data-nonce="` + nonce + `"`
 	}
 	return open + attrString(attrs) + ">"
+}
+
+// langFault says why lang cannot go in <html lang>, or "" when it can.
+func langFault(lang string) string {
+	if lang == "" || isLangTag(lang) {
+		return ""
+	}
+	return quote(lang) + " is not a language tag (want e.g. \"en\" or \"pt-PT\")"
 }
 
 // isLangTag is a syntax gate on BCP 47 shape, not a registry lookup: the point

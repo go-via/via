@@ -530,6 +530,9 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	assets.validate("via: " + rootType.String() + ".PageMeta().Assets")
 	validateAttrs("via: "+rootType.String()+".PageMeta().HTMLAttrs", meta.HTMLAttrs)
 	validateAttrs("via: "+rootType.String()+".PageMeta().BodyAttrs", meta.BodyAttrs)
+	if fault := langFault(meta.Lang); fault != "" {
+		panic("via: " + rootType.String() + ".PageMeta().Lang " + fault)
+	}
 	m.csp, m.assetsFP = buildCSP(r.cfg.head.Assets, assets, r.cfg.unsafeEval), assets.fingerprint()
 	// …and proved constant here, not on the first GET. A second reading off a
 	// probe copy — the same literal with its zero fields filled in, which is
@@ -666,6 +669,7 @@ func (m *mount) writeHTMLPage(w http.ResponseWriter, body []byte, base string, t
 		reconnectScript(hasLive))
 	m.cfg.head.writeDocument(w, document{
 		nonce:     nonce,
+		lang:      pageLang(m.cfg.log, root, meta.Lang),
 		htmlAttrs: htmlAttrs,
 		pageHead:  pageHead.String(),
 		tail:      tail.String(),
@@ -683,6 +687,15 @@ func pageAttrs(log *slog.Logger, root any, field string, attrs []Attr) []Attr {
 		log.Warn("via: PageMeta attribute dropped", "page", typeName(root), "field", field, "reason", strings.Join(refused, "; "))
 	}
 	return kept
+}
+
+// pageLang is pageAttrs for Meta.Lang: a bad value falls back to Head.Lang.
+func pageLang(log *slog.Logger, root any, lang string) string {
+	if fault := langFault(lang); fault != "" {
+		log.Warn("via: PageMeta attribute dropped", "page", typeName(root), "field", "Lang", "reason", fault)
+		return ""
+	}
+	return lang
 }
 
 func typeName(root any) string { return fmt.Sprintf("%T", root) }
