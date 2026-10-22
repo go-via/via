@@ -656,6 +656,31 @@ func TestPageMeta_attrsOverrideTheRoutersByNameAndJoinClasses(t *testing.T) {
 	assert.Contains(t, body, `class="app page" id="top">`)
 }
 
+func TestPageMeta_langOverridesHeadLang(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, page, head, want string
+	}{
+		{"page over router", "fr", "en", `<html lang="fr" <nonce>>`},
+		{"empty inherits", "", "en", `<html lang="en" <nonce>>`},
+		{"page alone", "pt-PT", "", `<html lang="pt-PT" <nonce>>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, body := metaBody(t, attrPage{meta: via.Meta{Lang: tt.page}}, via.WithHead(via.Head{Lang: tt.head}))
+			assert.Contains(t, withoutNonce(body), tt.want)
+		})
+	}
+}
+
+func TestPageMeta_badLangPanicsAtMount(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, `via: via_test.attrPage.PageMeta().Lang "en" onload="x" is not a language tag`, func() {
+		via.Mount(via.NewRouter(), "/", attrPage{meta: via.Meta{Lang: `en" onload="x`}})
+	})
+}
+
 func TestPageMeta_classJoinSkipsEmptyValues(t *testing.T) {
 	t.Parallel()
 	_, body := metaBody(t, attrPage{meta: via.Meta{BodyAttrs: []via.Attr{{"class", ""}}}},
@@ -697,6 +722,20 @@ func TestErrorPage_carriesTheRoutersAttrs(t *testing.T) {
 	assert.Contains(t, body, `<body class="app">`)
 }
 
+func TestErrorPage_keepsTheRoutersLang(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(
+		via.WithErrorPage(func(*via.Ctx, via.PageError) h.H { return h.P(h.Str("sorry")) }),
+		via.WithHead(via.Head{Lang: "en"}))
+	via.Mount(r, "/", attrPage{meta: via.Meta{Lang: "fr"}})
+	t.Cleanup(r.Close)
+	srv := httptest.NewServer(r)
+	t.Cleanup(srv.Close)
+	resp, body := do(t, srv, http.MethodGet, "/nowhere", "")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	assert.Contains(t, body, `<html lang="en">`)
+}
+
 func TestAttrs_refusedNamesPanicAtStartup(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -707,7 +746,7 @@ func TestAttrs_refusedNamesPanicAtStartup(t *testing.T) {
 		{"bad name", []via.Attr{{Name: `x" y`}}, `"x" y" is not an attribute name`},
 		{"empty name", []via.Attr{{}}, `"" is not an attribute name`},
 		{"leading digit", []via.Attr{{Name: "1x"}}, `"1x" is not an attribute name`},
-		{"lang", []via.Attr{{Name: "LANG"}}, `"LANG" is written by via; set Head.Lang instead`},
+		{"lang", []via.Attr{{Name: "LANG"}}, `"LANG" is written by via; set Head.Lang or Meta.Lang instead`},
 		{"written by via", []via.Attr{{Name: "Data-Signals"}}, `"Data-Signals" is written by via`},
 		{"handler", []via.Attr{{Name: "OnLoad"}}, `"OnLoad" is an inline event handler, which the CSP blocks`},
 		{"style", []via.Attr{{Name: "style"}}, `"style" is an inline style, which the CSP blocks`},
@@ -747,6 +786,25 @@ func (p *lateAttrPage) PageMeta() via.Meta {
 	return via.Meta{BodyAttrs: attrs}
 }
 func (p *lateAttrPage) View() h.H { return h.Div(h.Str("x")) }
+
+type lateLangPage struct{ lang string }
+
+func (p *lateLangPage) OnInit(*via.Ctx) error { p.lang = "en_US!"; return nil }
+func (p *lateLangPage) PageMeta() via.Meta    { return via.Meta{Lang: p.lang} }
+func (p *lateLangPage) View() h.H             { return h.Div(h.Str("x")) }
+
+func TestPageMeta_dropsALangRefusedOnlyAtRender(t *testing.T) {
+	// sequential: swaps the global log writer
+	var body string
+	logged := captureLog(t, func() {
+		var resp *http.Response
+		resp, body = metaBody(t, lateLangPage{}, via.WithHead(via.Head{Lang: "en"}))
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+	assert.Contains(t, withoutNonce(body), `<html lang="en" <nonce>>`)
+	assert.Contains(t, logged, "via: PageMeta attribute dropped page=*via_test.lateLangPage field=Lang")
+	assert.Contains(t, logged, `en_US!\" is not a language tag`)
+}
 
 func TestPageMeta_dropsAnAttrRefusedOnlyAtRender(t *testing.T) {
 	// sequential: swaps the global log writer
