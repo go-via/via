@@ -135,6 +135,7 @@ func TestDispatch_signalSetInChildActionReachesClient(t *testing.T) {
 	assert.Contains(t, body, `"i__name":"resetted"`, "the Set signal must reach the client")
 	assert.NotContains(t, body, `"i__other":`,
 		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
+	assert.NotContains(t, body, "datastar-patch-elements", "the child's markup did not change, so only signals go out")
 }
 
 // guardedChild is embedded under a parent whose own OnInit session-gates

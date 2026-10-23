@@ -1043,13 +1043,26 @@ type unsortedSignals struct {
 	Alpha via.Signal[string]
 }
 
-func (p *unsortedSignals) View() h.H { return h.Div(h.Input(p.Zeta.Bind()), h.Input(p.Alpha.Bind())) }
+func (p *unsortedSignals) Fill(ctx *via.Ctx) {
+	p.Zeta.Set("z")
+	p.Alpha.Set("a")
+}
+func (p *unsortedSignals) View() h.H {
+	return h.Div(h.Input(p.Zeta.Bind()), h.Input(p.Alpha.Bind()), h.Button(on.Click(p.Fill)))
+}
 
 func TestDataSignals_keysAreSorted(t *testing.T) {
 	t.Parallel()
 	_, body := vt.Serve(t, via.Handler(unsortedSignals{})).Get("/")
 
 	assert.Contains(t, body, `data-signals='{"alpha":"","zeta":""}'`, "stable bytes for identical renders")
+}
+
+func TestPlainAction_signalFrameKeysAreSorted(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(unsortedSignals{})).Action(0).Fire()
+
+	assert.Contains(t, frag, `data: signals {"alpha":"a","zeta":"z"}`, "stable bytes for identical answers")
 }
 
 type hostileSet struct{ Msg via.Signal[string] }
