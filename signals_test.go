@@ -1028,6 +1028,30 @@ func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 		"the store holds the new value before the markup that reads it lands")
 }
 
+func TestPlainAction_signalAnswerIsAnEventStreamWithNoCSP(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(twoSignals{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"), "Datastar picks its parser from this header")
+	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "a frame is no document; the page's policy governs")
+}
+
+type unsortedSignals struct {
+	Zeta  via.Signal[string]
+	Alpha via.Signal[string]
+}
+
+func (p *unsortedSignals) View() h.H { return h.Div(h.Input(p.Zeta.Bind()), h.Input(p.Alpha.Bind())) }
+
+func TestDataSignals_keysAreSorted(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(unsortedSignals{})).Get("/")
+
+	assert.Contains(t, body, `data-signals='{"alpha":"","zeta":""}'`, "stable bytes for identical renders")
+}
+
 type hostileSet struct{ Msg via.Signal[string] }
 
 func (p *hostileSet) Send(ctx *via.Ctx) { p.Msg.Set("a'b\nc@d") }
