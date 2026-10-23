@@ -479,7 +479,7 @@ func (m *mount) newTabStream(id, sid string, bind *Ctx, connectSig map[string]js
 // was ever visible, since connect frames no elements of its own.
 func (m *mount) discover(w http.ResponseWriter, req *http.Request, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
 	pv := m.newInst()
-	bind := newRootCtx(false, base, nil)
+	bind := newRootCtx(false, base)
 	bind.rev = newRevertSet()
 	bind.badDecodeLogged = new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
 	bind.unitV = pv

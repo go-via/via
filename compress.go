@@ -130,7 +130,7 @@ func zeroQ(params string) bool {
 }
 
 // compressWriter encodes a response with the first encoder the request
-// accepts, from the SSE list for text/event-stream and the page list for the
+// accepts, from the SSE list for the connect stream and the page list for the
 // rest. It decides once, as the header goes out, so Content-Encoding and the
 // body always agree.
 type compressWriter struct {
@@ -157,7 +157,9 @@ func (c *compressWriter) decide(code int) {
 		return
 	}
 	encs := c.page
-	if strings.HasPrefix(hdr.Get("Content-Type"), "text/event-stream") {
+	// A plain action's answer is text/event-stream too, but it is a finished
+	// response, so it compresses like a page.
+	if strings.HasPrefix(hdr.Get("Content-Type"), "text/event-stream") && strings.HasSuffix(c.req.URL.Path, streamRoute) {
 		encs = c.sse
 	}
 	e, ok := negotiate(c.req.Header.Get("Accept-Encoding"), encs)

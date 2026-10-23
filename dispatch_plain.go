@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
 	"net/http"
 	"sync/atomic"
 )
@@ -62,11 +63,11 @@ func (m *mount) dispatchPlain(ar *actionReq) {
 		m.writePage(w, req, ctx, body)
 		return
 	}
-	b := m.rerenderPlain(ar, d, u)
-	if b == nil {
+	markup, signals := m.rerenderPlain(ar, d, u)
+	if markup == nil && len(signals) == 0 {
 		m.warnNoChange(ar.act, a.name, actedViewer(d.inst, u))
 	}
-	writePatch(w, b)
+	writeActionAnswer(m.cfg.log, w, markup, signals)
 }
 
 // discovered is a plain action's discovery: the fresh instance, its auth and
@@ -131,7 +132,7 @@ func (m *mount) discoverPlain(ar *actionReq) (*discovered, bool) {
 	// inside it hydrated too — without this their posted values were silently
 	// dropped. The action must be present in both, so the executed render is an
 	// intersection with auth, never a superset.
-	auth := newRootCtx(true, ar.base, map[string]any{}) // nil only would read as "declare everything"
+	auth := newRootCtx(false, ar.base)
 	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
 	// several malformed slots at once still logs one Warn, not one per slot per
 	// pass (rebindFrom copies the pointer; childViewer carries it to children).
@@ -260,46 +261,45 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 // does.
 const maxHydratePasses = 8
 
-// rerenderPlain re-renders the acted-on unit for a Datastar action's response,
-// restricted to the signals the action wrote. A plain child gets its own
-// container plus a data-signals attribute — the piece the old child-action
-// handler omitted, silently dropping a Signal.Set inside a plain child's
-// action. Returns nil when unchanged (→ 204).
-func (m *mount) rerenderPlain(ar *actionReq, d *discovered, u *Ctx) []byte {
+// rerenderPlain re-renders the acted-on unit for a Datastar action's response
+// and collects the signals the answer patches (see actionSignals). markup is
+// nil when the render is unchanged; a plain child's comes in its own container.
+func (m *mount) rerenderPlain(ar *actionReq, d *discovered, u *Ctx) (markup []byte, signals map[string]any) {
 	seen := d.bind.slotSet()
 	if ar.child == rootAddr {
-		// data-signals is a plain action's only channel for a server-side Set,
-		// restricted to what it wrote since re-declaring every slot would
-		// clobber a value the user is mid-edit. dirtyAll never returns nil,
-		// which would read as "declare everything".
-		only := d.bind.dirtyAll()
-		afterCtx, after := renderRootBase(d.inst, true, rerender{base: ar.base, only: only, seen: seen, from: u, badDecodeLogged: u.badDecodeLogged})
+		afterCtx, after := renderRootBase(d.inst, false, rerender{base: ar.base, from: u, badDecodeLogged: u.badDecodeLogged})
 		if len(liveUnits(d.bind)) == 0 {
 			assertRenderInvariantLiveness(len(liveUnits(afterCtx)) > 0)
 		}
+		signals = actionSignals(afterCtx, seen, d.bind.dirtyAll())
 		if bytes.Equal(d.rootBefore, after) {
-			return nil
+			return nil, signals
 		}
-		return after
+		return after, signals
 	}
 	// u is always plain here (assertRenderInvariantLiveness below would already
 	// have fired otherwise), but the real page can still hold it beneath an
 	// already-live root — liveAncestor reads that off the discovery tree, since
 	// this re-render's own synthetic root has no ancestor Ctx to walk from.
 	// auth, not bind (I1): liveness is the un-hydrated render's verdict.
-	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, rerender{base: ar.base, only: u.dirtyAll(), seen: seen, from: u, badDecodeLogged: u.badDecodeLogged}, liveAncestor(d.auth, ar.child))
+	afterCtx, afterInner := renderChildBind(u.childKey, u.unitV, rerender{base: ar.base, from: u, badDecodeLogged: u.badDecodeLogged}, liveAncestor(d.auth, ar.child))
 	assertRenderInvariantLiveness(afterCtx.live)
-	if bytes.Equal(u.rendered, afterInner) && len(u.dirty) == 0 {
-		return nil
+	signals = actionSignals(afterCtx, seen, u.dirtyAll())
+	if bytes.Equal(u.rendered, afterInner) {
+		return nil, signals
 	}
-	var buf bytes.Buffer
-	buf.WriteString(`<div id="via-i` + u.childKey + `"`)
-	order, initial := withWritten(afterCtx, u.dirty)
-	writeSignalsAttr(m.cfg.log, &buf, order, initial, declareFilter{u.dirty, seen})
-	buf.WriteString(`>`)
-	buf.Write(afterInner)
-	buf.WriteString(`</div>`)
-	return buf.Bytes()
+	return []byte(`<div id="via-i` + u.childKey + `">` + string(afterInner) + `</div>`), signals
+}
+
+// actionSignals is what a plain action's answer patches into the client store:
+// the slots the action wrote, and the slots its render opened that the
+// pre-action render did not carry. The client store has no value for an opened
+// slot, or a stale one from whatever occupied it before.
+func actionSignals(after *Ctx, seen map[string]bool, dirty map[string]any) map[string]any {
+	out := map[string]any{}
+	openedSlots(after, seen, out)
+	maps.Copy(out, dirty)
+	return out
 }
 
 // pruneArgs drops the args a bound handler holds that the authority render's

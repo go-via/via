@@ -616,8 +616,8 @@ port; a tab left open across the upgrade holds the old names, posts them, and
 the server ignores signals it does not recognise, so the page comes back
 correct on reload.
 
-A plain action's patch also declares any slot the pre-action render did
-not carry, alongside the ones the action wrote. That is what seeds an input
+A plain action's answer also sends any slot the pre-action render did not
+carry, alongside the ones the action wrote. That is what seeds an input
 appearing for the first time in the response instead of leaving it on whatever
 the client store already held.
 

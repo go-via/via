@@ -155,13 +155,13 @@ func (p *Islands) View() h.H {
 		d.H2("One signal per action"),
 		demo.Card(d.H3("The same island, no clock"),
 			h.P(
-				h.Str("The same "), Code("viaChart"), h.Str(", driven by a click. This unit never ticks and holds no State, so the POST's own response answers it: one element patch whose "),
-				Code("data-signals"), h.Str(" carries the one signal the handler wrote. The effect re-runs on arrival."),
+				h.Str("The same "), Code("viaChart"), h.Str(", driven by a click. This unit never ticks and holds no State, so the POST's own response answers it: one "),
+				Code("patch-signals"), h.Str(" frame carrying the one signal the handler wrote. The effect re-runs on arrival."),
 			),
 			via.Child(p.Chart), "chart.go",
 			demo.WireOpen(),
-			demo.Try(h.Span(h.Str("Click New data, then open the newest Wire entry, the "), Code("patch-elements"), h.Str(" response: its "),
-				Code("data-signals"), h.Str(" holds "), Code("chart__series"), h.Str(" and nothing else.")))),
+			demo.Try(h.Span(h.Str("Click New data, then open the newest Wire entry, the "), Code("patch-signals"), h.Str(" response: it holds "),
+				Code("chart__series"), h.Str(" and nothing else.")))),
 
 		d.H2("Stopping a producer on disconnect"),
 		snippet.Region("islands/dispose.go", "dispose", snippet.Title("prices.go"), snippet.Mark("OnConnect", "OnDispose")),

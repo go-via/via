@@ -207,7 +207,7 @@ type signalField struct {
 	cs       bool
 	seed     any         // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
 	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	applier  seedApplier // tagged Signal only; a SignalCS holds no value to write
+	applier  seedApplier // tagged Signal only; a SignalCS keeps its seed here, in seed
 }
 
 type seedField struct {
@@ -432,14 +432,15 @@ func prebindSignals(c *Ctx, inst instance) {
 		if !f.declares {
 			continue
 		}
-		// A tagged Signal is declared at what it holds, not at the seed: this
-		// runs on every render, and re-declaring the seed over a value OnInit
-		// or an action has since Set would undo it. A SignalCS holds nothing,
-		// no Set will ever declare it, and a data-show may be its only reader,
-		// so its seed is declared on every pass.
+		// A signal is declared at what it holds, not at the seed: this runs on
+		// every render, and re-declaring the seed over a value OnInit or an
+		// action has since Set would undo it. A SignalCS is declared on every
+		// pass, as a data-show may be its only reader.
 		v := f.seed
 		if f.applier != nil {
 			v = f.applier.apply(unsafe.Add(inst.base, f.off))
+		} else if f.cs {
+			v = (*csSlot)(unsafe.Add(inst.base, f.off)).declared(v)
 		}
 		c.declareSignal(sid.slot, v)
 	}
@@ -574,9 +575,7 @@ type reqScope struct {
 // model.
 type Ctx struct {
 	unitPass
-	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
-	declareOnly map[string]any  // when non-nil, declare only these slots
-	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
+	live bool // OnInit registered a Tick/Listen, or the View rendered server State
 	reqScope
 	session   *Session
 	isChild   bool

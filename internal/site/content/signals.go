@@ -89,7 +89,7 @@ func (p *Signals) View() h.H {
 		demo.Card(d.H3("Toggle"),
 			h.P(API("via.SignalCS"), h.Str(" is for UI state the server has no use for: an open panel, the active tab. "+
 				"Its name starts with an underscore, which Datastar's fetch filter drops, so it never reaches a POST. "+
-				"It has no Get and no Set; the tag is the only way to give it a start value.")),
+				"The tag gives it a start value, and the server can Set it, from OnInit or an action, but never read it: it has no Get.")),
 			via.Child(p.Toggle), "toggle.go",
 			demo.Try(h.Str("Click the button to show and hide the panel."),
 				h.Str("Open the Wire pane: _toggle__open flips and no request appears. The flag and the handler both live in the browser."))),

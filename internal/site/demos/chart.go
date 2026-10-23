@@ -11,8 +11,8 @@ import (
 
 // Chart drives the same island function as Sparkline, from a click instead of
 // a clock. It holds no State and never ticks, so this demo does not stream:
-// the plain action's element patch carries the one signal the handler wrote,
-// and the effect re-runs on it.
+// the plain action answers a patch-signals frame carrying the one signal the
+// handler wrote, and the effect re-runs on it.
 type Chart struct {
 	Series via.Signal[[]int] `via:"init=[]"`
 }

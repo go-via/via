@@ -3,31 +3,22 @@ package via
 import (
 	"bytes"
 	"log/slog"
-	"maps"
-	"slices"
 	"sync/atomic"
 
 	"github.com/go-via/via/internal/render"
 )
 
 // rerender is what a render after an action or on a push carries over from
-// the request or connection it belongs to.
-//
-// only restricts the data-signals declaration to the slots named, for a plain
-// action's patch; seen is the pre-action render's slot set (see
-// declareFilter). from is the request-scoped Ctx the render belongs to; it
-// inits nested children — see inheritRequestScope.
+// the request or connection it belongs to. from is the request-scoped Ctx the
+// render belongs to; it inits nested children — see inheritRequestScope.
 type rerender struct {
 	base            string
-	only            map[string]any
-	seen            map[string]bool
 	from            *Ctx
 	rev             *revertSet
 	badDecodeLogged *atomic.Bool
 }
 
 func (r rerender) wire(ctx *Ctx) {
-	ctx.declareSeen = r.seen
 	ctx.rev = r.rev
 	ctx.badDecodeLogged = r.badDecodeLogged
 	inheritRequestScope(ctx, r.from)
@@ -38,13 +29,14 @@ func (r rerender) wire(ctx *Ctx) {
 // reaches here follows an action, so the answer must reflect mutated server
 // state.
 //
-// declareSignals false is what a live push passes: re-declaring data-signals on
-// every push would re-merge and clobber a signal the user is mid-edit (their
-// half-typed message vanishing when someone else's arrives). Server-driven
-// signal changes ride an explicit signal-patch instead. r.only restricts the
-// declaration further, for a plain action's patch.
+// declareSignals false is what an action answer and a live push pass:
+// re-declaring data-signals would re-merge and clobber a signal the user is
+// mid-edit (their half-typed message vanishing when someone else's arrives),
+// and a morph skips a data-signals text the element already carries, so a Set
+// back to that value would never land. Server-driven signal changes ride an
+// explicit signal-patch instead.
 func renderRootBase(inst instance, declareSignals bool, r rerender) (*Ctx, []byte) {
-	ctx := newRootCtx(declareSignals, r.base, r.only)
+	ctx := newRootCtx(declareSignals, r.base)
 	ctx.unitV = inst
 	r.wire(ctx)
 	return ctx, renderRootWith(ctx, inst.v)
@@ -83,10 +75,9 @@ func inheritRequestScope(ctx, from *Ctx) {
 // newRootCtx builds the root bind Ctx for one render. A request-scoped
 // transport takes it before rendering so runOnInit registers the root's
 // Tick/Listen on the very Ctx the render (and the liveness verdict) reads.
-func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
+func newRootCtx(declareSignals bool, base string) *Ctx {
 	ctx := newCtx()
 	ctx.declare = declareSignals // children declare their own signals only on a declaring render
-	ctx.declareOnly = only
 	ctx.base = base
 	return ctx
 }
@@ -95,16 +86,14 @@ func newRootCtx(declareSignals bool, base string, only map[string]any) *Ctx {
 // output, not an input, so the nesting rules can only be checked once the
 // whole walk is done — see checkLiveNesting.
 func renderRootWith(ctx *Ctx, v viewer) []byte {
-	declareSignals, only := ctx.declare, ctx.declareOnly
 	prebindSignals(ctx, ctx.unitV)
 	ctx.viewRan = true
 	rr := render.NewRenderer(binderCtx{ctx})
 	rr.Render(v.View())
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
-	if declareSignals {
-		order, initial := withWritten(ctx, only)
-		writeSignalsAttr(ctx.logger(), &b, order, initial, declareFilter{only, ctx.declareSeen})
+	if ctx.declare {
+		writeSignalsAttr(ctx.logger(), &b, ctx.order, ctx.initial)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())
@@ -112,32 +101,6 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	out := b.Bytes()
 	checkLiveNesting(ctx, false)
 	return out
-}
-
-// withWritten adds the slots an action wrote that no View in the tree declared.
-// A restricted declaration is filtered against what the render declared, so an
-// island signal nobody renders has no entry for the filter to find and its Set
-// would ship nothing. written is nil for a first paint, which declares all.
-func withWritten(c *Ctx, written map[string]any) ([]string, map[string]any) {
-	if len(written) == 0 {
-		return c.order, c.initial
-	}
-	declared := c.slotSet()
-	var extra []string
-	for slot := range written {
-		if !declared[slot] {
-			extra = append(extra, slot)
-		}
-	}
-	if extra == nil {
-		return c.order, c.initial
-	}
-	slices.Sort(extra) // map order would make the attribute differ between identical renders
-	initial := maps.Clone(c.initial)
-	for _, slot := range extra {
-		initial[slot] = written[slot]
-	}
-	return append(slices.Clone(c.order), extra...), initial
 }
 
 const liveUnderLiveMsg = "via: via.Child: a live unit cannot sit inside another live unit — " +
@@ -192,7 +155,7 @@ var bootPolicy = &routerPolicy{log: slog.New(slog.DiscardHandler)}
 // other: a View that dereferences data OnInit would have loaded is not a bug.
 func bootRender(inst instance) (miswired string) {
 	defer recoverMiswired(&miswired)
-	ctx := newRootCtx(false, "", nil)
+	ctx := newRootCtx(false, "")
 	ctx.unitV = inst
 	ctx.policy = bootPolicy
 	renderRootWith(ctx, inst.v)

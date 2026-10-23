@@ -194,7 +194,7 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial, declareFilter{parent.declareOnly, parent.declareSeen})
+		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial)
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)
@@ -303,7 +303,7 @@ func newChildCtx(parent *Ctx, key string, inst instance, prior *Ctx) *Ctx {
 	child.base = parent.base // the mount prefix, so the child's own action URLs carry it too
 	// A child is the parent of its own children, so it passes the declaration
 	// down or a grandchild's slots never reach the client store.
-	child.declare, child.declareOnly, child.declareSeen = parent.declare, parent.declareOnly, parent.declareSeen
+	child.declare = parent.declare
 	child.reqScope = parent.reqScope
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	return child
@@ -358,11 +358,8 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // proven plain, or it could never have become live), and whatever the
 // discovery render found for a plain action's re-render, since that unit may
 // legitimately sit beneath an already-live root (see checkLiveUnderLive).
-// Non-nil r.only makes this a declaring render, so the child's own children
-// seed their slots; a push passes nil.
 func renderChildBind(key string, inst instance, r rerender, underLive bool) (*Ctx, []byte) {
 	c := newCtx()
-	c.declare, c.declareOnly = r.only != nil, r.only
 	c.isChild = true
 	c.childKey = key
 	c.unitV = inst

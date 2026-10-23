@@ -2134,6 +2134,7 @@ func (*Session) Rotate() string
 func (*SignalCS[T]) Bind() h.Attr
 func (*SignalCS[T]) Display() h.H
 func (*SignalCS[T]) Ref() expr.Expr
+func (*SignalCS[T]) Set(T)
 func (*Signal[T]) Bind() h.Attr
 func (*Signal[T]) Display() h.H
 func (*Signal[T]) Get() T

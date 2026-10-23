@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -603,7 +605,7 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, ctx *Ctx, bo
 // cookie predates.
 func (m *mount) renderFreshPage(w http.ResponseWriter, req *http.Request, base string, sess *Session) (*Ctx, []byte) {
 	inst := m.newInst()
-	ctx := newRootCtx(true, base, nil)
+	ctx := newRootCtx(true, base)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if sess != nil {
 		// Detached from the action's stream: this page's tab is not that one.
@@ -778,6 +780,23 @@ func (m *mount) fromPage(req *http.Request, target string) string {
 		return target
 	}
 	return page.ResolveReference(u).String()
+}
+
+// writeActionAnswer answers a plain Datastar action. Signals ride their own
+// patch-signals frame ahead of the markup, as on a live stream: a morph skips a
+// data-signals text the element already carries, so a Set back to the value
+// the page was served with would never reach the client store.
+func writeActionAnswer(log *slog.Logger, w http.ResponseWriter, markup []byte, signals map[string]any) {
+	raw, n := encodeSlots(log, slices.Sorted(maps.Keys(signals)), signals)
+	if n == 0 {
+		writePatch(w, markup)
+		return
+	}
+	writeSSEHeaders(w)
+	writeSignalsFrame(w, string(raw))
+	if markup != nil {
+		writePatchFrame(w, markup)
+	}
 }
 
 // writePatch answers a Datastar action with its element-patch fragment, or 204

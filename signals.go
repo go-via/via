@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"sync/atomic"
 	"unsafe"
 
@@ -43,30 +43,6 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 	return obj.Bytes(), n
 }
 
-// declareFilter picks the slots a data-signals attribute declares. only nil
-// declares every slot (the GET first paint). Non-nil declares only the slots
-// named, so a plain action patch ships what it wrote without clobbering a value
-// the user is mid-edit. seen is the pre-action render's slot set.
-type declareFilter struct {
-	only map[string]any
-	seen map[string]bool
-}
-
-func (f declareFilter) declares(slot string) bool {
-	if f.only == nil {
-		return true
-	}
-	if _, dirty := f.only[slot]; dirty {
-		return true
-	}
-	// A slot the pre-action render did not carry is a control new to this
-	// render (a branch opened): the client store has no value for it, or worse
-	// a stale one from whatever occupied the slot before, so seed it even
-	// though the action never wrote it. seen nil means there is no pre-action
-	// render to compare against.
-	return f.seen != nil && !f.seen[slot]
-}
-
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
 // attribute: data-signals='{...}'.
 //
@@ -81,22 +57,10 @@ func (f declareFilter) declares(slot string) bool {
 // rewrites @name( into an action call. v1.0.4 skips string literals, but every @
 // still goes out as \u0040 so a compiler that did not would find none; JSON
 // puts @ only inside strings, where it reads back as @.
-//
-// If f leaves no slot to declare, no attribute is written.
-func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial map[string]any, f declareFilter) {
-	want := make([]string, 0, len(order))
-	for _, slot := range order {
-		if f.declares(slot) {
-			want = append(want, slot)
-		}
-	}
-	sort.Strings(want) // encoding/json sorted the map this used to build; keep the bytes stable
+func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial map[string]any) {
+	want := slices.Sorted(slices.Values(order)) // encoding/json sorted the map this used to build; keep the bytes stable
 
-	raw, n := encodeSlots(log, want, initial)
-	if n == 0 && f.only != nil {
-		return
-	}
-
+	raw, _ := encodeSlots(log, want, initial)
 	buf.WriteString(` data-signals='`)
 	for _, b := range raw {
 		switch b {
@@ -248,11 +212,10 @@ func (s slotID) ref(kind string) expr.Expr {
 func (s *Signal[T]) Get() T { return s.val }
 
 // Set assigns the value and declares the slot, which is what carries the change
-// to the client: a live action pushes a patch-signals frame, a plain action's
-// element patch carries a data-signals restricted to the slots it wrote. Either
-// way, a slot the previous render did not carry is seeded too. A signal the action left
-// alone is not declared, so one the user is mid-edit is never overwritten
-// behind them.
+// to the client: a patch-signals frame, pushed on a live unit's stream or
+// answered to a plain unit's action. A slot the previous render did not carry
+// is seeded too. A signal the action left alone is not sent, so one the user
+// is mid-edit is never overwritten behind them.
 //
 // The View need not render the signal: Set declares it, so a Set in OnInit
 // seeds an island the View never binds or displays. Declaring is not
@@ -383,18 +346,34 @@ type anyText struct{ v any }
 
 func (t anyText) RenderTo(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(t.v)) }
 
-// SignalCS is a client-only signal: the server never reads or writes it. Its
-// wire name is "_"-prefixed, which Datastar's fetch filter drops from every
-// POST. It starts at T's zero value, or at the JSON in a `via:"init=<json>"`
-// field tag, read once when via walks the composition type at Mount — there is
-// still no Set and no Get; a value the server needs to know is a [Signal].
+// SignalCS is a client-only signal: the server never reads it. Its wire name
+// is "_"-prefixed, which Datastar's fetch filter drops from every POST. It
+// starts at T's zero value, or at the JSON in a `via:"init=<json>"` field tag,
+// read once when via walks the composition type at Mount. The server can Set
+// it but has no Get; a value the server needs to know is a [Signal].
 //
 //	Details via.SignalCS[bool] `via:"init=true"`
 //
 // A string seed is written as JSON, not as a bare string:
 // `via:"init=\"north-1\""`.
 type SignalCS[T any] struct {
+	csSlot // MUST stay the first field: prebindSignals reads it through a pointer add at the field's offset
+}
+
+// csSlot is SignalCS's non-generic head, so prebindSignals reads a Set value
+// without knowing T.
+type csSlot struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
+	set    bool
+	val    any
+}
+
+// declared is the value the slot is declared at: a Set beats the tag seed.
+func (s *csSlot) declared(seed any) any {
+	if s.set {
+		return s.val
+	}
+	return seed
 }
 
 func (*SignalCS[T]) isViaSignalCS() {}
@@ -403,9 +382,9 @@ func (*SignalCS[T]) csZero() any { var z T; return z }
 
 func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
 
-// seedApplier has nothing to write: a SignalCS holds no value, so its seed
-// lives in the type table and reaches the client through the declaration
-// prebindSignals makes. The nil keeps that fact in one place.
+// seedApplier has nothing to write: a SignalCS's seed lives in the type table
+// and reaches the client through the declaration prebindSignals makes. The nil
+// keeps that fact in one place.
 func (*SignalCS[T]) seedApplier(string) seedApplier { return nil }
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
@@ -413,8 +392,27 @@ func (*SignalCS[T]) seedApplier(string) seedApplier { return nil }
 // array or map field, which has no field name to be named by.
 func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 
-// bind declares the slot at its seed value and returns the seed, so Display
-// can render it without a second, stale zero value of its own.
+// Set sends v to the client and declares the slot at v on every later render,
+// in place of the tag seed. A Set in OnInit seeds the first paint; a Set after
+// the View has run patches the client. It sends even when v is the value last
+// Set: the client may have changed it since, and the server never sees that.
+//
+// Not safe for concurrent use; call it from the same via callbacks as
+// [Signal.Set].
+func (s *SignalCS[T]) Set(v T) {
+	s.set, s.val = true, v
+	if s.bound == nil || s.slot == "" {
+		return
+	}
+	s.bound.declareSignal(s.slot, v)
+	if !s.bound.viewRan {
+		return // a seed: the render about to run declares it, and dirtying it would evict the client's own value
+	}
+	s.bound.dirty[s.slot] = v
+}
+
+// bind declares the slot at its Set value, else its seed, and returns it, so
+// Display can render it without a second, stale zero value of its own.
 func (s *SignalCS[T]) bind(r *render.Renderer) any {
 	b := r.Binder()
 	c := ctxOf(b)
@@ -425,22 +423,22 @@ func (s *SignalCS[T]) bind(r *render.Renderer) any {
 	// copies the child by value, so a slot stamped under the parent's prefix
 	// must be re-minted under the child's.
 	s.slot = c.signalSlot(unsafe.Pointer(s))
-	seed := c.csSeed(unsafe.Pointer(s))
+	v := s.declared(c.csSeed(unsafe.Pointer(s)))
 	// No hydrator: an inbound value for an "_" name is never an echo of one via
 	// sent, so accepting it would only admit a forgery.
-	b.DeclareSignal(s.slot, seed)
-	return seed
+	b.DeclareSignal(s.slot, v)
+	return v
 }
 
-// Display renders the signal as a Datastar text-bound span, showing the seed
-// value until the client changes it.
+// Display renders the signal as a Datastar text-bound span, showing the Set
+// value, else the seed, until the client changes it.
 func (s *SignalCS[T]) Display() h.H { return render.Dyn(csDisplay[T]{s}) }
 
 type csDisplay[T any] struct{ s *SignalCS[T] }
 
 func (d csDisplay[T]) RenderTo(r *render.Renderer) {
-	seed := d.s.bind(r)
-	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(seed)))
+	v := d.s.bind(r)
+	r.Render(h.Span(h.DataText("$"+d.s.slot), textHandle(v)))
 }
 
 // Bind returns a two-way data-bind="<slot>" attribute for an input. The value
