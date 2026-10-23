@@ -1024,6 +1024,27 @@ func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "data: signals {\"_open\":false}")
 	assert.Contains(t, frag, `<span data-text="$_open">false</span>`, "the re-render shows the Set value, not the seed")
+	assert.Less(t, strings.Index(frag, "datastar-patch-signals"), strings.Index(frag, "datastar-patch-elements"),
+		"the store holds the new value before the markup that reads it lands")
+}
+
+type csSetInitAct struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+	note string
+}
+
+func (p *csSetInitAct) OnInit(ctx *via.Ctx) error { p.Open.Set(false); return nil }
+func (p *csSetInitAct) Bump(ctx *via.Ctx)         { p.note = "bumped" }
+func (p *csSetInitAct) View() h.H {
+	return h.Div(h.P(h.Str(p.note)), h.Button(on.Click(p.Bump)))
+}
+
+func TestPlainSignalCS_setInOnInitIsNotResentByAnUnrelatedAction(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(csSetInitAct{})).Action(0).Fire()
+
+	assert.Contains(t, frag, "bumped")
+	assert.NotContains(t, frag, "_open", "re-sending the first paint's value would undo the user's toggle")
 }
 
 func TestPlainSignalCS_setToTheSeedStillSends(t *testing.T) {

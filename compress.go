@@ -159,7 +159,7 @@ func (c *compressWriter) decide(code int) {
 	encs := c.page
 	// A plain action's answer is text/event-stream too, but it is a finished
 	// response, so it compresses like a page.
-	if strings.HasPrefix(hdr.Get("Content-Type"), "text/event-stream") && strings.HasSuffix(c.req.URL.Path, streamRoute) {
+	if strings.HasPrefix(hdr.Get("Content-Type"), "text/event-stream") && isStreamRequest(c.req) {
 		encs = c.sse
 	}
 	e, ok := negotiate(c.req.Header.Get("Accept-Encoding"), encs)

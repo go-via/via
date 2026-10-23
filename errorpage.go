@@ -268,7 +268,7 @@ func noteErr(w http.ResponseWriter, err error) {
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {
 	if r.cfg.errorPage == nil ||
 		isDatastarRequest(req) ||
-		strings.HasSuffix(req.URL.Path, streamRoute) {
+		isStreamRequest(req) {
 		return nil
 	}
 	return &errPageWriter{ResponseWriter: w, r: r, req: req}

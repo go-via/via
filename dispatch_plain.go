@@ -63,9 +63,14 @@ func (m *mount) dispatchPlain(ar *actionReq) {
 		m.writePage(w, req, ctx, body)
 		return
 	}
+	m.answerPlain(w, ar, d, u, a.name)
+}
+
+// answerPlain writes a Datastar action's answer from the acted unit's re-render.
+func (m *mount) answerPlain(w http.ResponseWriter, ar *actionReq, d *discovered, u *Ctx, name string) {
 	markup, signals := m.rerenderPlain(ar, d, u)
 	if markup == nil && len(signals) == 0 {
-		m.warnNoChange(ar.act, a.name, actedViewer(d.inst, u))
+		m.warnNoChange(ar.act, name, actedViewer(d.inst, u))
 	}
 	writeActionAnswer(m.cfg.log, w, markup, signals)
 }

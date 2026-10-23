@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"maps"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/url"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -787,7 +785,7 @@ func (m *mount) fromPage(req *http.Request, target string) string {
 // data-signals text the element already carries, so a Set back to the value
 // the page was served with would never reach the client store.
 func writeActionAnswer(log *slog.Logger, w http.ResponseWriter, markup []byte, signals map[string]any) {
-	raw, n := encodeSlots(log, slices.Sorted(maps.Keys(signals)), signals)
+	raw, n := encodeSlotMap(log, signals)
 	if n == 0 {
 		writePatch(w, markup)
 		return

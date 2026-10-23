@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -195,7 +194,7 @@ func (c *tabStream) flushDirty(u *Ctx) {
 	// the element push omits data-signals, so a morph never clobbers what the
 	// user is typing. encodeSlots drops and logs a value that does not encode,
 	// rather than losing the whole frame to it.
-	if raw, n := encodeSlots(c.mount.cfg.log, slices.Sorted(maps.Keys(all)), all); n > 0 {
+	if raw, n := encodeSlotMap(c.mount.cfg.log, all); n > 0 {
 		c.wire.signals(string(raw))
 	}
 	clearDirty(u)
@@ -215,8 +214,7 @@ func (c *tabStream) declareOpened(prev, cur *Ctx) {
 	if len(opened) == 0 {
 		return
 	}
-	want := slices.Sorted(maps.Keys(opened))
-	if raw, n := encodeSlots(c.mount.cfg.log, want, opened); n > 0 {
+	if raw, n := encodeSlotMap(c.mount.cfg.log, opened); n > 0 {
 		c.wire.signals(string(raw))
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync/atomic"
 	"unsafe"
@@ -41,6 +42,12 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 	}
 	obj.WriteByte('}')
 	return obj.Bytes(), n
+}
+
+// encodeSlotMap is encodeSlots over every slot in m, in sorted order so the
+// bytes are stable.
+func encodeSlotMap(log *slog.Logger, m map[string]any) (raw []byte, n int) {
+	return encodeSlots(log, slices.Sorted(maps.Keys(m)), m)
 }
 
 // writeSignalsAttr writes the Datastar signal declaration as a single-quoted
@@ -230,17 +237,25 @@ func (s *Signal[T]) Get() T { return s.val }
 // at an empty one with a field tag: `via:"init=[]"`.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
+	if s.write(v) {
+		// A server write supersedes whatever the client posted for this slot,
+		// so it must survive the revert livePush does before the next render.
+		s.bound.rev.drop(s.slot)
+	}
+}
+
+// write declares the slot at v and, once the View has run, marks it for the
+// next patch. It reports whether it marked the slot.
+func (s *slotID) write(v any) bool {
 	if s.bound == nil || s.slot == "" {
-		return
+		return false
 	}
 	s.bound.declareSignal(s.slot, v)
 	if !s.bound.viewRan {
-		return // a seed: the render about to run declares it, and dirtying it would evict the client's own value
+		return false // a seed: the render about to run declares it, and dirtying it would evict the client's own value
 	}
 	s.bound.dirty[s.slot] = v
-	// A server write supersedes whatever the client posted for this slot, so it
-	// must survive the revert livePush does before the next render.
-	s.bound.rev.drop(s.slot)
+	return true
 }
 
 // bind assigns the signal's wire name, hydrates it from the request when
@@ -401,14 +416,7 @@ func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 // [Signal.Set].
 func (s *SignalCS[T]) Set(v T) {
 	s.set, s.val = true, v
-	if s.bound == nil || s.slot == "" {
-		return
-	}
-	s.bound.declareSignal(s.slot, v)
-	if !s.bound.viewRan {
-		return // a seed: the render about to run declares it, and dirtying it would evict the client's own value
-	}
-	s.bound.dirty[s.slot] = v
+	s.write(v)
 }
 
 // bind declares the slot at its Set value, else its seed, and returns it, so
