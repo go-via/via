@@ -783,7 +783,8 @@ func (m *mount) fromPage(req *http.Request, target string) string {
 // writeActionAnswer answers a plain Datastar action. Signals ride their own
 // patch-signals frame ahead of the markup, as on a live stream: a morph skips a
 // data-signals text the element already carries, so a Set back to the value
-// the page was served with would never reach the client store.
+// the page was served with would never reach the client store. The SSE answer
+// carries no CSP header: a frame is no document, so it would be inert.
 func writeActionAnswer(log *slog.Logger, w http.ResponseWriter, markup []byte, signals map[string]any) {
 	raw, n := encodeSlotMap(log, signals)
 	if n == 0 {

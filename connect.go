@@ -150,8 +150,8 @@ func (p *unitPusher) rerender(rev *revertSet) rerender {
 // changes nothing rendered would otherwise ship a byte-identical element-patch
 // every beat, which is the CPU and bandwidth floor of an idle connection at
 // scale (an idle page on a 2s tick sent ~160 identical frames in five
-// minutes). The plain action path has always answered 204 on an unchanged
-// render; this is the live path's version of that.
+// minutes). The plain action path answers 204 on an unchanged render that
+// wrote or opened no signals; this is the live path's version of that.
 //
 // It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its

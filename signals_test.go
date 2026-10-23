@@ -1101,3 +1101,43 @@ func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 	assert.Contains(t, frag, "data: signals {\"_panel__open\":false}")
 	assert.Contains(t, frag, `<span data-text="$_panel__open">false</span>`)
 }
+
+type liveOverwrite struct{ Name via.Signal[string] }
+
+func (p *liveOverwrite) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *liveOverwrite) Save(ctx *via.Ctx) { p.Name.Set("server") }
+func (p *liveOverwrite) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.Button(on.Click(p.Save)))
+}
+
+func TestLiveSignal_setOverAPostedValueSurvivesTheRevert(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveOverwrite{}))
+		conn := app.Connect()
+
+		app.Action(0).Over(conn).Body(`{"name":"typed"}`).Fire()
+
+		assert.Contains(t, conn.Await(`data-text="$name"`), `data-text="$name">server<`,
+			"the push renders the server's Set, not the value the revert restored")
+	})
+}
+
+type signalOnlyInit struct{ Name via.Signal[string] }
+
+func (p *signalOnlyInit) OnInit(ctx *via.Ctx) error { return nil }
+func (p *signalOnlyInit) Fill(ctx *via.Ctx)         { p.Name.Set("ada") }
+func (p *signalOnlyInit) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), h.Button(on.Click(p.Fill)))
+}
+
+func TestPlainAction_signalOnlyAnswerDoesNotWarnItChangedNothing(t *testing.T) {
+	// sequential: swaps the global log writer
+	buf := globalLog(t)
+	status, _ := vt.Serve(t, via.Handler(signalOnlyInit{})).Action(0).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.NotContains(t, buf.String(), "changed nothing")
+}

@@ -237,25 +237,23 @@ func (s *Signal[T]) Get() T { return s.val }
 // at an empty one with a field tag: `via:"init=[]"`.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
-	if s.write(v) {
-		// A server write supersedes whatever the client posted for this slot,
-		// so it must survive the revert livePush does before the next render.
-		s.bound.rev.drop(s.slot)
-	}
+	s.set(v)
 }
 
-// write declares the slot at v and, once the View has run, marks it for the
-// next patch. It reports whether it marked the slot.
-func (s *slotID) write(v any) bool {
+// set declares the slot at v and, once the View has run, marks it for the next
+// patch.
+func (s *slotID) set(v any) {
 	if s.bound == nil || s.slot == "" {
-		return false
+		return
 	}
 	s.bound.declareSignal(s.slot, v)
 	if !s.bound.viewRan {
-		return false // a seed: the render about to run declares it, and dirtying it would evict the client's own value
+		return // a seed: the render about to run declares it, and dirtying it would evict the client's own value
 	}
 	s.bound.dirty[s.slot] = v
-	return true
+	// A server write supersedes whatever the client posted for this slot, so it
+	// must survive the revert livePush does before the next render.
+	s.bound.rev.drop(s.slot)
 }
 
 // bind assigns the signal's wire name, hydrates it from the request when
@@ -379,13 +377,21 @@ type SignalCS[T any] struct {
 // without knowing T.
 type csSlot struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
-	set    bool
+	held   bool
 	val    any
 }
 
+// prebindSignals casts a signal field's address to *slotID and a SignalCS's to
+// *csSlot; these fail to compile if a head ever moves off offset 0.
+var (
+	_ = [1]struct{}{}[unsafe.Offsetof(Signal[int]{}.slotID)]
+	_ = [1]struct{}{}[unsafe.Offsetof(SignalCS[int]{}.csSlot)]
+	_ = [1]struct{}{}[unsafe.Offsetof(csSlot{}.slotID)]
+)
+
 // declared is the value the slot is declared at: a Set beats the tag seed.
 func (s *csSlot) declared(seed any) any {
-	if s.set {
+	if s.held {
 		return s.val
 	}
 	return seed
@@ -415,8 +421,8 @@ func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 // Not safe for concurrent use; call it from the same via callbacks as
 // [Signal.Set].
 func (s *SignalCS[T]) Set(v T) {
-	s.set, s.val = true, v
-	s.write(v)
+	s.held, s.val = true, v
+	s.set(v)
 }
 
 // bind declares the slot at its Set value, else its seed, and returns it, so
