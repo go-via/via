@@ -78,7 +78,7 @@ func StateTrack[T any](t *topic.Topic[T], load func() T) State[T] {
 	return State[T]{lit: true, track: &stateTracking[T]{topic: t, load: load}}
 }
 
-func (*State[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+func (*State[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
 
 // seedApplier writes through the handle pointer the type walk found by offset.
 // List[E] embeds State[[]E] first, so that pointer is the embedded State's

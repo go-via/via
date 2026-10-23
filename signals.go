@@ -153,7 +153,7 @@ type Signal[T any] struct {
 	settled bool
 }
 
-func (*Signal[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+func (*Signal[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
 
 func (*Signal[T]) seedApplier(raw string) seedApplier { return signalSeed[T]{raw} }
 
@@ -167,18 +167,14 @@ func (a signalSeed[T]) apply(handle unsafe.Pointer) any {
 	return s.val
 }
 
-// jsonSeed decodes a via:"init=…" value into T and hands it back as any, which
-// is how T leaves the generic type: the type walk that reads the tag has only
-// the field's reflect.Type and cannot name T.
-func jsonSeed[T any](raw string) (any, error) {
+// checkJSONSeed reports whether a via:"init=…" value decodes into T. It is
+// how the type walk, which has only the field's reflect.Type, checks against T.
+func checkJSONSeed[T any](raw string) error {
 	var v T
-	if err := json.Unmarshal([]byte(raw), &v); err != nil {
-		return nil, err
-	}
-	return v, nil
+	return json.Unmarshal([]byte(raw), &v)
 }
 
-// mustSeed decodes a tag decodeSeedTag already accepted at Mount.
+// mustSeed decodes a tag checkSeedTag already accepted at Mount.
 func mustSeed[T any](raw string) T {
 	var v T
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
@@ -370,43 +366,39 @@ func (t anyText) RenderTo(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(t.v)) 
 // A string seed is written as JSON, not as a bare string:
 // `via:"init=\"north-1\""`.
 type SignalCS[T any] struct {
-	csSlot // MUST stay the first field: prebindSignals reads it through a pointer add at the field's offset
-}
-
-// csSlot is SignalCS's non-generic head, so prebindSignals reads a Set value
-// without knowing T.
-type csSlot struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
-	held   bool
-	val    any
+	val    T
+	// settled works as Signal's does: the seed is applied once, never over a Set.
+	settled bool
 }
 
-// prebindSignals casts a signal field's address to *slotID and a SignalCS's to
-// *csSlot; these fail to compile if a head ever moves off offset 0.
+// prebindSignals casts a signal field's address to *slotID; these fail to
+// compile if the head ever moves off offset 0.
 var (
 	_ = [1]struct{}{}[unsafe.Offsetof(Signal[int]{}.slotID)]
-	_ = [1]struct{}{}[unsafe.Offsetof(SignalCS[int]{}.csSlot)]
-	_ = [1]struct{}{}[unsafe.Offsetof(csSlot{}.slotID)]
+	_ = [1]struct{}{}[unsafe.Offsetof(SignalCS[int]{}.slotID)]
 )
-
-// declared is the value the slot is declared at: a Set beats the tag seed.
-func (s *csSlot) declared(seed any) any {
-	if s.held {
-		return s.val
-	}
-	return seed
-}
 
 func (*SignalCS[T]) isViaSignalCS() {}
 
-func (*SignalCS[T]) csZero() any { var z T; return z }
+func (*SignalCS[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
 
-func (*SignalCS[T]) decodeSeed(raw string) (any, error) { return jsonSeed[T](raw) }
+// seedApplier is built for every SignalCS, tagged or not: an untagged one
+// (raw "") is declared at T's zero.
+func (*SignalCS[T]) seedApplier(raw string) seedApplier { return csSeed[T]{raw} }
 
-// seedApplier has nothing to write: a SignalCS's seed lives in the type table
-// and reaches the client through the declaration prebindSignals makes. The nil
-// keeps that fact in one place.
-func (*SignalCS[T]) seedApplier(string) seedApplier { return nil }
+type csSeed[T any] struct{ raw string }
+
+func (a csSeed[T]) apply(handle unsafe.Pointer) any {
+	s := (*SignalCS[T])(handle)
+	if !s.settled {
+		s.settled = true
+		if a.raw != "" {
+			s.val = mustSeed[T](a.raw)
+		}
+	}
+	return s.val
+}
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,
@@ -424,7 +416,7 @@ func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 // Not safe for concurrent use; call it from the same via callbacks as
 // [Signal.Set].
 func (s *SignalCS[T]) Set(v T) {
-	s.held, s.val = true, v
+	s.val = v
 	s.set(v)
 }
 
@@ -440,11 +432,10 @@ func (s *SignalCS[T]) bind(r *render.Renderer) any {
 	// copies the child by value, so a slot stamped under the parent's prefix
 	// must be re-minted under the child's.
 	s.slot = c.signalSlot(unsafe.Pointer(s))
-	v := s.declared(c.csSeed(unsafe.Pointer(s)))
 	// No hydrator: an inbound value for an "_" name is never an echo of one via
 	// sent, so accepting it would only admit a forgery.
-	b.DeclareSignal(s.slot, v)
-	return v
+	b.DeclareSignal(s.slot, s.val)
+	return s.val
 }
 
 // Display renders the signal as a Datastar text-bound span, showing the Set
