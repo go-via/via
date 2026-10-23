@@ -39,7 +39,7 @@ func (p *Signals) View() h.H {
 		h.P(h.Str("The field's type decides where a value lives and who sees it.")),
 		table([]string{"Handle", "Lives on", "Scope"},
 			[]h.H{API("via.Signal"), h.Str("browser, sent with each action"), h.Str("per tab")},
-			[]h.H{API("via.SignalCS"), h.Str("browser only, never sent"), h.Str("per tab")},
+			[]h.H{API("via.SignalCS"), h.Str("browser only, dropped from every POST"), h.Str("per tab")},
 			[]h.H{API("via.State"), h.Str("server"), h.Str("per tab, pushed when it changes")},
 			[]h.H{API("via.List"), h.Str("server"), h.Str("per tab; a State of a slice, with Append, Remove and Each")},
 			[]h.H{API("via.StateTrack"), h.Str("server"), h.Str("per tab, following one store every tab shares")},

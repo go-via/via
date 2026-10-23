@@ -1028,6 +1028,19 @@ func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 		"the store holds the new value before the markup that reads it lands")
 }
 
+type hostileSet struct{ Msg via.Signal[string] }
+
+func (p *hostileSet) Send(ctx *via.Ctx) { p.Msg.Set("a'b\nc@d") }
+func (p *hostileSet) View() h.H         { return h.Button(on.Click(p.Send)) }
+
+func TestPlainAction_hostileSignalValueStaysOneFrameLine(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(hostileSet{})).Action(0).Fire()
+
+	assert.Contains(t, frag, "data: signals {\"msg\":\"a'b\\nc@d\"}\n\n",
+		"a raw newline would end the data line and let the rest of the value forge its own SSE field")
+}
+
 type csSetInitAct struct {
 	Open via.SignalCS[bool] `via:"init=true"`
 	note string

@@ -27,7 +27,7 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 		val, err := json.Marshal(initial[slot])
 		if err != nil {
 			log.Warn("via: a signal holds a value encoding/json cannot marshal; it is left out of "+
-				"data-signals and the client store has no value for it — make the type JSON-round-trippable",
+				"the signals sent to the client and the client store has no value for it — make the type JSON-round-trippable",
 				"slot", slot, "err", err)
 			continue
 		}
