@@ -435,7 +435,9 @@ func prebindSignals(c *Ctx, inst instance) {
 		// A signal is declared at what it holds, not at the seed: this runs on
 		// every render, and re-declaring the seed over a value OnInit or an
 		// action has since Set would undo it. A SignalCS is declared on every
-		// pass, as a data-show may be its only reader.
+		// pass, as a data-show may be its only reader. Its seed stays in the type
+		// table rather than being written into the handle, so it has no applier
+		// and its Set value is read off the csSlot head instead.
 		v := f.seed
 		if f.applier != nil {
 			v = f.applier.apply(unsafe.Add(inst.base, f.off))

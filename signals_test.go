@@ -1065,6 +1065,23 @@ func TestPlainAction_signalFrameKeysAreSorted(t *testing.T) {
 	assert.Contains(t, frag, `data: signals {"alpha":"a","zeta":"z"}`, "stable bytes for identical answers")
 }
 
+type onlyUnencodable struct{ Bad via.Signal[unmarshalable] }
+
+func (p *onlyUnencodable) OnInit(ctx *via.Ctx) error { return nil }
+func (p *onlyUnencodable) Fill(ctx *via.Ctx)         { p.Bad.Set(unmarshalable{}) }
+func (p *onlyUnencodable) View() h.H                 { return h.Button(on.Click(p.Fill)) }
+
+func TestPlainAction_answerWhoseSignalsAllFailToEncodeIs204(t *testing.T) {
+	// sequential: swaps the global log writer
+	buf := globalLog(t)
+	status, body := vt.Serve(t, via.Handler(onlyUnencodable{})).Action(0).Fire()
+
+	assert.Equal(t, http.StatusNoContent, status, "an empty signals frame would carry nothing")
+	assert.Empty(t, body)
+	assert.Contains(t, buf.String(), "cannot marshal", "the dropped value is logged")
+	assert.NotContains(t, buf.String(), "changed nothing", "the action did change something; the encode warning says what went wrong")
+}
+
 type hostileSet struct{ Msg via.Signal[string] }
 
 func (p *hostileSet) Send(ctx *via.Ctx) { p.Msg.Set("a'b\nc@d") }
