@@ -1155,6 +1155,43 @@ func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 	assert.Contains(t, frag, `<span data-text="$_panel__open">false</span>`)
 }
 
+type csSetLiveHost struct{ Panel csSetLive }
+
+func (p *csSetLiveHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+
+func TestLiveSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(csSetLiveHost{}))
+		conn := app.Connect()
+
+		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		assert.Contains(t, conn.Await(`"_panel__open"`), `"_panel__open":false`)
+	})
+}
+
+type csSetSlice struct {
+	Rows via.SignalCS[[]int] `via:"init=[]"`
+}
+
+func (p *csSetSlice) Fill(ctx *via.Ctx)  { p.Rows.Set([]int{1, 2}) }
+func (p *csSetSlice) Clear(ctx *via.Ctx) { p.Rows.Set(nil) }
+func (p *csSetSlice) View() h.H {
+	return h.Div(h.Button(on.Click(p.Fill)), h.Button(on.Click(p.Clear)))
+}
+
+func TestPlainSignalCS_setSendsASliceWholeAndANilAsNull(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(csSetSlice{}))
+
+	_, frag := app.Action(0).Fire()
+	assert.Contains(t, frag, "data: signals {\"_rows\":[1,2]}")
+
+	_, frag = app.Action(1).Fire()
+	assert.Contains(t, frag, "data: signals {\"_rows\":null}", "a nil slice deletes the signal on the client")
+}
+
 type liveOverwrite struct{ Name via.Signal[string] }
 
 func (p *liveOverwrite) OnInit(ctx *via.Ctx) error {

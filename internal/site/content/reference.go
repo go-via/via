@@ -31,7 +31,7 @@ var overrides = map[string]string{
 	"via.State":           "Server-authoritative per-tab state, rendered as text and morphed when it changes. Rendering one makes its unit live.",
 	"via.List":            "A State over a slice, with Append, Remove and Each.",
 	"via.Signal":          "Client-resident state, posted with every action. Get returns the posted value only for a Bind()ed signal.",
-	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never sees it. The server can Set it.",
+	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never reads it, though it can Set it.",
 	"via.StateOf":         "Seeds a State from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.ListOf":          "Seeds a List from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.StateTrack":      "A State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, then follows the topic. For a source fixed at mount; State.Track in OnInit is for one that depends on the request.",
