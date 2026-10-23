@@ -174,17 +174,14 @@ type seededIsland struct {
 func (i *seededIsland) OnInit(ctx *via.Ctx) error { i.Series.Set([]int{1, 2, 3}); return nil }
 func (i *seededIsland) View() h.H                 { return h.Div(h.ID("chart"), h.DataIgnoreMorph()) }
 
-// plainIsland is island without the liveness. n is rendered so the response
-// differs from the pre-action render and a patch is returned, not a 204.
+// plainIsland is island without the liveness.
 type plainIsland struct {
 	Series via.Signal[[]int]
-	n      int
 }
 
-func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}); i.n++ }
+func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}) }
 func (i *plainIsland) View() h.H {
 	return h.Div(
-		h.Str(strings.Repeat("x", i.n)),
 		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
 		h.Button(on.Click(i.Load), h.Str("load")),
 	)
@@ -1028,7 +1025,7 @@ func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 		"the store holds the new value before the markup that reads it lands")
 }
 
-func TestPlainAction_signalAnswerIsAnEventStreamWithNoCSP(t *testing.T) {
+func TestPlainAction_signalAnswerIsAnUncachedEventStreamWithNoCSP(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(twoSignals{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
@@ -1036,6 +1033,8 @@ func TestPlainAction_signalAnswerIsAnEventStreamWithNoCSP(t *testing.T) {
 
 	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"), "Datastar picks its parser from this header")
 	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "a frame is no document; the page's policy governs")
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"), "an action's answer is never replayed from cache")
 }
 
 type unsortedSignals struct {

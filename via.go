@@ -207,7 +207,7 @@ type signalField struct {
 	cs       bool
 	seed     any         // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
 	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	applier  seedApplier // tagged Signal only; a SignalCS keeps its seed here, in seed
+	applier  seedApplier // tagged Signal only; a SignalCS's seed stays in seed, with no applier
 }
 
 type seedField struct {

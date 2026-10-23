@@ -1197,7 +1197,8 @@ func TestConnect_anOnConnectThatChangesNothingShipsNoFrame(t *testing.T) {
 // A push whose render is byte-identical to the last one ships no frame.
 //
 // The plain action path answers 204 on an unchanged render that wrote or
-// opened no signals; the live path used to push a byte-identical element patch on every single tick.
+// opened no signals; the live path used to push a byte-identical element
+// patch on every single tick.
 // An idle page on a 2s tick sent ~160 identical frames in five minutes, which
 // is the CPU and bandwidth floor of every idle connection at scale.
 

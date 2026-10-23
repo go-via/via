@@ -418,6 +418,9 @@ func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 // the View has run patches the client. It sends even when v is the value last
 // Set: the client may have changed it since, and the server never sees that.
 //
+// Map, struct and nil values reach the client as for [Signal.Set]: a JSON
+// merge patch, and a nil slice or map deletes the signal.
+//
 // Not safe for concurrent use; call it from the same via callbacks as
 // [Signal.Set].
 func (s *SignalCS[T]) Set(v T) {
