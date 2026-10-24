@@ -2,10 +2,11 @@
 
 This document tracks `main`. Lines marked v0.9.0 or v0.9.1 describe
 behaviour v0.8.3 does not have; [Upgrading from v0.8.3](#upgrading-from-v083)
-lists all of it. v0.9.1 only adds API, so it asks nothing of an upgrade.
+lists all of it. v0.9.1 only adds API, so it asks nothing of an upgrade;
+[Upgrading from v0.9.1](#upgrading-from-v091) lists what v0.10.0 asks.
 
 v0.8 is a rebuild. The module never left v0.x, where Go permits breaking
-changes without a module-path change — so `go get -u` walks v0.7.0 → v0.9.1 as
+changes without a module-path change — so `go get -u` walks v0.7.0 → v0.10.0 as
 an ordinary bump and hands you a tree that shares almost no identifiers with
 the one you were using. No tooling will warn you. There is no compatibility
 shim and no deprecation window: v0.7 is preserved on the `v1` branch, and you
@@ -968,3 +969,13 @@ spelling outright.
   `on.Prevent`, `on.Stop`, `on.Window` → `on.WithDebounce`, `on.WithThrottle`,
   `on.WithOnce`, `on.WithOutside`, `on.WithPrevent`, `on.WithStop`,
   `on.WithWindow`. **Compiler.**
+
+## Upgrading from v0.9.1
+
+- **A plain action that writes or opens a signal answers
+  `text/event-stream`**: a `datastar-patch-signals` frame, then a
+  `datastar-patch-elements` frame if the markup changed. It answered HTML
+  with a `data-signals` attribute. A middleware or test that reads the answer
+  as HTML must read frames; `vt`'s `Fire` returns the frames as its body.
+- **`vtbrowser.Session.Reload` reloads the tab's current page.** It went back
+  to the root; call `GoTo("/")` for that.

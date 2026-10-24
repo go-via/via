@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.10.0 — SignalCS.Set, Meta.Lang, plain-action signal frames (2026-10-24)
 
 ### New
 
