@@ -603,7 +603,7 @@ func (m *mount) writePage(w http.ResponseWriter, req *http.Request, ctx *Ctx, bo
 // cookie predates.
 func (m *mount) renderFreshPage(w http.ResponseWriter, req *http.Request, base string, sess *Session) (*Ctx, []byte) {
 	inst := m.newInst()
-	ctx := newRootCtx(true, base, nil)
+	ctx := newRootCtx(true, base)
 	ctx.unitV = inst // the root is a unit like any child, when it is live
 	if sess != nil {
 		// Detached from the action's stream: this page's tab is not that one.

@@ -137,7 +137,9 @@ func (p *Testing) View() h.H {
 				h.Str(" the body is JSON: the signals keyed by wire name, as Datastar posts its store. Without that header "+
 					"the body is read as a native form, "), Code("multipart/form-data"), h.Str(" with the tab id in a "),
 				Code("_viatab"), h.Str(" field, as PostForm sends it; a JSON body without the header answers 400 and names "+
-					"the header. A plain unit answers 200 with the patched HTML, or 204 when nothing changed. A live action "+
+					"the header. A plain unit answers 200 with the patched HTML, as an SSE body when the action wrote or "+
+					"opened signals: a patch-signals frame, then the element patch if the markup changed. It answers "+
+					"204 when nothing changed. A live action "+
 					"answers 204 and its render arrives on the stream.")),
 		),
 		h.P(h.Str("A live page carries its tab id in the document, "), Code(`<body data-signals='{"viatab":"<id>"}'>`),

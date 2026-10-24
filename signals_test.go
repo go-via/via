@@ -51,28 +51,20 @@ func TestDataSignals_escapesAtSignsDatastarWouldRewrite(t *testing.T) {
 	assert.Contains(t, body, `"send \u0040post(&#39;/x&#39;) now"`, "@ in a data-signals value was not escaped")
 }
 
-// nameComp is a string signal plus a no-op action. The signal is Bound to an
-// input — only a Bound signal is client-writable, and so only a Bound one
-// round-trips an arbitrary string back into the page-level data-signals
-// declaration on the response.
+// nameComp stands in for a page that seeds a signal from stored user input.
 type nameComp struct{ name via.Signal[string] }
 
-// Touch mutates the round-tripped value so the render changes and a patch (not a
-// 204) is returned, letting the test inspect how the value is reflected.
-func (c *nameComp) Touch(ctx *via.Ctx) { c.name.Set(c.name.Get() + "!") }
-func (c *nameComp) View() h.H {
-	return h.Div(h.Input(c.name.Bind()), h.Button(on.Click(c.Touch), h.Str("x")), c.name.Display())
+func (c *nameComp) OnInit(ctx *via.Ctx) error {
+	c.name.Set("' data-on-load='alert(document.cookie)")
+	return nil
 }
+func (c *nameComp) View() h.H { return h.Div(h.Input(c.name.Bind())) }
 
 func TestStringSignal_cannotBreakOutOfDataSignalsAttribute(t *testing.T) {
 	t.Parallel()
-	// Echo the breakout payload back as the signal's own slot; the request shape
-	// (one slot, "name") matches what the GET page declares, so
-	// dispatch proceeds.
-	payload := `{"name":"' data-on-load='alert(document.cookie)"}`
-	_, body := vt.Serve(t, via.Handler(nameComp{})).Action(0).Body(payload).Fire()
+	_, body := vt.Serve(t, via.Handler(nameComp{})).Get("/")
 
-	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the response — attribute breakout possible")
+	assert.NotContains(t, body, `' data-on-load='`, "raw apostrophe survived into the page — attribute breakout possible")
 	assert.Contains(t, body, "&#39;", "apostrophe was not entity-encoded")
 }
 
@@ -182,17 +174,14 @@ type seededIsland struct {
 func (i *seededIsland) OnInit(ctx *via.Ctx) error { i.Series.Set([]int{1, 2, 3}); return nil }
 func (i *seededIsland) View() h.H                 { return h.Div(h.ID("chart"), h.DataIgnoreMorph()) }
 
-// plainIsland is island without the liveness. n is rendered so the response
-// differs from the pre-action render and a patch is returned, not a 204.
+// plainIsland is island without the liveness.
 type plainIsland struct {
 	Series via.Signal[[]int]
-	n      int
 }
 
-func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}); i.n++ }
+func (i *plainIsland) Load(ctx *via.Ctx) { i.Series.Set([]int{1, 2, 3}) }
 func (i *plainIsland) View() h.H {
 	return h.Div(
-		h.Str(strings.Repeat("x", i.n)),
 		h.Div(h.ID("chart"), h.DataIgnoreMorph()),
 		h.Button(on.Click(i.Load), h.Str("load")),
 	)
@@ -257,7 +246,7 @@ func (t *twoSignals) View() h.H {
 	)
 }
 
-func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
+func TestPlainAction_answerSendsOnlyTheSignalsItWrote(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(twoSignals{}))
 	_, page := app.Get("/")
@@ -266,8 +255,17 @@ func TestPlainAction_patchDeclaresOnlyTheSignalsItWrote(t *testing.T) {
 
 	status, frag := app.Action(0).Fire()
 	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
-	assert.Contains(t, frag, `"written":"ada"`, "the written signal is declared")
-	assert.NotContains(t, frag, "left\":", "the untouched signal must not be re-declared")
+	assert.Contains(t, frag, `"written":"ada"`, "the written signal is sent")
+	assert.NotContains(t, frag, "left\":", "the untouched signal must not be sent")
+}
+
+func TestPlainAction_answersAWrittenSignalAsAPatchSignalsFrame(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(twoSignals{})).Action(0).Fire()
+	assert.Contains(t, frag, "event: datastar-patch-signals\ndata: signals {\"written\":\"ada\"}",
+		"a morph skips a data-signals text the element already has, so a Set rides its own frame")
+	assert.NotContains(t, frag, "data-signals", "no attribute for the morph to skip")
+	assert.NotContains(t, frag, "datastar-patch-elements", "the markup did not change, so only signals go out")
 }
 
 // wizard is the conditional-Bind shape: exactly one of Name/Email is rendered
@@ -576,7 +574,7 @@ func (f *dropForm) Save(ctx *via.Ctx) { f.Bump.Set(f.Bump.Get() + 1) }
 
 func (f *dropForm) View() h.H {
 	return h.Div(
-		h.Input(f.N.Bind()), f.N.Display(), h.Input(f.Bump.Bind()),
+		h.Input(f.N.Bind()), f.N.Display(), h.Input(f.Bump.Bind()), f.Bump.Display(),
 		h.Button(on.Click(f.Save), h.Str("save")),
 	)
 }
@@ -982,4 +980,285 @@ func TestSignal_aLivePushDeclaresASlotInAChildItJustOpened(t *testing.T) {
 		app.Action(0).Over(conn).Fire()
 		conn.Await(`"kid__note":""`)
 	})
+}
+
+type csSetInit struct {
+	Open   via.SignalCS[bool]   `via:"init=true"`
+	Hidden via.SignalCS[string] `via:"init=\"a\""`
+}
+
+func (p *csSetInit) OnInit(ctx *via.Ctx) error {
+	p.Open.Set(false)
+	p.Hidden.Set("b")
+	return nil
+}
+func (p *csSetInit) View() h.H { return p.Open.Display() }
+
+func TestSignalCS_setInOnInitOverridesTheTagSeed(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(csSetInit{})).Get("/")
+
+	assert.Contains(t, body, `<span data-text="$_open">false</span>`)
+	assert.Contains(t, body, `"_open":false`)
+	assert.NotContains(t, body, `"_open":true`)
+	assert.Contains(t, body, `"_hidden":"b"`, "a Set declares the slot with no Bind or Display")
+}
+
+type csSetAction struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+}
+
+func (p *csSetAction) Close(ctx *via.Ctx)  { p.Open.Set(false) }
+func (p *csSetAction) Reopen(ctx *via.Ctx) { p.Open.Set(true) }
+func (p *csSetAction) View() h.H {
+	return h.Div(p.Open.Display(), h.Button(on.Click(p.Close)), h.Button(on.Click(p.Reopen)))
+}
+
+func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
+	t.Parallel()
+	status, frag := vt.Serve(t, via.Handler(csSetAction{})).Action(0).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, frag, "data: signals {\"_open\":false}")
+	assert.Contains(t, frag, `<span data-text="$_open">false</span>`, "the re-render shows the Set value, not the seed")
+	assert.Less(t, strings.Index(frag, "datastar-patch-signals"), strings.Index(frag, "datastar-patch-elements"),
+		"the store holds the new value before the markup that reads it lands")
+}
+
+func TestPlainAction_signalAnswerIsAnUncachedEventStreamWithNoCSP(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(twoSignals{}))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+
+	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"), "Datastar picks its parser from this header")
+	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "a frame is no document; the page's policy governs")
+	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
+	assert.Equal(t, "no-cache", resp.Header.Get("Cache-Control"), "an action's answer is never replayed from cache")
+}
+
+type unsortedSignals struct {
+	Zeta  via.Signal[string]
+	Alpha via.Signal[string]
+}
+
+func (p *unsortedSignals) Fill(ctx *via.Ctx) {
+	p.Zeta.Set("z")
+	p.Alpha.Set("a")
+}
+func (p *unsortedSignals) View() h.H {
+	return h.Div(h.Input(p.Zeta.Bind()), h.Input(p.Alpha.Bind()), h.Button(on.Click(p.Fill)))
+}
+
+func TestDataSignals_keysAreSorted(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(unsortedSignals{})).Get("/")
+
+	assert.Contains(t, body, `data-signals='{"alpha":"","zeta":""}'`, "stable bytes for identical renders")
+}
+
+func TestPlainAction_signalFrameKeysAreSorted(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(unsortedSignals{})).Action(0).Fire()
+
+	assert.Contains(t, frag, `data: signals {"alpha":"a","zeta":"z"}`, "stable bytes for identical answers")
+}
+
+type onlyUnencodable struct{ Bad via.Signal[unmarshalable] }
+
+func (p *onlyUnencodable) OnInit(ctx *via.Ctx) error { return nil }
+func (p *onlyUnencodable) Fill(ctx *via.Ctx)         { p.Bad.Set(unmarshalable{}) }
+func (p *onlyUnencodable) View() h.H                 { return h.Button(on.Click(p.Fill)) }
+
+func TestPlainAction_answerWhoseSignalsAllFailToEncodeIs204(t *testing.T) {
+	// sequential: swaps the global log writer
+	buf := globalLog(t)
+	status, body := vt.Serve(t, via.Handler(onlyUnencodable{})).Action(0).Fire()
+
+	assert.Equal(t, http.StatusNoContent, status, "an empty signals frame would carry nothing")
+	assert.Empty(t, body)
+	assert.Contains(t, buf.String(), "cannot marshal", "the dropped value is logged")
+	assert.NotContains(t, buf.String(), "changed nothing", "the action did change something; the encode warning says what went wrong")
+}
+
+type hostileSet struct{ Msg via.Signal[string] }
+
+func (p *hostileSet) Send(ctx *via.Ctx) { p.Msg.Set("a'b\nc@d") }
+func (p *hostileSet) View() h.H         { return h.Button(on.Click(p.Send)) }
+
+func TestPlainAction_hostileSignalValueStaysOneFrameLine(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(hostileSet{})).Action(0).Fire()
+
+	assert.Contains(t, frag, "data: signals {\"msg\":\"a'b\\nc@d\"}\n\n",
+		"a raw newline would end the data line and let the rest of the value forge its own SSE field")
+}
+
+type csSetInitAct struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+	note string
+}
+
+func (p *csSetInitAct) OnInit(ctx *via.Ctx) error { p.Open.Set(false); return nil }
+func (p *csSetInitAct) Bump(ctx *via.Ctx)         { p.note = "bumped" }
+func (p *csSetInitAct) View() h.H {
+	return h.Div(h.P(h.Str(p.note)), h.Button(on.Click(p.Bump)))
+}
+
+func TestPlainSignalCS_setInOnInitIsNotResentByAnUnrelatedAction(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(csSetInitAct{})).Action(0).Fire()
+
+	assert.Contains(t, frag, "bumped")
+	assert.NotContains(t, frag, "_open", "re-sending the first paint's value would undo the user's toggle")
+}
+
+func TestPlainSignalCS_setToTheSeedStillSends(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(csSetAction{})).Action(1).Fire()
+
+	assert.Contains(t, frag, "data: signals {\"_open\":true}", "the browser may have changed it; the server cannot know")
+}
+
+type csSetLive struct {
+	Open via.SignalCS[bool] `via:"init=true"`
+}
+
+func (p *csSetLive) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *csSetLive) Close(ctx *via.Ctx) { p.Open.Set(false) }
+func (p *csSetLive) View() h.H          { return h.Button(on.Click(p.Close)) }
+
+func TestLiveSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(csSetLive{}))
+		conn := app.Connect()
+
+		status, _ := app.Action(0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		assert.Contains(t, conn.Await(`"_open"`), `"_open":false`)
+	})
+}
+
+type csSetHost struct{ Panel csSetAction }
+
+func (p *csSetHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+
+func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
+	t.Parallel()
+	_, frag := vt.Serve(t, via.Handler(csSetHost{})).ChildAction("0", 0).Fire()
+
+	assert.Contains(t, frag, "data: signals {\"_panel__open\":false}")
+	assert.Contains(t, frag, `<span data-text="$_panel__open">false</span>`)
+}
+
+type csSetLiveHost struct{ Panel csSetLive }
+
+func (p *csSetLiveHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+
+func TestLiveSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(csSetLiveHost{}))
+		conn := app.Connect()
+
+		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status)
+
+		assert.Contains(t, conn.Await(`"_panel__open"`), `"_panel__open":false`)
+	})
+}
+
+type csSetSlice struct {
+	Rows via.SignalCS[[]int] `via:"init=[]"`
+}
+
+func (p *csSetSlice) Fill(ctx *via.Ctx)  { p.Rows.Set([]int{1, 2}) }
+func (p *csSetSlice) Clear(ctx *via.Ctx) { p.Rows.Set(nil) }
+func (p *csSetSlice) View() h.H {
+	return h.Div(h.Button(on.Click(p.Fill)), h.Button(on.Click(p.Clear)))
+}
+
+func TestPlainSignalCS_setSendsASliceWholeAndANilAsNull(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(csSetSlice{}))
+
+	_, frag := app.Action(0).Fire()
+	assert.Contains(t, frag, "data: signals {\"_rows\":[1,2]}")
+
+	_, frag = app.Action(1).Fire()
+	assert.Contains(t, frag, "data: signals {\"_rows\":null}", "a nil slice deletes the signal on the client")
+}
+
+type editLeaf struct {
+	Name via.Signal[string] `via:"init=\"ada\""`
+}
+
+func (l *editLeaf) View() h.H { return h.Input(l.Name.Bind()) }
+
+type editMid struct {
+	Leaf editLeaf
+	n    int
+}
+
+func (m *editMid) Bump(ctx *via.Ctx) { m.n++ }
+func (m *editMid) View() h.H {
+	return h.Div(h.Str(strings.Repeat("x", m.n)), h.Button(on.Click(m.Bump)), via.Child(m.Leaf))
+}
+
+type editHost struct{ Mid editMid }
+
+func (p *editHost) View() h.H { return h.Div(via.Child(p.Mid)) }
+
+func TestPlainChildAction_answerDoesNotRedeclareAGrandchildsSignals(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(editHost{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `"mid__leaf__name":"ada"`, "the page declares the grandchild's signal")
+
+	_, frag := app.ChildAction("0", 0).Fire()
+	require.Contains(t, frag, "<div>x<button", "the child re-rendered after the action")
+	assert.NotContains(t, frag, "data-signals", "a re-declared seed would overwrite what the user is typing")
+}
+
+type liveOverwrite struct{ Name via.Signal[string] }
+
+func (p *liveOverwrite) OnInit(ctx *via.Ctx) error {
+	ctx.Tick(time.Hour, func(*via.Ctx) {})
+	return nil
+}
+func (p *liveOverwrite) Save(ctx *via.Ctx) { p.Name.Set("server") }
+func (p *liveOverwrite) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), p.Name.Display(), h.Button(on.Click(p.Save)))
+}
+
+func TestLiveSignal_setOverAPostedValueSurvivesTheRevert(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		app := vt.Serve(t, via.Handler(liveOverwrite{}))
+		conn := app.Connect()
+
+		app.Action(0).Over(conn).Body(`{"name":"typed"}`).Fire()
+
+		assert.Contains(t, conn.Await(`data-text="$name"`), `data-text="$name">server<`,
+			"the push renders the server's Set, not the value the revert restored")
+	})
+}
+
+type signalOnlyInit struct{ Name via.Signal[string] }
+
+func (p *signalOnlyInit) OnInit(ctx *via.Ctx) error { return nil }
+func (p *signalOnlyInit) Fill(ctx *via.Ctx)         { p.Name.Set("ada") }
+func (p *signalOnlyInit) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), h.Button(on.Click(p.Fill)))
+}
+
+func TestPlainAction_signalOnlyAnswerDoesNotWarnItChangedNothing(t *testing.T) {
+	// sequential: swaps the global log writer
+	buf := globalLog(t)
+	status, _ := vt.Serve(t, via.Handler(signalOnlyInit{})).Action(0).Fire()
+
+	require.Equal(t, http.StatusOK, status)
+	assert.NotContains(t, buf.String(), "changed nothing")
 }

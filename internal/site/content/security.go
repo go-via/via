@@ -110,7 +110,8 @@ func (p *Security) View() h.H {
 				"page after logout. A live page gets the same, session or not, over any Cache-Control a middleware set, "+
 				"since its HTML carries the tab id. A plain page with no Cache-Control gets "), Code("no-cache"),
 			h.Str("; one the app set is kept. The SSE connect gets at least "), Code("no-cache"),
-			h.Str(", over any a middleware set. An action response with no session behind it gets none from via.")),
+			h.Str(", over any a middleware set. An action answer that carries signals is an event stream and gets "), Code("no-cache"),
+			h.Str("; one that carries only markup and has no session behind it gets none from via.")),
 
 		d.H2("Redirects"),
 		snippet.Region("security/router.go", "redirect", snippet.Mark("ctx.Redirect", "ctx.RedirectExternal")),

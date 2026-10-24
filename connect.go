@@ -150,8 +150,8 @@ func (p *unitPusher) rerender(rev *revertSet) rerender {
 // changes nothing rendered would otherwise ship a byte-identical element-patch
 // every beat, which is the CPU and bandwidth floor of an idle connection at
 // scale (an idle page on a 2s tick sent ~160 identical frames in five
-// minutes). The plain action path has always answered 204 on an unchanged
-// render; this is the live path's version of that.
+// minutes). The plain action path answers 204 on an unchanged render that
+// wrote or opened no signals; this is the live path's version of that.
 //
 // It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its
@@ -479,7 +479,7 @@ func (m *mount) newTabStream(id, sid string, bind *Ctx, connectSig map[string]js
 // was ever visible, since connect frames no elements of its own.
 func (m *mount) discover(w http.ResponseWriter, req *http.Request, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
 	pv := m.newInst()
-	bind := newRootCtx(false, base, nil)
+	bind := newRootCtx(false, base)
 	bind.rev = newRevertSet()
 	bind.badDecodeLogged = new(atomic.Bool) // dedupes the decode-failure Warn for this connection's whole life
 	bind.unitV = pv

@@ -268,7 +268,7 @@ func noteErr(w http.ResponseWriter, err error) {
 func (r *Router) wrapForErrorPage(w http.ResponseWriter, req *http.Request) *errPageWriter {
 	if r.cfg.errorPage == nil ||
 		isDatastarRequest(req) ||
-		strings.HasSuffix(req.URL.Path, streamRoute) {
+		isStreamRequest(req) {
 		return nil
 	}
 	return &errPageWriter{ResponseWriter: w, r: r, req: req}
@@ -300,7 +300,7 @@ func (r *Router) writeErrorPage(w http.ResponseWriter, req *http.Request, pe Pag
 // it degrades to the plain text via would have sent and says so once.
 func (r *Router) renderErrorPage(req *http.Request, pe PageError) (body []byte, ok bool) {
 	defer r.recoverErrorPage(&body, &ok)
-	ctx := newRootCtx(false, "", nil)
+	ctx := newRootCtx(false, "")
 	ctx.errPage = true
 	ctx.reqScope = reqScope{req: req, sessions: r.sessions, policy: r.policy}
 	node := r.cfg.errorPage(ctx, pe)

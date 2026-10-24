@@ -368,6 +368,11 @@ func (r *Router) datastarEncoded(e Encoder) ([]byte, string) {
 	return d.body, d.etag
 }
 
+// isStreamRequest reports whether req is a live connect, under any mount base.
+func isStreamRequest(req *http.Request) bool {
+	return strings.HasSuffix(req.URL.Path, streamRoute)
+}
+
 // ServeHTTP lazily runs r.init on first use, so a zero Router (var r via.Router)
 // is ready to Mount and serve without an explicit constructor call.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {

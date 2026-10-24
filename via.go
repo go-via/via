@@ -156,18 +156,13 @@ func (*slotID) isViaSignal() {}
 
 var signalMarker = reflect.TypeOf((*interface{ isViaSignal() })(nil)).Elem()
 
-// clientSignal is what SignalCS[T] satisfies and Signal[T] does not. csZero
-// carries T out of the generic type: SignalCS has no T-typed field, so reflect
-// alone cannot recover the zero value an untagged slot is declared with.
-type clientSignal interface {
-	isViaSignalCS()
-	csZero() any
-}
+// clientSignal is what SignalCS[T] satisfies and Signal[T] does not.
+type clientSignal interface{ isViaSignalCS() }
 
 // seeded is the one mechanism behind via:"init=<json>", implemented by
 // *Signal[T], *SignalCS[T] and *State[T] — and by *List[E] through the State it
 // embeds first, so the pointer the applier receives is the embedded State's
-// address too. decodeSeed carries T out of the generic type and checks the tag
+// address too. checkSeed carries T out of the generic type to check the tag
 // at Mount; seedApplier builds the typed write, which decodes the tag afresh
 // for each unit so no two requests share a seeded map, slice or pointer.
 //
@@ -176,7 +171,7 @@ type clientSignal interface {
 // must not undo a Set — and answers with the value the handle now holds, which
 // is what a Signal's slot is declared at.
 type seeded interface {
-	decodeSeed(raw string) (any, error)
+	checkSeed(raw string) error
 	seedApplier(raw string) seedApplier
 }
 
@@ -202,12 +197,10 @@ type typeSignals struct {
 }
 
 type signalField struct {
-	off      uintptr
-	name     string
-	cs       bool
-	seed     any         // resolved on the type walk so the render never reflects — a cs field's T zero, or the tag's JSON
-	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	applier  seedApplier // tagged Signal only; a SignalCS holds no value to write
+	off     uintptr
+	name    string
+	cs      bool
+	applier seedApplier // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
 }
 
 type seedField struct {
@@ -284,16 +277,13 @@ func addSignalField(ts *typeSignals, t reflect.Type, f reflect.StructField, off 
 	tag, tagged := f.Tag.Lookup("via")
 	sf := signalField{off: off, name: name}
 	handle := reflect.New(f.Type).Interface()
-	if cs, ok := handle.(clientSignal); ok {
-		sf.cs, sf.seed, sf.declares = true, cs.csZero(), true
-	}
+	_, sf.cs = handle.(clientSignal)
+	var raw string
 	if tagged {
-		var raw string
-		sf.seed, raw = decodeSeedTag(t, f, handle.(seeded), tag)
-		sf.declares = true
-		if !sf.cs {
-			sf.applier = handle.(seeded).seedApplier(raw)
-		}
+		raw = checkSeedTag(t, f, handle.(seeded), tag)
+	}
+	if tagged || sf.cs {
+		sf.applier = handle.(seeded).seedApplier(raw)
 	}
 	slot := sf.wire("")
 	checkSlotName(t, f.Name, slot, ts.names)
@@ -308,7 +298,7 @@ func addSeededField(ts *typeSignals, t reflect.Type, f reflect.StructField, off 
 	handle := reflect.New(f.Type).Interface()
 	if tag, tagged := f.Tag.Lookup("via"); tagged {
 		h := handle.(seeded)
-		_, raw := decodeSeedTag(t, f, h, tag)
+		raw := checkSeedTag(t, f, h, tag)
 		ts.seeds = append(ts.seeds, seedField{off: off, applier: h.seedApplier(raw)})
 	}
 	// Every State lands here, tracked or not: whether this instance
@@ -319,17 +309,16 @@ func addSeededField(ts *typeSignals, t reflect.Type, f reflect.StructField, off 
 	}
 }
 
-// decodeSeedTag resolves a handle field's declared start value from its tag.
+// checkSeedTag returns a handle field's raw seed, checked against its type.
 // A tag that fails to decode is a typo caught here, at Mount, rather than
 // surfacing as a handle quietly holding a value nobody wrote.
-func decodeSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) (v any, raw string) {
-	raw = parseSeedTag(owner, f, tag)
-	v, err := h.decodeSeed(raw)
-	if err != nil {
+func checkSeedTag(owner reflect.Type, f reflect.StructField, h seeded, tag string) string {
+	raw := parseSeedTag(owner, f, tag)
+	if err := h.checkSeed(raw); err != nil {
 		panic("via: " + owner.String() + "." + f.Name + " has a via:\"init=…\" value that is not JSON " +
 			"for its " + f.Type.String() + " type: " + err.Error())
 	}
-	return v, raw
+	return raw
 }
 
 // parseSeedTag splits the one key via knows off the tag. The value runs to the
@@ -429,19 +418,14 @@ func prebindSignals(c *Ctx, inst instance) {
 	for _, f := range inst.sig.fields {
 		sid := (*slotID)(unsafe.Add(inst.base, f.off))
 		sid.slot, sid.bound = f.wire(prefix), c
-		if !f.declares {
+		if f.applier == nil {
 			continue
 		}
-		// A tagged Signal is declared at what it holds, not at the seed: this
-		// runs on every render, and re-declaring the seed over a value OnInit
-		// or an action has since Set would undo it. A SignalCS holds nothing,
-		// no Set will ever declare it, and a data-show may be its only reader,
-		// so its seed is declared on every pass.
-		v := f.seed
-		if f.applier != nil {
-			v = f.applier.apply(unsafe.Add(inst.base, f.off))
-		}
-		c.declareSignal(sid.slot, v)
+		// A signal is declared at what it holds, not at the seed: this runs on
+		// every render, and re-declaring the seed over a value OnInit or an
+		// action has since Set would undo it. A SignalCS is declared on every
+		// pass, as a data-show may be its only reader.
+		c.declareSignal(sid.slot, f.applier.apply(unsafe.Add(inst.base, f.off)))
 	}
 	for _, s := range inst.sig.seeds {
 		s.applier.apply(unsafe.Add(inst.base, s.off))
@@ -574,9 +558,7 @@ type reqScope struct {
 // model.
 type Ctx struct {
 	unitPass
-	live        bool            // OnInit registered a Tick/Listen, or the View rendered server State
-	declareOnly map[string]any  // when non-nil, declare only these slots
-	declareSeen map[string]bool // slots the pre-action render declared; one absent from it is seeded even when declareOnly excludes it
+	live bool // OnInit registered a Tick/Listen, or the View rendered server State
 	reqScope
 	session   *Session
 	isChild   bool
@@ -757,15 +739,6 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 		"through via.Child, not by calling its View; and View needs a POINTER receiver with every " +
 		"Signal (and every child) held as a plain struct field, not behind a pointer, slice, array, " +
 		"map or interface"))
-}
-
-// csSeed returns field's declared start value — T's zero, or the JSON in a
-// via:"…" tag — resolved once on the type walk (see signalsOf) because reflect
-// cannot recover T from the field itself. Called only once signalSlot has
-// already validated field's offset, so it never needs to panic on its own.
-func (c *Ctx) csSeed(field unsafe.Pointer) any {
-	off := uintptr(field) - uintptr(c.unitV.base)
-	return c.unitV.sig.byOff[off].seed
 }
 
 // keyOf composes onto the parent's key, so a subtree re-rendered on its own

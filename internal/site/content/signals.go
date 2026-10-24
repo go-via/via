@@ -39,7 +39,7 @@ func (p *Signals) View() h.H {
 		h.P(h.Str("The field's type decides where a value lives and who sees it.")),
 		table([]string{"Handle", "Lives on", "Scope"},
 			[]h.H{API("via.Signal"), h.Str("browser, sent with each action"), h.Str("per tab")},
-			[]h.H{API("via.SignalCS"), h.Str("browser only, never sent"), h.Str("per tab")},
+			[]h.H{API("via.SignalCS"), h.Str("browser only, dropped from every POST"), h.Str("per tab")},
 			[]h.H{API("via.State"), h.Str("server"), h.Str("per tab, pushed when it changes")},
 			[]h.H{API("via.List"), h.Str("server"), h.Str("per tab; a State of a slice, with Append, Remove and Each")},
 			[]h.H{API("via.StateTrack"), h.Str("server"), h.Str("per tab, following one store every tab shares")},
@@ -89,7 +89,7 @@ func (p *Signals) View() h.H {
 		demo.Card(d.H3("Toggle"),
 			h.P(API("via.SignalCS"), h.Str(" is for UI state the server has no use for: an open panel, the active tab. "+
 				"Its name starts with an underscore, which Datastar's fetch filter drops, so it never reaches a POST. "+
-				"It has no Get and no Set; the tag is the only way to give it a start value.")),
+				"The tag gives it a start value, and the server can Set it, from OnInit or an action, but never read it: it has no Get.")),
 			via.Child(p.Toggle), "toggle.go",
 			demo.Try(h.Str("Click the button to show and hide the panel."),
 				h.Str("Open the Wire pane: _toggle__open flips and no request appears. The flag and the handler both live in the browser."))),

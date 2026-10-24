@@ -184,6 +184,35 @@ func TestSSECompression_eachFrameDecodesAsItArrives(t *testing.T) {
 	}
 }
 
+func TestPageCompression_coversAPlainActionsSignalFrame(t *testing.T) {
+	t.Parallel()
+	srv := serve(t, via.Handler(twoSignals{}, via.WithPageCompression()))
+	_, page := do(t, srv, http.MethodGet, "/", "")
+	resp, body := getEncoded(t, srv.URL, http.MethodPost, actionURL(t, page, "r", 0), "gzip",
+		"Datastar-Request", "true", "Sec-Fetch-Site", "same-origin")
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "a finished action answer is not the stream")
+	assert.Contains(t, decode(t, "gzip", bytes.NewReader(body)), `"written":"ada"`)
+}
+
+func TestSSECompression_coversTheStreamUnderAMountBase(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter(via.WithSSECompression())
+	via.Mount(r, "/app", disposeProbe{disposed: make(chan struct{})})
+	srv := serve(t, r)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/app/_via/sse", nil)
+	require.NoError(t, err)
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := ownTransport(t).RoundTrip(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+}
+
 func TestSSECompression_isIndependentOfPageCompression(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(disposeProbe{disposed: make(chan struct{})}, via.WithPageCompression()))

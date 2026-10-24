@@ -153,7 +153,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Where state lives", "/signals#where-state-lives"}, {"Binding and display", "/signals#binding-and-display"}},
 			[]h.H{API("via.Signal")}},
 		{"SignalCS",
-			[]h.H{API("via.SignalCS"), s(", a browser-only signal. Its name starts with "), Code("_"), s(", which Datastar leaves out of every POST, and it has no Get or Set: the server only picks its starting value. Drive it with the "),
+			[]h.H{API("via.SignalCS"), s(", a browser-only signal. Its name starts with "), Code("_"), s(", which Datastar leaves out of every POST, and it has no Get: the server can Set it but never reads it. Drive it with the "),
 				Code("on.*CS"), s(" binders and expr.")},
 			[]seeLink{{"Client-only signals", "/signals#client-only-signals"}},
 			[]h.H{API("via.SignalCS")}},
