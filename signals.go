@@ -269,8 +269,9 @@ func (s *slotID) set(v any) {
 }
 
 // bind assigns the signal's wire name, hydrates it from the request when
-// present, and declares the slot for this render's data-signals. Every render
-// entry point calls it, so the name is the handle's identity.
+// present, and declares the slot for this render; only a first paint writes
+// the declarations as data-signals. Every render entry point calls it, so the
+// name is the handle's identity.
 //
 // writable is true only for Bind(), which emits data-bind. A Display()-only
 // signal is a value the server publishes downward, so an inbound value for it

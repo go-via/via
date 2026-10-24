@@ -3,6 +3,7 @@ package via
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"maps"
 	"net/http"
 	"sync/atomic"
@@ -314,5 +315,23 @@ func pruneArgs(a, authAct action) {
 		if _, ok := authAct.args[k]; !ok {
 			delete(a.args, k)
 		}
+	}
+}
+
+// writeActionAnswer answers a plain Datastar action. Signals ride their own
+// patch-signals frame ahead of the markup, as on a live stream: a morph skips a
+// data-signals text the element already carries, so a Set back to the value
+// the page was served with would never reach the client store. The SSE answer
+// carries no CSP header: a frame is no document, so it would be inert.
+func writeActionAnswer(log *slog.Logger, w http.ResponseWriter, markup []byte, signals map[string]any) {
+	raw, n := encodeSlotMap(log, signals)
+	if n == 0 {
+		writePatch(w, markup)
+		return
+	}
+	writeSSEHeaders(w)
+	writeSignalsFrame(w, string(raw))
+	if markup != nil {
+		writePatchFrame(w, markup)
 	}
 }

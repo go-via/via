@@ -134,7 +134,7 @@ func TestDispatch_signalSetInChildActionReachesClient(t *testing.T) {
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
 	assert.Contains(t, body, `"i__name":"resetted"`, "the Set signal must reach the client")
 	assert.NotContains(t, body, `"i__other":`,
-		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
+		"an untouched sibling signal must not be sent; the frame carries only what the action wrote")
 	assert.NotContains(t, body, "datastar-patch-elements", "the child's markup did not change, so only signals go out")
 }
 

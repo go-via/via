@@ -197,11 +197,10 @@ type typeSignals struct {
 }
 
 type signalField struct {
-	off      uintptr
-	name     string
-	cs       bool
-	declares bool        // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
-	applier  seedApplier // set exactly when declares is
+	off     uintptr
+	name    string
+	cs      bool
+	applier seedApplier // every cs field, and a tagged Signal: its slot reaches the client with no Bind or Display
 }
 
 type seedField struct {
@@ -284,7 +283,6 @@ func addSignalField(ts *typeSignals, t reflect.Type, f reflect.StructField, off 
 		raw = checkSeedTag(t, f, handle.(seeded), tag)
 	}
 	if tagged || sf.cs {
-		sf.declares = true
 		sf.applier = handle.(seeded).seedApplier(raw)
 	}
 	slot := sf.wire("")
@@ -420,7 +418,7 @@ func prebindSignals(c *Ctx, inst instance) {
 	for _, f := range inst.sig.fields {
 		sid := (*slotID)(unsafe.Add(inst.base, f.off))
 		sid.slot, sid.bound = f.wire(prefix), c
-		if !f.declares {
+		if f.applier == nil {
 			continue
 		}
 		// A signal is declared at what it holds, not at the seed: this runs on
