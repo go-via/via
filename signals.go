@@ -64,10 +64,8 @@ func encodeSlotMap(log *slog.Logger, m map[string]any) (raw []byte, n int) {
 // rewrites @name( into an action call. v1.0.4 skips string literals, but every @
 // still goes out as \u0040 so a compiler that did not would find none; JSON
 // puts @ only inside strings, where it reads back as @.
-func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, order []string, initial map[string]any) {
-	want := slices.Sorted(slices.Values(order)) // encoding/json sorted the map this used to build; keep the bytes stable
-
-	raw, _ := encodeSlots(log, want, initial)
+func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, initial map[string]any) {
+	raw, _ := encodeSlotMap(log, initial)
 	buf.WriteString(` data-signals='`)
 	for _, b := range raw {
 		switch b {
@@ -146,6 +144,12 @@ func (r *revertSet) restore() {
 // of your own, publish to a [topic.Topic] the unit Listens to. See the package
 // doc for the goroutine model.
 type Signal[T any] struct {
+	signalHead[T] // MUST stay the first field: the seed applier writes it through the field's address
+}
+
+// signalHead is what Signal and SignalCS share: the slot, the value, and one
+// seed mechanism for both.
+type signalHead[T any] struct {
 	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
 	val    T
 	// settled marks the start value as decided, so the seed a via:"init=…" tag
@@ -153,16 +157,28 @@ type Signal[T any] struct {
 	settled bool
 }
 
-func (*Signal[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
+// prebindSignals casts a signal field's address to *slotID; these fail to
+// compile if the head ever moves off offset 0.
+var (
+	_ = [1]struct{}{}[unsafe.Offsetof(Signal[int]{}.slotID)]
+	_ = [1]struct{}{}[unsafe.Offsetof(SignalCS[int]{}.slotID)]
+)
 
-func (*Signal[T]) seedApplier(raw string) seedApplier { return signalSeed[T]{raw} }
+func (*signalHead[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
+
+// seedApplier is built for every SignalCS, tagged or not: an untagged one
+// (raw "") is declared at T's zero. A Signal gets one only when tagged.
+func (*signalHead[T]) seedApplier(raw string) seedApplier { return signalSeed[T]{raw} }
 
 type signalSeed[T any] struct{ raw string }
 
 func (a signalSeed[T]) apply(handle unsafe.Pointer) any {
-	s := (*Signal[T])(handle)
+	s := (*signalHead[T])(handle)
 	if !s.settled {
-		s.settled, s.val = true, mustSeed[T](a.raw)
+		s.settled = true
+		if a.raw != "" {
+			s.val = mustSeed[T](a.raw)
+		}
 	}
 	return s.val
 }
@@ -366,39 +382,10 @@ func (t anyText) RenderTo(r *render.Renderer) { r.WriteEscaped(fmt.Sprint(t.v)) 
 // A string seed is written as JSON, not as a bare string:
 // `via:"init=\"north-1\""`.
 type SignalCS[T any] struct {
-	slotID // MUST stay the first field: prebindSignals stamps it through a pointer add at the field's offset
-	val    T
-	// settled works as Signal's does: the seed is applied once, never over a Set.
-	settled bool
+	signalHead[T] // MUST stay the first field: the seed applier writes it through the field's address
 }
-
-// prebindSignals casts a signal field's address to *slotID; these fail to
-// compile if the head ever moves off offset 0.
-var (
-	_ = [1]struct{}{}[unsafe.Offsetof(Signal[int]{}.slotID)]
-	_ = [1]struct{}{}[unsafe.Offsetof(SignalCS[int]{}.slotID)]
-)
 
 func (*SignalCS[T]) isViaSignalCS() {}
-
-func (*SignalCS[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
-
-// seedApplier is built for every SignalCS, tagged or not: an untagged one
-// (raw "") is declared at T's zero.
-func (*SignalCS[T]) seedApplier(raw string) seedApplier { return csSeed[T]{raw} }
-
-type csSeed[T any] struct{ raw string }
-
-func (a csSeed[T]) apply(handle unsafe.Pointer) any {
-	s := (*SignalCS[T])(handle)
-	if !s.settled {
-		s.settled = true
-		if a.raw != "" {
-			s.val = mustSeed[T](a.raw)
-		}
-	}
-	return s.val
-}
 
 // Ref returns the signal's Datastar expression — "$_open" for a field Open.
 // Like [Signal.Ref] it panics on a signal reached through a pointer, slice,

@@ -194,7 +194,7 @@ func childViewer(r *render.Renderer, inst instance, site childSite) {
 	}
 	if parent.declare && len(child.order) > 0 {
 		var buf bytes.Buffer
-		writeSignalsAttr(parent.logger(), &buf, child.order, child.initial)
+		writeSignalsAttr(parent.logger(), &buf, child.initial)
 		r.WriteString(buf.String())
 	}
 	r.WriteString(`>`)

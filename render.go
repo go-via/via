@@ -93,7 +93,7 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	var b bytes.Buffer
 	b.WriteString(`<div id="root"`)
 	if ctx.declare {
-		writeSignalsAttr(ctx.logger(), &b, ctx.order, ctx.initial)
+		writeSignalsAttr(ctx.logger(), &b, ctx.initial)
 	}
 	b.WriteString(`>`)
 	b.Write(rr.Bytes())

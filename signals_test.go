@@ -1192,6 +1192,37 @@ func TestPlainSignalCS_setSendsASliceWholeAndANilAsNull(t *testing.T) {
 	assert.Contains(t, frag, "data: signals {\"_rows\":null}", "a nil slice deletes the signal on the client")
 }
 
+type editLeaf struct {
+	Name via.Signal[string] `via:"init=\"ada\""`
+}
+
+func (l *editLeaf) View() h.H { return h.Input(l.Name.Bind()) }
+
+type editMid struct {
+	Leaf editLeaf
+	n    int
+}
+
+func (m *editMid) Bump(ctx *via.Ctx) { m.n++ }
+func (m *editMid) View() h.H {
+	return h.Div(h.Str(strings.Repeat("x", m.n)), h.Button(on.Click(m.Bump)), via.Child(m.Leaf))
+}
+
+type editHost struct{ Mid editMid }
+
+func (p *editHost) View() h.H { return h.Div(via.Child(p.Mid)) }
+
+func TestPlainChildAction_answerDoesNotRedeclareAGrandchildsSignals(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(editHost{}))
+	_, page := app.Get("/")
+	require.Contains(t, page, `"mid__leaf__name":"ada"`, "the page declares the grandchild's signal")
+
+	_, frag := app.ChildAction("0", 0).Fire()
+	require.Contains(t, frag, "<div>x<button", "the child re-rendered after the action")
+	assert.NotContains(t, frag, "data-signals", "a re-declared seed would overwrite what the user is typing")
+}
+
 type liveOverwrite struct{ Name via.Signal[string] }
 
 func (p *liveOverwrite) OnInit(ctx *via.Ctx) error {
