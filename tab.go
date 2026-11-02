@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
-	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -195,7 +194,7 @@ func (c *tabStream) flushDirty(u *Ctx) {
 	// the element push omits data-signals, so a morph never clobbers what the
 	// user is typing. encodeSlots drops and logs a value that does not encode,
 	// rather than losing the whole frame to it.
-	if raw, n := encodeSlots(c.mount.cfg.log, slices.Sorted(maps.Keys(all)), all); n > 0 {
+	if raw, n := encodeSlotMap(c.mount.cfg.log, all); n > 0 {
 		c.wire.signals(string(raw))
 	}
 	clearDirty(u)
@@ -215,8 +214,7 @@ func (c *tabStream) declareOpened(prev, cur *Ctx) {
 	if len(opened) == 0 {
 		return
 	}
-	want := slices.Sorted(maps.Keys(opened))
-	if raw, n := encodeSlots(c.mount.cfg.log, want, opened); n > 0 {
+	if raw, n := encodeSlotMap(c.mount.cfg.log, opened); n > 0 {
 		c.wire.signals(string(raw))
 	}
 }
@@ -534,8 +532,8 @@ const (
 
 // connectWait caps how long a parked action waits for its tab's stream to
 // register. A first connect lands well under it on a healthy network, and a
-// click made in a longer gap is better answered by a 410 and a fresh page than
-// by holding the POST for the whole pinned deadline.
+// click made in a longer gap is better sent down the plain path (for a live
+// unit, a 410 and a fresh page) than held for the whole pinned deadline.
 const connectWait = 2 * time.Second
 
 // enter finds id's stream for one action. A ready stream with no one parked
@@ -667,8 +665,8 @@ func (r *registry) unpark(id string, s *tabSlot, w *waiter) {
 // it, and the id would stop being a synchronizer token.
 //
 // The key is per process, not the shared session key: only the pod holding
-// a tab's stream can run its actions, so an id another pod issued is refused
-// at once rather than parked for connectWait before the same 410.
+// a tab's stream can run its actions, so an id another pod issued goes down
+// the plain path at once rather than parking for connectWait first.
 func (m *mount) newTabID(cred string) string {
 	r := randomToken()
 	return r + m.tabTag(r, cred)

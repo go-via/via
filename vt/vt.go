@@ -291,7 +291,8 @@ func (a *Action) signalBody() string {
 }
 
 // Fire issues the POST and returns the status code and the response body. On a
-// plain page the body is the Datastar patch; on a live one the patch goes to
+// plain page the body is the Datastar patch: HTML, or SSE frames when the
+// action wrote or opened signals; on a live one the patch goes to
 // the open Conn instead and the body is empty, so assert on the Conn there. A
 // refused dispatch answers with its reason as a one-line text body: 410 when
 // the target is gone (no such action id in the current render, no such child,

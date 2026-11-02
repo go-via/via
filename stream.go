@@ -402,9 +402,8 @@ func panicSite() string {
 	}
 }
 
-// writeSignalsFrame writes one Datastar patch-signals SSE event — via uses it
-// to hand the client its tab id, whose name must stay underscore-free (see
-// tabSignal).
+// writeSignalsFrame writes one Datastar patch-signals SSE event. The tab id
+// rides one too, and its name must stay underscore-free (see tabSignal).
 func writeSignalsFrame(w io.Writer, signalsJSON string) {
 	_, _ = io.WriteString(w, patchSignalsEvent+"data: signals ")
 	_, _ = io.WriteString(w, signalsJSON)

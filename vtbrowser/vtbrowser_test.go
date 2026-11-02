@@ -1180,6 +1180,29 @@ func TestSignal_atSignInPlainActionPatchReachesTheStoreIntact(t *testing.T) {
 	s.RequireCleanConsole()
 }
 
+type bReset struct {
+	Name via.Signal[string] `via:"init=\"a\""`
+}
+
+func (p *bReset) Reset(ctx *via.Ctx) { p.Name.Set("a") }
+func (p *bReset) View() h.H {
+	return h.Div(h.Input(h.ID("name"), p.Name.Bind()), h.Button(h.ID("reset"), on.Click(p.Reset), h.Str("reset")))
+}
+
+func TestPlainSignal_setBackToTheDeclaredValueResetsTheInput(t *testing.T) {
+	t.Parallel()
+	s := vtbrowser.Open(t, via.Handler(bReset{}))
+	s.WaitLoaded()
+
+	for range 2 {
+		s.Type("#name", "zz")
+		s.WaitBoundSignal("#name", "azz")
+		s.Click("#reset")
+		s.WaitValue("#name", "a")
+	}
+	s.RequireCleanConsole()
+}
+
 type bAtLive struct{ Msg via.Signal[string] }
 
 func (p *bAtLive) OnInit(ctx *via.Ctx) error {

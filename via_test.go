@@ -284,7 +284,7 @@ func TestEmbeddedDatastarClient_answersAMatchingIfNoneMatchWith304(t *testing.T)
 	assert.NotEmpty(t, body)
 }
 
-func TestAction_respondsWithElementPatchNotSignalPatch(t *testing.T) {
+func TestAction_withNoSignalsRespondsWithAnHTMLElementPatch(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")

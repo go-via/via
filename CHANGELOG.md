@@ -1,8 +1,20 @@
 # Changelog
 
-## Unreleased
+## v0.10.0 — SignalCS.Set, Meta.Lang, plain-action signal frames (2026-10-24)
 
 ### New
+
+- **`SignalCS.Set(v)`** sends a value to a client-only signal. In `OnInit` it
+  replaces the `via:"init=…"` seed on the first paint; after the View has run
+  it patches the client, on a plain or a live unit. It sends even when `v` is
+  the value last Set, so it can reset what the user changed. There is still no
+  `Get` (#179).
+
+- **`Meta.Lang`** sets a page's `<html lang>`, overriding `Head.Lang`, so the
+  language can follow the signed-in person without a router per language.
+  Empty keeps `Head.Lang`; error pages always use it. A literal that is not a
+  language tag panics at Mount; one produced by request data is dropped and
+  logged, and the page gets `Head.Lang` (#176).
 
 - **`vtbrowser.OpenURL(t, url)`** drives the browser at a server the test owns,
   such as one built with its own URL for `WithTrustedOrigin`, and loads `url`.
@@ -32,6 +44,13 @@
 
 ### Fixed
 
+- A `Signal.Set` in a plain action reaches the client when the value matches
+  the `data-signals` text the page already carries, such as a reset to the
+  start value after the user typed; the morph skipped the unchanged attribute
+  and the input kept the typed text. A plain action that writes or opens
+  signals now answers `text/event-stream`: a `datastar-patch-signals` frame,
+  then the element patch if the markup changed. `WithPageCompression` covers
+  it, and `vt.Action.Fire` returns the frames as the body.
 - A live page's first stream connect carries its signals. The connect's
   `@post` ran before Datastar applied any nested `data-signals`, so the body
   held only `viatab` and the first push rendered every signal on the page as
@@ -43,7 +62,7 @@
 - A child whose type the parent also holds inside a nested struct, slice or map
   takes the positional slot prefix; it took the direct field's name, so two
   children shared one client signal.
-- A plain child's action patch declares the signals of a grandchild it opened;
+- A plain child's action answer sends the signals of a grandchild it opened;
   the client store had no value for them.
 - A grandchild's signals are declared on the page; only a direct child's were,
   so a grandchild's `Display` or `Ref` read `undefined` client-side.
@@ -135,6 +154,11 @@
   longer call `r.Close()` after `ListenAndServe`, which Ctrl-C never reaches;
   `/start` points to the tutorial's step 4 for the Close-then-Shutdown order.
   `MIGRATION.md` names v0.9.1 alongside v0.9.0 (#178).
+- `/live`, `/troubleshooting`, `/reference`, `/security`, `/deploy` and
+  `WithPinnedDeadline` say what happens when an action's stream has not
+  connected within 2s: an action on a live unit answers 410, one on a plain
+  unit runs. They said every such action answered 410, as did the v0.9.0
+  entry for clicks before the stream connects (#177).
 - `/deploy` says to list Caddy's brotli plugin in `encode`'s block form: the
   shorthand `encode br zstd gzip` runs it at quality 0, so each stream frame
   is compressed on its own (145 bytes against 13).

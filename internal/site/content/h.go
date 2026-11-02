@@ -154,10 +154,11 @@ func (p *Helpers) View() h.H {
 		h.P(h.Str("Its "), Code("HTMLAttrs"), h.Str(" and "), Code("BodyAttrs"), h.Str(" put attributes on "), Code("<html>"), h.Str(" and "), Code("<body>"),
 			h.Str(", after the ones via writes. A page's "), API("via.Meta"),
 			h.Str(" carries the same two fields: a page attribute replaces the router's of the same name, except "), Code("class"),
-			h.Str(", whose values are joined with a space. A "), Code("data-*"), h.Str(" attribute there is live Datastar, as anywhere else on the page.")),
+			h.Str(", whose values are joined with a space. A "), Code("data-*"), h.Str(" attribute there is live Datastar, as anywhere else on the page. "),
+			h.Str("A page's "), Code("Meta.Lang"), h.Str(" overrides the router's "), Code("Lang"), h.Str(" for that page, so a per-user language needs no second router; empty keeps the router's.")),
 		snippet.Region("h/shell.go", "shell"),
 		snippet.Text("rendered HTML", hs.ShellHTML),
-		h.P(h.Str("At startup or Mount, via refuses "), Code("lang"), h.Str(" (set Lang instead), the attributes it writes itself, a name given twice, and "),
+		h.P(h.Str("At startup or Mount, via refuses "), Code("lang"), h.Str(" (set Head.Lang or Meta.Lang instead), the attributes it writes itself, a name given twice, and "),
 			Code("style"), h.Str(" and "), Code("on*"), h.Str(" handlers, which the CSP would block. One that only a request's data produces is dropped from that render and logged.")),
 		Callout(Caveat, "El refuses script",
 			h.P(Code(`h.El("script", …)`), h.Str(" panics, in any letter case. Datastar gives a script that arrives in a live patch the "+

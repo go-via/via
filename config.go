@@ -386,9 +386,9 @@ func (o maxSSEConnOption) apply(c *config) {
 // It also bounds how long an action carrying a tab id this process issued
 // waits for that tab's stream to connect; one deadline covers both waits. A
 // click made before the stream opens, or during a reconnect, runs once it
-// does, in arrival order. It answers 410 if the stream has not come by 2s or
-// d, whichever is sooner, and 503 if it came but did not pick the action up
-// by d.
+// does, in arrival order. If the stream has not come by 2s or d, whichever
+// is sooner, a live unit's action answers 410 and a plain unit's runs without
+// it. It answers 503 if the stream came but did not pick the action up by d.
 // When via itself ended the stream (a Rotate, a revoked session, an aborted
 // push, Router.Close), the id answers 410 at once for d instead of waiting.
 // Set it below the load balancer's own timeout so via answers first. It

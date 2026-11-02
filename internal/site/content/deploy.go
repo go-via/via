@@ -186,7 +186,7 @@ func (p *Deploy) View() h.H {
 			[]h.H{h.Str("Frame write"), h.Str("10 s, fixed"),
 				h.Str("A peer that stops reading loses its stream after this.")},
 			[]h.H{h.Str("Pinned deadline"), h.Span(h.Str("5 s, "), API("via.WithPinnedDeadline")),
-				h.Str("How long an action waits, in all, for a stream still connecting (410 if it never comes) and for " +
+				h.Str("How long an action waits, in all, for a stream still connecting (at most 2 s; then a live unit's action answers 410 and a plain unit's runs) and for " +
 					"its tab's goroutine to pick it up (503). Keep it under the balancer's request timeout so the answer is via's.")},
 			[]h.H{h.Code(h.Str("http.Server.WriteTimeout")), h.Str("0"),
 				h.Str("It bounds the whole response, and a stream is one response for the life of the tab.")},
@@ -283,7 +283,7 @@ func (p *Deploy) View() h.H {
 		d.H2("Horizontal scaling"),
 		h.P(h.Str("With a shared key and store, the session follows the user to any pod. The tab does not. An "+
 			"action POST carries a tab id and looks it up on the pod that opened the stream, so an action "+
-			"landing on another pod answers 410 and the tab reloads. A balancer needs affinity for the life of "+
+			"on a live unit landing on another pod answers 410 and the tab reloads; one on a plain unit runs there. A balancer needs affinity for the life of "+
 			"a tab to avoid that reload; correctness does not depend on it.")),
 		Callout(Caveat, "Pin on a cookie the balancer owns",
 			h.P(h.Str("Not on "), Code("via_session"), h.Str(": its value changes on "), API("via.Session.Rotate"),

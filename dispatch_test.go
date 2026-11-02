@@ -108,10 +108,10 @@ func TestDispatch_redirectFromPlainChildActionNavigatesTheTab(t *testing.T) {
 
 // sigChild's signals are only Bound (never Displayed), so Setting one never
 // changes the rendered HTML — the only way a client sees the new value is the
-// container's data-signals attribute. Other exists solely so Reset's Set of
-// Name has a sibling to leave alone: the response must declare Name and not
-// Other, proving the patch is restricted to what the action actually wrote
-// rather than the whole slot table.
+// answer's patch-signals frame. Other exists solely so Reset's Set of Name has
+// a sibling to leave alone: the response must send Name and not Other,
+// proving the frame carries what the action actually wrote rather than the
+// whole slot table.
 type sigChild struct{ Name, Other via.Signal[string] }
 
 func (s *sigChild) Reset(ctx *via.Ctx) { s.Name.Set("resetted") }
@@ -134,7 +134,8 @@ func TestDispatch_signalSetInChildActionReachesClient(t *testing.T) {
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
 	assert.Contains(t, body, `"i__name":"resetted"`, "the Set signal must reach the client")
 	assert.NotContains(t, body, `"i__other":`,
-		"an untouched sibling signal must not be declared — Set restricts the patch, it doesn't broadcast the whole table")
+		"an untouched sibling signal must not be sent; the frame carries only what the action wrote")
+	assert.NotContains(t, body, "datastar-patch-elements", "the child's markup did not change, so only signals go out")
 }
 
 // guardedChild is embedded under a parent whose own OnInit session-gates

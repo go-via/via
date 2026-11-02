@@ -31,7 +31,7 @@ var overrides = map[string]string{
 	"via.State":           "Server-authoritative per-tab state, rendered as text and morphed when it changes. Rendering one makes its unit live.",
 	"via.List":            "A State over a slice, with Append, Remove and Each.",
 	"via.Signal":          "Client-resident state, posted with every action. Get returns the posted value only for a Bind()ed signal.",
-	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never sees it.",
+	"via.SignalCS":        "Client-only state. Its name is _-prefixed, which Datastar's fetch filter drops, so the server never reads it, though it can Set it.",
 	"via.StateOf":         "Seeds a State from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.ListOf":          "Seeds a List from a parent's composite literal, for a child that has no OnInit of its own to Set it in.",
 	"via.StateTrack":      "A State that seeds from load at every init of its unit, re-seeds once the stream has subscribed, then follows the topic. For a source fixed at mount; State.Track in OnInit is for one that depends on the request.",
@@ -58,7 +58,7 @@ var overrides = map[string]string{
 	"via.WithSessionCookieName":   "Overrides the cookie name (default \"via_session\"). Set a distinct one per app when two via apps share a host. A name net/http would drop panics.",
 	"via.WithSecureCookies":       "Forces Secure on the session cookie. Without it Secure follows TLS or the proxy's X-Forwarded-Proto / Forwarded header, so it is for a proxy that sends neither.",
 	"via.WithMaxSSEConn":          "Caps how many live streams this router serves at once (default 10000; 0 or less panics); past the cap a connect is refused 503. The same number, up to 1024, caps actions parked waiting for their tab's stream; past it an action answers 503.",
-	"via.WithPinnedDeadline":      "How long an action POST waits for the tab's stream goroutine to pick it up before answering 503 and logging the tab as pinned (default 5s; 0 or less panics). An action that has started is waited for, since it writes the POST's own response. The same deadline covers the wait for a tab's stream that has not connected yet, capped at 2s: 410 if it has not come by then, and at once if via itself ended it.",
+	"via.WithPinnedDeadline":      "How long an action POST waits for the tab's stream goroutine to pick it up before answering 503 and logging the tab as pinned (default 5s; 0 or less panics). An action that has started is waited for, since it writes the POST's own response. The same deadline covers the wait for a tab's stream that has not connected yet, capped at 2s: past that a live unit's action answers 410 and a plain unit's runs. Any action answers 410 at once if via itself ended the stream.",
 	"via.WithMaxBody":             "Caps an action POST body, and how much of a form submit's file parts stays in RAM before spilling to a temp file (default 1 MiB). Text fields stay in RAM up to this plus 10 MiB. Over the cap answers 413.",
 	"via.WithMaxUpload":           "Caps a native form submit's whole multipart body (default 8 MiB). Over the cap answers 413.",
 	"via.WithPageCompression":     "Compresses every response but the stream with the first of encs the client accepts, in the order given; none means gzip. Off by default. An Encoder plugs in any other coding, such as brotli. A duplicate token or a second WithPageCompression panics.",
@@ -115,7 +115,7 @@ var hooks = []row{
 	{"OnReload(*via.Ctx) error",
 		"Runs after one of the unit's actions and before the render that answers it, so a handler that mutated a store re-reads here. Skipped behind a Redirect."},
 	{"PageMeta() via.Meta",
-		"The mounted root's own document: title, description, social cards, assets, <html> and <body> attributes. Read after OnInit, on a render that writes a document, never on an SSE push."},
+		"The mounted root's own document: title, description, social cards, assets, lang, <html> and <body> attributes. Read after OnInit, on a render that writes a document, never on an SSE push."},
 }
 
 type dataHelper struct{ name, attr, use string }

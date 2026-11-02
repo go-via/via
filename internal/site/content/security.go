@@ -110,7 +110,8 @@ func (p *Security) View() h.H {
 				"page after logout. A live page gets the same, session or not, over any Cache-Control a middleware set, "+
 				"since its HTML carries the tab id. A plain page with no Cache-Control gets "), Code("no-cache"),
 			h.Str("; one the app set is kept. The SSE connect gets at least "), Code("no-cache"),
-			h.Str(", over any a middleware set. An action response with no session behind it gets none from via.")),
+			h.Str(", over any a middleware set. An action answer that carries signals is an event stream and gets "), Code("no-cache"),
+			h.Str("; one that carries only markup and has no session behind it gets none from via.")),
 
 		d.H2("Redirects"),
 		snippet.Region("security/router.go", "redirect", snippet.Mark("ctx.Redirect", "ctx.RedirectExternal")),
@@ -211,7 +212,7 @@ func (p *Security) View() h.H {
 			[]h.H{API("via.WithMaxBody"), h.Str("1 MiB"), h.Span(h.Str("An action POST body, and how much of a form submit's file parts stays in memory. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxUpload"), h.Str("8 MiB"), h.Span(h.Str("A PostForm submit's whole multipart body; file parts past WithMaxBody spill to a temp file, and text fields stay in RAM up to WithMaxBody plus 10 MiB. "), Code("413 request body too large"), h.Str("."))},
 			[]h.H{API("via.WithMaxSSEConn"), h.Str("10000"), h.Span(h.Str("Open live streams across the Router. "), Code("503 stream capacity reached"), h.Str("."))},
-			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, "), Code("410"), h.Str("."))},
+			[]h.H{API("via.WithPinnedDeadline"), h.Str("5s"), h.Span(h.Str("How long an action waits for its tab's goroutine to pick it up, "), Code("503 stream busy"), h.Str("; and for a stream still connecting, at most 2s, then "), Code("410"), h.Str(" for a live unit's action (a plain unit's runs)."))},
 		),
 		h.P(h.Str("The stream cap is router-wide, with no per-client share: one client can hold all of it. Set it to what the "+
 			"machine has memory for, since each stream holds a goroutine and a composition tree for the tab's life. A per-client "+

@@ -1963,6 +1963,34 @@ func TestSession_streamThatSetsTheCookieIsNotStored(t *testing.T) {
 	assert.Equal(t, "private, no-store", resp.Header.Get("Cache-Control"))
 }
 
+// signInSignal answers each action with a signal frame, so its Cache-Control
+// comes from the event-stream path rather than the markup one.
+type signInSignal struct{ Who via.Signal[string] }
+
+func (c *signInSignal) SignIn(ctx *via.Ctx) {
+	ctx.Session().Put(member{Name: "alice"})
+	c.Who.Set("alice")
+}
+func (c *signInSignal) Peek(ctx *via.Ctx) { c.Who.Set("anon") }
+func (c *signInSignal) View() h.H {
+	return h.Div(h.Button(on.Click(c.SignIn)), h.Button(on.Click(c.Peek)))
+}
+
+func TestSession_signalAnswerOverridesAMiddlewaresCacheControl(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(publicCache(via.Handler(signInSignal{}, testSessionKey)))
+	t.Cleanup(srv.Close)
+	c := jarClient(t)
+
+	anon := sessionActionResponse(t, c, srv.URL, 1)
+	require.Equal(t, "text/event-stream", anon.Header.Get("Content-Type"))
+	assert.Equal(t, "no-cache", anon.Header.Get("Cache-Control"), "a middleware's public max-age is replaced")
+
+	signIn := sessionActionResponse(t, c, srv.URL, 0)
+	require.Equal(t, "text/event-stream", signIn.Header.Get("Content-Type"))
+	assert.Equal(t, "private, no-store", signIn.Header.Get("Cache-Control"), "a session's no-store is kept")
+}
+
 func sessionActionResponse(t *testing.T, c *http.Client, base string, n int, headers ...map[string]string) *http.Response {
 	t.Helper()
 	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))

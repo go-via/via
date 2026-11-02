@@ -134,7 +134,8 @@ func (p *Troubleshooting) View() h.H {
 		h.P(h.Str("On a page with a live unit the browser reloads the tab on its own after a 410, with a \"Page is out of date - reloading…\" banner; "+
 			"a plain page ships no reconnect script, so nothing shows until the user reloads. "+
 			"An action for a live tab whose stream is still connecting, or reconnecting, waits up to 2 seconds (less if "),
-			API("via.WithPinnedDeadline"), h.Str(" is shorter) for it, and answers 410 only if the stream has not come by then. "+
+			API("via.WithPinnedDeadline"), h.Str(" is shorter) for it. If the stream has not come by then, an action on a live unit answers 410 "+
+				"and one on a plain unit runs, so a form outside every live unit still submits while the stream is down. "+
 				"When via ended the stream itself, the 410 comes at once.")),
 		tsSee(d, "/actions#arguments", "Actions: Arguments"),
 

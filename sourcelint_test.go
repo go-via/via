@@ -2134,6 +2134,7 @@ func (*Session) Rotate() string
 func (*SignalCS[T]) Bind() h.Attr
 func (*SignalCS[T]) Display() h.H
 func (*SignalCS[T]) Ref() expr.Expr
+func (*SignalCS[T]) Set(T)
 func (*Signal[T]) Bind() h.Attr
 func (*Signal[T]) Display() h.H
 func (*Signal[T]) Get() T
@@ -2180,7 +2181,7 @@ type Encoder struct{Token string; NewWriter func(io.Writer) Compressor}
 type Head struct{Lang string; HTMLAttrs []Attr; BodyAttrs []Attr; Raw string; Assets Assets}
 type List[E any] struct{State[[]E]}
 type MemorySessionStore struct{}
-type Meta struct{Title string; Description string; Canonical string; Robots string; OG map[string]string; Twitter map[string]string; Assets Assets; HTMLAttrs []Attr; BodyAttrs []Attr}
+type Meta struct{Title string; Description string; Canonical string; Robots string; OG map[string]string; Twitter map[string]string; Assets Assets; Lang string; HTMLAttrs []Attr; BodyAttrs []Attr}
 type MountOption interface{…}
 type Option interface{…}
 type PageError struct{Status int; Reason Reason; Detail string; Err error}
