@@ -13,7 +13,6 @@ import (
 type Compositions struct {
 	page
 	Compose demos.Compose
-	Keys    demos.ShiftPair
 	Hooks   demos.HookLog
 	Relay   demos.Relay
 }
@@ -21,7 +20,6 @@ type Compositions struct {
 func NewCompositions(env Env) Compositions {
 	return Compositions{
 		page: newPage("/compositions", env),
-		Keys: demos.NewShiftPair(),
 	}
 }
 
@@ -49,43 +47,23 @@ func (p *Compositions) View() h.H {
 			h.P(h.Code(h.Str("Region")), h.Str(" is one struct with its own State and action. "), h.Code(h.Str("Compose")),
 				h.Str(" holds two of them as fields and renders each with "), API("via.Child"),
 				h.Str(". Each gets its own container, its own state and its own action URL.")),
-			via.Child(p.Compose), "compose.go", demo.WireOpen(),
+			via.Child(&p.Compose), "compose.go", demo.WireOpen(),
 			demo.Try(h.Str("Click + on left, then on right. The two counts move apart."),
 				h.Str("In the Wire pane, the two POSTs differ only in the child key in their URL."))),
 
 		d.H2("Children and keys"),
 		snippet.Region("compositions/names.go", "names"),
-		h.P(APIText("via.Child", "via.Child(p.Chat)"), h.Str(" renders a field as its own unit, with its own container, "),
-			Code("OnInit"), h.Str(" and actions. The argument must be a field selector: Child copies the child at every render, "+
-				"and a composite literal there would re-seed it each time. Value fields are copied, so each connection has its own; "+
+		h.P(APIText("via.Child", "via.Child(&p.Chat)"), h.Str(" renders a field as its own unit, with its own container, "),
+			Code("OnInit"), h.Str(" and actions. The argument is the address of a field (or an array element) of the composition whose View renders it; "+
+				"the child's state lives in that field, so an action on the child changes the parent's field and the parent sees it. "+
+				"Each request gets its own copy of the mounted value, so value fields are per connection; "+
 				"pointer fields are shared, which is how two children reach one store. A map or slice is a reference too, so a non-nil one "+
 				"in the mounted literal is shared by every request; Mount warns about it.")),
-		h.P(h.Str("A child's "), d.Link("/glossary#positional-child-key", "key"), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
-			h.Str(", "), Code("0-1"), h.Str(". The key is the container id ("), Code("#via-i0-1"),
-			h.Str(") and the address in the child's action URLs. Signal names come from the field path instead: the child's field name "+
-				"and a double underscore, so "), Code("Draft"), h.Str(" inside "), Code("Inbox.Chat"), h.Str(" is "),
-			Code("$chat__draft"), h.Str(". Two fields of the same type cannot be told apart by type, so their signals take the "+
-				"position: "), Code("$i0__chat__draft"), h.Str(". So does a child held in a nested plain struct rather than a direct field, and a direct field whose type a nested struct, slice or map also holds.")),
-
-		demo.Card(d.H3("Conditional children shift keys"),
-			h.P(h.Str("Both halves hold a banner and a clock. The first wraps the banner's Child in "), API("via.When"),
-				h.Str("; the second always calls Child and lets the banner draw nothing once dismissed. "+
-					"Dismissing re-renders only the banner, so the page keeps the clock's old action URL. "+
-					"In the first half the server's next render has one Child fewer ahead of the clock, the clock's position drops "+
-					"from 1 to 0, and the old URL points at nothing.")),
-			via.Child(p.Keys), "compositions_keys.go",
-			demo.Try(h.Str("First half: read the clock, dismiss the banner, read the clock again. That read answers 410 and the page reloads."),
-				h.Str("Second half: the same three clicks keep working."),
-				h.Str("The reload keeps the banner dismissed, since the session remembers it. Click bring the banner back to try again."))),
-		snippet.Region("demos/compositions_keys.go", "broken", snippet.Mark("via.When(!p.hidden, p.banner)")),
-		snippet.Region("demos/compositions_keys.go", "fixed", snippet.Mark("via.Child(p.Banner)")),
-		Callout(Warning, "Keep every key fixed for the life of the page",
-			h.P(h.Str("A When around a Child may depend only on what the field literal or "), Code("OnInit"),
-				h.Str(" fixed when the page loaded. A condition that can change while the page is open (time, a client signal, "+
-					"a store another request writes) goes inside the child, or the conditional Child goes after all its siblings, "+
-					"where its absence moves nobody. A stale key that lands on a unit of another type answers 410. "+
-					"One of the same type answers 410 when the two come from separate Child calls in the View or a When branch; "+
-					"one call that renders either copy (a loop, a variable swapped between two fields) cannot tell them apart."))),
+		h.P(h.Str("A child's "), d.Link("/glossary#child-key", "key"), h.Str(" is its field path from the root, joined by dashes: "), Code("Chat"),
+			h.Str(", "), Code("Stats-A"), h.Str(", "), Code("Rows-1"), h.Str(" for an array element. The key is the container id ("), Code("#via-iStats-A"),
+			h.Str(") and the address in the child's action URLs. Signal names come from the same path: the field path with its first letter lowercased, "+
+				"dashes as underscores, and a double underscore, so "), Code("Draft"), h.Str(" inside "), Code("Inbox.Chat"), h.Str(" is "),
+			Code("$chat__draft"), h.Str(". A "), API("via.When"), h.Str(" around a Child moves no other child's key, so a condition there may change while the page is open.")),
 
 		d.H2("Lifecycle hooks"),
 		h.P(h.Str("A hook is a method with a fixed name and signature; via calls it if the type has it. "+
@@ -111,10 +89,9 @@ func (p *Compositions) View() h.H {
 			h.P(h.Str("Each line is one hook call, numbered by the instance it ran on. The log is kept per session, "+
 				"so lines from instances that are gone stay visible. Until you have a session each instance shows only its own lines; "+
 				"the first action here mints one.")),
-			via.Child(p.Hooks), "compositions_hooks.go",
+			via.Child(&p.Hooks), "compositions_hooks.go",
 			demo.Try(h.Str("Run an action: the action and OnReload run on the stream's instance, with no OnInit."),
-				h.Str("Reload the page: the old stream's OnDispose, and OnInit on two new instances, one for the GET and one for the stream."),
-				h.Str("Click a button in Conditional children, the one plain card, then run an action here: that POST ran this OnInit too, on a throwaway instance."))),
+				h.Str("Reload the page: the old stream's OnDispose, and OnInit on two new instances, one for the GET and one for the stream."))),
 		table([]string{"Hook", "Use it to", "Rules"},
 			[]h.H{Code("OnInit"), h.Str("Load request, session and store data into fields. Register the unit's timers and subscriptions."),
 				h.Span(API("via.Ctx.Tick"), h.Str(", "), API("via.Ctx.Listen"), h.Str(", OnConnect, OnDispose and "),
@@ -132,7 +109,7 @@ func (p *Compositions) View() h.H {
 		),
 		Callout(Caveat, "OnInit runs more often than a mount effect",
 			h.P(h.Str("It runs on every request that renders the unit, and an action on a plain unit renders the whole page to find it. "+
-				"A plain child of a live root runs it again on every push. Keep it to reads, and put anything you must release in "),
+				"Keep it to reads, and put anything you must release in "),
 				API("via.Ctx.OnConnect"), h.Str(", which only a real connection reaches."))),
 
 		d.H2("Conditionals and lists"),
@@ -172,7 +149,7 @@ func (p *Compositions) View() h.H {
 		d.H3("Components and props"),
 		Compare("React", snippet.Text("", reactProps), "via", snippet.Region("compositions/component.go", "props", snippet.Title(""))),
 		h.P(h.Str("Props are fields. Constants go in the literal the parent is built from; request data goes in the parent's "),
-			Code("OnInit"), h.Str(", which runs before Child copies the child.")),
+			Code("OnInit"), h.Str(", which runs before the child renders.")),
 
 		d.H3("Lists with keys"),
 		Compare("React", snippet.Text("", reactList), "via", snippet.Region("compositions/lists.go", "row", snippet.Title(""))),
@@ -187,7 +164,7 @@ func (p *Compositions) View() h.H {
 			h.Str(". Here the parent makes the topic in OnInit, so each tab's stream gets its own.")),
 		demo.Card(d.H3("Relay"),
 			h.P(h.Str("The picker and the summary are siblings that share one topic and nothing else.")),
-			via.Child(p.Relay), "compositions_relay.go",
+			via.Child(&p.Relay), "compositions_relay.go",
 			demo.Try(h.Str("Pick a language. The Wire pane shows one POST for the picker, then an SSE patch for the summary."))),
 		Callout(Caveat, "Both ends must be live",
 			h.P(h.Str("The picker renders a State, which keeps its instance, and the topic it holds, for the connection. "+
@@ -195,8 +172,8 @@ func (p *Compositions) View() h.H {
 
 		d.H3("Lifting state"),
 		Compare("React", snippet.Text("", reactLift), "via", snippet.Region("compositions/recipes.go", "lift", snippet.Title(""))),
-		h.P(h.Str("The owner holds the state and sets the child's field in its action; the push that follows copies the child "+
-			"with the new value. Cart must be the mounted root: a live child may not render children of its own. "+
+		h.P(h.Str("The owner holds the state and sets the child's field in its action; the push that follows renders the child "+
+			"from that field. Cart must be the mounted root: a live child may not render children of its own. "+
 			"For state that many tabs share, keep it in a store and give each unit a "), API("via.StateTrack"),
 			h.Str(" on its topic; see "), d.Link("/live", "Live state"), h.Str(".")),
 

@@ -4,6 +4,18 @@
 
 ### Changed
 
+- **Breaking:** `via.Child` takes the field's address, `via.Child(&p.Chat)`,
+  and keys the child by its field path (`Chat`, `Stats-A`, `Rows-1`,
+  `Outer-Kid`) instead of its position among the parent's `Child` calls. A
+  `via.When` around a `Child` no longer moves its siblings' container ids,
+  signal prefixes or action URLs, so the rule that such a When may depend only
+  on data fixed at load is gone, along with the `?u=` call-site query. The
+  page root's action address is `_` (was `r`). A pointer that is not a field
+  or array element of the rendering composition, or a field rendered twice,
+  panics at Mount (or at the first render that reaches it).
+- **Breaking:** a child's state lives in its parent's field, and its `OnInit`
+  runs once per request, or once per connection on a live page. A plain child
+  of a live root no longer re-runs `OnInit` on every pushed frame.
 - The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
   longer panics on its first Subscribe or Publish. `topic.New` still works.
 

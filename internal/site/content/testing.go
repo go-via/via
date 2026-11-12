@@ -9,7 +9,7 @@ import (
 const testingAwaitFailure = `--- FAIL: TestBoard_pushesOverTheStream (2.00s)
     board_test.go:27: vt.Conn.Await: timed out after 2s waiting for "msg: bye". 2 frames on this stream, 1 read by this wait; the last 2:
           #1 datastar-patch-signals: signals {"viatab":"eVelnHi8QTPIgFoyF8h8lwM3keTgszM2nqGXa7d_ee4w"}
-          #2 datastar-patch-elements: elements <div id="root"><div><p>msg: hello</p><button data-on:click="@post('/_via/a/r/n4Ip3BxF')">post</button></div></div>`
+          #2 datastar-patch-elements: elements <div id="root"><div><p>msg: hello</p><button data-on:click="@post('/_via/a/_/n4Ip3BxF')">post</button></div></div>`
 
 const testingWire = `B=http://localhost:3000
 H=(-H 'Sec-Fetch-Site: same-origin')
@@ -18,7 +18,7 @@ curl -sN -X POST "$B/_via/sse" "${H[@]}" -d '{}' > tab.sse &
 sleep 0.2
 TAB=$(grep -o '"viatab":"[^"]*"' tab.sse | cut -d'"' -f4)
 
-ADD=$(curl -s "$B/" | grep -o "/_via/a/r/[^']*" | head -1)
+ADD=$(curl -s "$B/" | grep -o "/_via/a/_/[^']*" | head -1)
 curl -s -X POST "$B$ADD" "${H[@]}" -H 'Datastar-Request: true' \
   -H 'Content-Type: application/json' -d "{\"draft\":\"milk\",\"viatab\":\"$TAB\"}"
 cat tab.sse`
@@ -69,8 +69,8 @@ func (p *Testing) View() h.H {
 				"there is nothing to encode.")),
 		snippet.Region("testing/args.go", "child", snippet.Title("layout_test.go"), snippet.Mark("ChildAction")),
 		h.P(API("vt.App.ChildAction"), h.Str(" does the same inside a child. The key is the child's container: "),
-			Code(`"0"`), h.Str(" for the root's first "), API("via.Child"), h.Str(", "), Code(`"1"`),
-			h.Str(" for its second, "), Code(`"0-1"`), h.Str(" for the second child inside the first. "+
+			Code(`"Search"`), h.Str(" for "), API("via.Child"), h.Str("(&l.Search), "), Code(`"Stats-A"`),
+			h.Str(" for a field of a nested struct, "), Code(`"Outer-Kid"`), h.Str(" for a child inside the child Outer. "+
 				"A child's signals carry its field name and a double underscore.")),
 		snippet.Region("testing/args.go", "origin", snippet.Title("counter_test.go"), snippet.Mark("Origin(", "NoOrigin")),
 		h.P(h.Str("Every action is a same-origin fetch by default. "), API("vt.Action.Origin"), h.Str(", "),
@@ -123,11 +123,10 @@ func (p *Testing) View() h.H {
 			h.Li(h.Strong(h.Str("GET the page. ")), h.Str("Action URLs are in its markup: "),
 				Code("@post('/_via/a/<child>/<id>')"), h.Str(" in a "), Code("data-on:"), h.Str(" attribute, or a "),
 				API("via.PostForm"), h.Str("'s "), Code("action"), h.Str(". The id is a hash of the handler, so read it off "+
-					"the page. A row's argument rides along as "), Code("?a="), h.Str(", and which Child call site rendered a child as "), Code("?u="),
-				h.Str(". A binding with a query carries it in a "), Code("data-via-q-<event>"),
+					"the page. A row's argument rides along as "), Code("?a="), h.Str(". A binding with a query carries it in a "), Code("data-via-q-<event>"),
 				h.Str(" attribute on the same element, and the expression appends it to the path: "),
-				Code(`data-via-q-click="?a=2" data-on:click="@post('/_via/a/r/<id>' + (el.getAttribute('data-via-q-click') ?? ''))"`),
-				h.Str(" posts to "), Code("/_via/a/r/<id>?a=2"), h.Str(".")),
+				Code(`data-via-q-click="?a=2" data-on:click="@post('/_via/a/_/<id>' + (el.getAttribute('data-via-q-click') ?? ''))"`),
+				h.Str(" posts to "), Code("/_via/a/_/<id>?a=2"), h.Str(".")),
 			h.Li(h.Strong(h.Str("POST /_via/sse to open the stream. ")),
 				h.Str("The body is the page's signals as JSON; "), Code("{}"), h.Str(" or an empty body will do. The answer is a "),
 				Code("text/event-stream"), h.Str(" that stays open: "), Code("datastar-patch-signals"), h.Str(" and "),

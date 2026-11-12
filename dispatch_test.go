@@ -57,7 +57,7 @@ func TestDispatch_redirectFromLiveActionNavigatesTheTab(t *testing.T) {
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
 
-		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "_", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
@@ -84,14 +84,14 @@ func (r *childRedirector) View() h.H { return h.Div(h.Button(on.Click(r.Go))) }
 
 type childRedirectorParent struct{ I childRedirector }
 
-func (p *childRedirectorParent) View() h.H { return h.Div(via.Child(p.I)) }
+func (p *childRedirectorParent) View() h.H { return h.Div(via.Child(&p.I)) }
 
 func TestDispatch_redirectFromPlainChildActionNavigatesTheTab(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(childRedirectorParent{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "0", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "I", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -122,14 +122,14 @@ func (s *sigChild) View() h.H {
 
 type sigPage struct{ I sigChild }
 
-func (p *sigPage) View() h.H { return h.Div(via.Child(p.I)) }
+func (p *sigPage) View() h.H { return h.Div(via.Child(&p.I)) }
 
 func TestDispatch_signalSetInChildActionReachesClient(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(sigPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "I", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"a Signal.Set with no visible HTML change must still ship a patch, not 204")
 	assert.Contains(t, body, `"i__name":"resetted"`, "the Set signal must reach the client")
@@ -155,7 +155,7 @@ func (p *guardedParent) OnInit(ctx *via.Ctx) error {
 	return nil
 }
 
-func (p *guardedParent) View() h.H { return h.Div(via.Child(p.I)) }
+func (p *guardedParent) View() h.H { return h.Div(via.Child(&p.I)) }
 
 func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	t.Parallel()
@@ -163,7 +163,7 @@ func TestDispatch_childActionRunsOnInitRedirect(t *testing.T) {
 	via.Mount(r, "/g", guardedParent{})
 	srv := serve(t, r)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/0/0", strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/g/_via/a/I/0", strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -196,16 +196,16 @@ func TestDispatch_nativeFormUsesSameActionTable(t *testing.T) {
 	srv := serve(t, via.Handler(mixedPage{}))
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Contains(t, page, `@post('`+actionURL(t, page, "r", 0)+`'`, "the @post binding claims its own action id")
-	assert.Contains(t, page, `action="`+actionURL(t, page, "r", 1)+`"`, "PostForm claims an id in the same table")
+	assert.Contains(t, page, `@post('`+actionURL(t, page, "_", 0)+`'`, "the @post binding claims its own action id")
+	assert.Contains(t, page, `action="`+actionURL(t, page, "_", 1)+`"`, "PostForm claims an id in the same table")
 
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode, "the @post action must dispatch")
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	mw.Close()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 1), &buf)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "_", 1), &buf)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -327,7 +327,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 1), "zzzzzzzz"), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "_", 1), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -335,7 +335,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(sigPage{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "0", 0), "zzzzzzzz"), "{}")
+		resp, _ := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "I", 0), "zzzzzzzz"), "{}")
 		assert.Equal(t, http.StatusGone, resp.StatusCode)
 	})
 
@@ -347,7 +347,7 @@ func TestDispatch_unknownActionAnswers410OnEveryPath(t *testing.T) {
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
 
-			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), strings.NewReader(withTab(conn.TabID(), "{}")))
+			req, err := http.NewRequest(http.MethodPost, app.URL()+swapActionID(t, actionURL(t, page, "_", 0), "zzzzzzzz"), strings.NewReader(withTab(conn.TabID(), "{}")))
 			require.NoError(t, err)
 			req.Header.Set("Sec-Fetch-Site", "same-origin")
 			req.Header.Set("Datastar-Request", "true")
@@ -418,7 +418,7 @@ func TestDispatch_liveFormFieldFallbackRunsHandlerAndReturns200(t *testing.T) {
 		page := fetchPage(t, app, "/")
 		assert.Contains(t, page, `data-attr:value="$viatab"`,
 			"a live unit's PostForm must reactively fill the fallback field from the tab signal")
-		formURL := actionURL(t, page, "r", 0)
+		formURL := actionURL(t, page, "_", 0)
 
 		status, _ := nativeFormPost(t, app, formURL, map[string]string{
 			"name":    "zed",
@@ -442,7 +442,7 @@ func TestDispatch_liveFormFieldFromAnotherMountIsRejected(t *testing.T) {
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
-		aFormURL := actionURL(t, aPage, "r", 0)
+		aFormURL := actionURL(t, aPage, "_", 0)
 
 		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
 		defer cancel()
@@ -490,7 +490,7 @@ func TestDispatch_liveNativeFormPanicOnRerenderAnswers500NotHang(t *testing.T) {
 		app := vt.Serve(t, via.Handler(nativeFormPanic{boom: boom}))
 		conn := app.Connect()
 		page := fetchPage(t, app, "/")
-		formURL := actionURL(t, page, "r", 0)
+		formURL := actionURL(t, page, "_", 0)
 
 		status, _ := nativeFormPost(t, app, formURL, map[string]string{
 			"name":    "zed",
@@ -533,13 +533,13 @@ func (f *validatedForm) View() h.H {
 // a via.Child rather than at the root.
 type formShell[C any] struct{ Body C }
 
-func (s *formShell[C]) View() h.H { return h.Main(via.Child(s.Body)) }
+func (s *formShell[C]) View() h.H { return h.Main(via.Child(&s.Body)) }
 
 func TestNativeForm_insideAChildKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(formShell[validatedForm]{}))
 	_, page := app.Get("/")
-	url := actionURL(t, page, "0", 0)
+	url := actionURL(t, page, "Body", 0)
 
 	status, body := nativeFormPost(t, app, url, map[string]string{"name": "Widget"})
 	require.Equal(t, http.StatusOK, status)
@@ -551,16 +551,15 @@ func TestNativeForm_atTheRootKeepsTheHandlersMutations(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(validatedForm{}))
 	_, page := app.Get("/")
-	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "Widget"})
+	status, body := nativeFormPost(t, app, actionURL(t, page, "_", 0), map[string]string{"name": "Widget"})
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "name already taken: Widget")
 	assert.Contains(t, body, `"name":"Widget"`)
 }
 
-// initCounter counts its own OnInit runs. Substituting the acted instance into
-// the response re-render must not re-init it — re-initing is exactly what
-// would reload the data the handler just changed — while a fresh sibling child
-// still gets its own OnInit.
+// initCounter counts its own OnInit runs. The response re-render must not
+// re-init it — re-initing is exactly what would reload the data the handler
+// just changed — while a fresh sibling child still gets its own OnInit.
 type initCounter struct {
 	inits int
 	saved string
@@ -583,7 +582,7 @@ func TestNativeForm_actedChildIsNotReInited(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="inits">1</p>`)
 
-	status, body := nativeFormPost(t, app, actionURL(t, page, "0", 0), nil)
+	status, body := nativeFormPost(t, app, actionURL(t, page, "Body", 0), nil)
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `<p id="saved">true</p>`, "the mutation must survive the re-render")
 	assert.Contains(t, body, `<p id="inits">1</p>`, "the acted child's OnInit must not run a second time")
@@ -593,7 +592,7 @@ func TestNativeForm_missingTabFieldSaysWhatActuallyHappened(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveNamedForm{}))
 		conn := app.Connect()
-		status, body := nativeFormPost(t, app, conn.ActionURL("r", 0), map[string]string{"name": "zed"})
+		status, body := nativeFormPost(t, app, conn.ActionURL("_", 0), map[string]string{"name": "zed"})
 		assert.Equal(t, http.StatusGone, status)
 		assert.Contains(t, body, "_viatab", "the answer must name the field that was missing")
 		assert.NotContains(t, body, "served plain", "the page was live; that diagnosis is wrong")
@@ -670,7 +669,7 @@ func TestDispatchPlain_postedSignalCannotOpenAServerGatedBranch(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	page := readAll(t, resp)
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 	require.Contains(t, url, "a=7")
 
 	anon, body := adminPost(t, srv, url, `{"admin":true}`, false)
@@ -689,7 +688,7 @@ func TestDispatchPlain_serverGatedBranchStillDispatchesForAnAuthorizedCaller(t *
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	url := actionURL(t, readAll(t, resp), "r", 0)
+	url := actionURL(t, readAll(t, resp), "_", 0)
 
 	ok, body := adminPost(t, srv, url, `{"admin":true}`, true)
 	assert.Equal(t, http.StatusOK, ok.StatusCode)
@@ -714,7 +713,7 @@ func TestDispatchPlain_actionStillReadsThePostedSignal(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(echoedSignal{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), `{"name":"zed"}`)
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), `{"name":"zed"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "saw: zed")
 }
@@ -735,7 +734,7 @@ func (p *plainRootLiveKid) View() h.H {
 	return h.Div(
 		h.P(h.ID("name"), h.Str(p.name)),
 		via.PostForm(p.Save, h.Input(h.Name("name")), h.Button(h.Str("go"))),
-		via.Child(p.Clock),
+		via.Child(&p.Clock),
 	)
 }
 
@@ -756,7 +755,7 @@ func TestNativeForm_plainRootKeepsALiveChildsBootstrap(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, "data-init", "the GET must already bootstrap the stream")
 
-	status, body := nativeFormPost(t, app, actionURL(t, page, "r", 0), map[string]string{"name": "zed"})
+	status, body := nativeFormPost(t, app, actionURL(t, page, "_", 0), map[string]string{"name": "zed"})
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, `<p id="name">zed</p>`)
 	assert.Contains(t, body, "data-init", "the live child is dead after the submit without a bootstrap")
@@ -824,13 +823,13 @@ func TestDispatchPlain_hydratesASignalInABranchAnotherPostedSignalOpens(t *testi
 
 type disclosureHost struct{ D disclosure }
 
-func (p *disclosureHost) View() h.H { return h.Div(via.Child(p.D)) }
+func (p *disclosureHost) View() h.H { return h.Div(via.Child(&p.D)) }
 
 func TestDispatchPlain_hydratesAChildSignalInABranchAnotherPostedChildSignalOpens(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(disclosureHost{}))
 
-	code, body := app.ChildAction("0", 1).Body(`{"d__mode":"x","d__name":"bob"}`).Fire()
+	code, body := app.ChildAction("D", 1).Body(`{"d__mode":"x","d__name":"bob"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "seen: saw:bob",
 		"a child must discover a branch its own posted signal opens, exactly as a root does")
@@ -844,7 +843,7 @@ type echoKidHost struct{ K echoKid }
 
 func (p *echoKidHost) Noop(ctx *via.Ctx) {}
 func (p *echoKidHost) View() h.H {
-	return h.Div(via.Child(p.K), h.Button(on.Click(p.Noop)))
+	return h.Div(via.Child(&p.K), h.Button(on.Click(p.Noop)))
 }
 
 func TestDispatchPlain_aNoOpRootActionWithAPostedChildSignalAnswers204(t *testing.T) {
@@ -860,7 +859,7 @@ func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t
 	app := vt.Serve(t, via.Handler(disclosure{}))
 
 	_, open := app.Get("/?mode=x")
-	url := actionURL(t, open, "r", 1)
+	url := actionURL(t, open, "_", 1)
 
 	code, body := app.Action(0).Raw(url).Body(`{"mode":"x"}`).Fire()
 	assert.Equal(t, http.StatusGone, code,
@@ -888,7 +887,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	conn := app.Connect()
 
 	_, open := app.Get("/?mode=x")
-	url := actionURL(t, open, "r", 1)
+	url := actionURL(t, open, "_", 1)
 
 	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"mode":"x"}`).Fire()
 	assert.Equal(t, http.StatusGone, code)
@@ -915,16 +914,16 @@ type fixParent struct {
 	K fixKid
 }
 
-func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Child(p.K)) }
+func (p *fixParent) View() h.H { return h.Div(h.Input(p.Q.Bind()), via.Child(&p.K)) }
 
-func TestDispatchPlain_childActionRunsOnAnInitedCopyAfterASecondPass(t *testing.T) {
+func TestDispatchPlain_childActionSeesOnInitStateAfterASecondPass(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(fixParent{}))
 
-	code, body := app.ChildAction("0", 0).Body(`{"q":"x"}`).Fire()
+	code, body := app.ChildAction("K", 0).Body(`{"q":"x"}`).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, "<p>seen:init</p>",
-		"a posted Bind()ed signal forces a second discovery pass; the child's action must still run on a copy whose OnInit ran")
+		"a posted Bind()ed signal forces a second discovery pass; the child's action must still see the field its OnInit set")
 }
 
 // argRows widens its row set from a Bind()ed signal, so a posted body can
@@ -957,7 +956,7 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(argRows{}))
 	_, page := app.Get("/")
-	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=3", 1)
+	url := strings.Replace(actionURL(t, page, "_", 0), "a=1", "a=3", 1)
 	require.Contains(t, url, "a=3")
 
 	code, body := app.Action(0).Raw(url).Body(`{"filter":"all"}`).Fire()
@@ -1005,7 +1004,7 @@ func TestConnect_postedSignalCannotWidenALiveActionsArgSet(t *testing.T) {
 	code, _ := app.Action(0).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, code, "the a=1 row must still be dispatchable")
 
-	legitURL := conn.ActionURL("r", 0)
+	legitURL := conn.ActionURL("_", 0)
 	require.Contains(t, legitURL, "a=1")
 	widenedURL := strings.Replace(legitURL, "a=1", "a=3", 1)
 
@@ -1018,89 +1017,8 @@ func TestConnect_postedSignalCannotWidenALiveActionsArgSet(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, code, "the auth-render arg must still be dispatchable")
 }
 
-// shiftA and shiftB promote Hit from a shared embedded base at offset 0, so
-// both mint the same content-addressed action id (the id hashes the Go func
-// name plus the receiver's field path, "shiftBase" in both). That is the
-// only arrangement in which a child key denoting different types in the auth
-// and the bind render gets past the action lookup at all.
-type shiftBase struct{ hit bool }
-
-func (s *shiftBase) Hit(ctx *via.Ctx) { s.hit = true }
-
-type shiftA struct{ shiftBase }
-
-func (a *shiftA) View() h.H { return h.Div(h.Str("A"), h.Button(on.Click(a.Hit))) }
-
-type shiftB struct{ shiftBase }
-
-func (b *shiftB) View() h.H { return h.Div(h.Str("B"), h.Button(on.Click(b.Hit))) }
-
-// Flip is Bind()ed, so the POST body can flip it — and the When around Child(A)
-// then shifts B from key "1" up to key "0". via.Child's docs forbid exactly
-// this When; the dispatcher must still fail closed rather than run A's
-// authorized action against B.
-type shiftPage struct {
-	Flip via.Signal[bool]
-	A    shiftA
-	B    shiftB
-	live bool
-}
-
-func (p *shiftPage) OnInit(ctx *via.Ctx) error {
-	if p.live {
-		ctx.Tick(time.Hour, func(*via.Ctx) {})
-	}
-	return nil
-}
-
-func (p *shiftPage) Ping(ctx *via.Ctx) {}
-
-func (p *shiftPage) View() h.H {
-	return h.Div(
-		h.Input(p.Flip.Bind()),
-		h.Button(on.Click(p.Ping), h.Str("ping")),
-		via.When(!p.Flip.Get(), func() h.H { return via.Child(p.A) }),
-		via.Child(p.B),
-	)
-}
-
-func TestDispatchPlain_childKeyThatChangesTypeBetweenPassesIsGone(t *testing.T) {
-	t.Parallel()
-	srv := serve(t, via.Handler(shiftPage{}))
-	_, page := do(t, srv, http.MethodGet, "/", "")
-
-	aURL, bURL := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
-	require.Equal(t, aURL[strings.LastIndexByte(aURL, '/'):], bURL[strings.LastIndexByte(bURL, '/'):],
-		"the fixture only bites if both children mint the same action id")
-
-	resp, body := do(t, srv, http.MethodPost, aURL, `{"flip":true}`)
-	assert.Equal(t, http.StatusGone, resp.StatusCode,
-		"a key whose type changed between the auth and bind renders must not dispatch")
-	assert.Contains(t, body, "no such child")
-}
-
-func TestDispatchPlain_aLivePagesShiftedChildKeyIsNotDispatchable(t *testing.T) {
-	t.Parallel()
-	app := vt.Serve(t, via.Handler(shiftPage{live: true}))
-	conn := app.ConnectWith(`{"flip":true}`)
-
-	code, _ := app.Action(0).Over(conn).Fire()
-	require.Equal(t, http.StatusNoContent, code, "the root's own action must still work")
-
-	// B is a plain child of a live root, so it never gets its own stream
-	// registration — this POST falls to dispatchPlain, whose own auth render
-	// (always Flip=false) never sees the type at "0" as B either. dispatchPlain's
-	// type-mismatch guard (auth vs. bind at the same key) is what refuses it, not
-	// anything on the live push's own dispatch table.
-	url := conn.ActionURL("0", 0)
-	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"flip":true}`).Fire()
-	assert.Equal(t, http.StatusGone, code,
-		"a child key whose type shifted between the authority and display renders must not dispatch")
-	assert.Contains(t, body, "no such child")
-}
-
 // scopeKid's OnInit reads the request, and its View Bind()s a slot the POST
-// body carries — so the discovery loop takes a second pass and re-inits this
+// body carries — so the discovery loop takes a second pass and renders this
 // child off the cloned Ctx. A pass-2 Ctx with no request scope is the defect
 // class the clone exists to close.
 type scopeKid struct {
@@ -1119,14 +1037,14 @@ func (k *scopeKid) View() h.H {
 
 type scopePage struct{ K scopeKid }
 
-func (p *scopePage) View() h.H { return h.Div(via.Child(p.K)) }
+func (p *scopePage) View() h.H { return h.Div(via.Child(&p.K)) }
 
 func TestDispatchPlain_laterPassCarriesTheRequestScopeIntoChildOnInit(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(scopePage{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), `{"k__q":"x"}`)
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "K", 0), `{"k__q":"x"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode,
 		"a hydration pass >= 2 must carry the request, not re-init children against a nil one")
 	assert.Contains(t, body, "method:POST")
@@ -1158,7 +1076,7 @@ func TestLiveAction_seesTheTriggeringActionRequest(t *testing.T) {
 
 		// X-Echo has no vt.Action builder method, so this posts by hand — but
 		// the URL and tab still come off the connection, not a separate GET.
-		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("r", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
+		req, err := http.NewRequest(http.MethodPost, app.URL()+conn.ActionURL("_", 0), strings.NewReader(withTab(conn.TabID(), "{}")))
 		require.NoError(t, err)
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
 		req.Header.Set("Datastar-Request", "true")
@@ -1206,7 +1124,7 @@ func TestLive_actionRunsWithoutPreRender(t *testing.T) {
 		digestSrv := liveServer(t, via.Handler(renderCounter{views: &atomic.Int64{}}))
 		_, page := do(t, digestSrv, http.MethodGet, "/", "")
 
-		resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
+		resp, _ := post(t, srv, actionURL(t, page, "_", 0), withTab(tab, "{}"), map[string]string{
 			"Sec-Fetch-Site": "same-origin",
 		})
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode)
@@ -1221,7 +1139,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
 
-		url := swapActionID(t, conn.ActionURL("r", 0), "zzzzzzzz")
+		url := swapActionID(t, conn.ActionURL("_", 0), "zzzzzzzz")
 		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
@@ -1243,7 +1161,7 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveArg{}))
 		conn := app.Connect()
 
-		url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
+		url := strings.Replace(conn.ActionURL("_", 0), "a=7", "a=%22bad%22", 1)
 		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusBadRequest, status)
 
@@ -1268,7 +1186,7 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 				app := vt.Serve(t, via.Handler(liveArg{}))
 				conn := app.Connect()
 
-				url := strings.Replace(conn.ActionURL("r", 0), "a=7", tt.a, 1)
+				url := strings.Replace(conn.ActionURL("_", 0), "a=7", tt.a, 1)
 				status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 				assert.Equal(t, http.StatusBadRequest, status)
 
@@ -1307,7 +1225,7 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 	conn := app.Connect()
 	require.Contains(t, conn.Await("seen: "), "seen: 0")
 
-	url := strings.Replace(conn.ActionURL("r", 0), "a=7", "a=%22bad%22", 1)
+	url := strings.Replace(conn.ActionURL("_", 0), "a=7", "a=%22bad%22", 1)
 	status, _ := app.Action(0).Raw(url).Body(`{"idx":99}`).Over(conn).Fire()
 	require.Equal(t, http.StatusBadRequest, status)
 
@@ -1353,7 +1271,7 @@ func TestLiveAction_abandonedRequestNeverAppliesAfterClientGivesUp(t *testing.T)
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	actURL := actionURL(t, page, "r", 0)
+	actURL := actionURL(t, page, "_", 0)
 
 	const n = 3000
 	var wg sync.WaitGroup
@@ -1415,11 +1333,11 @@ func TestLiveAction_abandonedRequestAnswersWhileTheStreamIsBusy(t *testing.T) {
 		defer cancel()
 		tab := awaitTabID(t, lines)
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		holdReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), strings.NewReader(withTab(tab, "{}")))
+		holdReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "_", 0), strings.NewReader(withTab(tab, "{}")))
 		require.NoError(t, err)
 		holdReq.Header.Set("Datastar-Request", "true")
 		holdReq.Header.Set("Sec-Fetch-Site", "same-origin")
-		actReq := abandonedPost(actionURL(t, page, "r", 1), tab)
+		actReq := abandonedPost(actionURL(t, page, "_", 1), tab)
 
 		holdStatus := make(chan int, 1)
 		go func() {
@@ -1522,7 +1440,7 @@ func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 	conn.Await("nuke")
 
 	for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
-		url := conn.ActionURL("r", n)
+		url := conn.ActionURL("_", n)
 		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"isAdmin":true}`).Fire()
 		assert.Equal(t, http.StatusGone, code, what+" must not be dispatchable: "+url)
 		assert.Contains(t, body, "does not bind it")
@@ -1544,7 +1462,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) 
 	conn.Await("nuke")
 
 	for n := 1; n <= 2; n++ {
-		url := conn.ActionURL("r", n)
+		url := conn.ActionURL("_", n)
 		code, body := app.Action(0).Over(conn).Raw(url).Body(`{"isAdmin":true}`).Fire()
 		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
 		assert.Contains(t, body, "does not bind it")
@@ -1567,7 +1485,7 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T)
 	_, privileged := app.Get("/?admin=1")
 
 	for n := 1; n <= 2; n++ {
-		url := actionURL(t, privileged, "r", n)
+		url := actionURL(t, privileged, "_", n)
 		code, body := app.Action(0).Raw(url).Body(`{"isAdmin":true}`).Fire()
 		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
 		assert.Contains(t, body, "does not bind it")
@@ -1594,7 +1512,7 @@ func (s *liveConjuredSecret) Reveal(ctx *via.Ctx) {}
 func (s *liveConjuredSecret) View() h.H {
 	return h.Div(
 		h.Button(on.Click(s.Reveal), h.Str("reveal")),
-		via.Child(s.Grand),
+		via.Child(&s.Grand),
 	)
 }
 
@@ -1614,7 +1532,7 @@ func (r *liveConjuredRoot) View() h.H {
 	return h.Div(
 		h.Input(r.Gate.Bind()),
 		h.Button(on.Click(r.Ping), h.Str("ping")),
-		via.When(r.Gate.Get(), func() h.H { return via.Child(r.Secret) }),
+		via.When(r.Gate.Get(), func() h.H { return via.Child(&r.Secret) }),
 	)
 }
 
@@ -1632,13 +1550,13 @@ func TestDispatchPlain_aLivePagesConjuredChildIsNotDispatchable(t *testing.T) {
 	// stream registration (only the root does) — this POST falls to
 	// dispatchPlain, whose own fresh auth render never sees it gated open
 	// either, at "0" or at the grandchild "0-0" below.
-	url := conn.ActionURL("0", 0)
+	url := conn.ActionURL("Secret", 0)
 	code, body := app.Action(0).Over(conn).Raw(url).Body(`{"gate":true}`).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a branch a posted signal conjured must never be dispatchable, only visible")
 	assert.Contains(t, body, "no such child")
 
-	gURL := conn.ActionURL("0-0", 0)
+	gURL := conn.ActionURL("Secret-Grand", 0)
 	code, body = app.Action(0).Over(conn).Raw(gURL).Body(`{"gate":true}`).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a conjured child's own conjured grandchild must be cleared too")
@@ -1664,13 +1582,13 @@ func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	app := vt.Serve(t, r)
 
 	_, plain := app.Get("/p/notanint")
-	code, body := app.Action(0).Raw(actionURL(t, plain, "r", 0)).Fire()
+	code, body := app.Action(0).Raw(actionURL(t, plain, "_", 0)).Fire()
 	require.Equal(t, http.StatusNotFound, code)
 	require.Contains(t, body, "not found")
 
 	_, live := app.Get("/l/notanint")
 	conn := app.ConnectAt("/l/notanint", "{}")
-	code, body = app.Action(0).Over(conn).Raw(actionURL(t, live, "r", 0)).Fire()
+	code, body = app.Action(0).Over(conn).Raw(actionURL(t, live, "_", 0)).Fire()
 	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
 	assert.Contains(t, body, "not found")
 }
@@ -1689,7 +1607,7 @@ type twoLivePage struct {
 	Clock livePrivClock
 }
 
-func (p *twoLivePage) View() h.H { return h.Div(via.Child(p.Priv), via.Child(p.Clock)) }
+func (p *twoLivePage) View() h.H { return h.Div(via.Child(&p.Priv), via.Child(&p.Clock)) }
 
 var beatRE = regexp.MustCompile(`beat: (\d+)`)
 
@@ -1723,20 +1641,20 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 		awaitBeat(t, conn, beat)
 
 		// The forgery rides on an action Priv IS allowed to call.
-		code, _ := app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
+		code, _ := app.ChildAction("Priv", 0).Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		// The client may still SEE the branch its own signals opened.
 		conn.Await("nuke")
 
 		for n, what := range map[int]string{1: "the gated action", 2: "its gated on.Bind arg"} {
-			url := conn.ActionURL("0", n)
+			url := conn.ActionURL("Priv", n)
 			code, body := app.Action(0).Over(conn).Raw(url).Body(`{"priv__isAdmin":true}`).Fire()
 			assert.Equal(t, http.StatusGone, code, "round %d: %s must not be dispatchable: %s", beat, what, url)
 			assert.Contains(t, body, "does not bind it")
 		}
 	}
 	require.Equal(t, http.StatusNoContent,
-		mustFire(t, app.ChildAction("0", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
+		mustFire(t, app.ChildAction("Priv", 0).Over(conn).Body(`{"priv__isAdmin":true}`)))
 	assert.Contains(t, conn.Await("nuked:"), "nuked: false/0", "no gated handler may have run")
 }
 
@@ -1921,12 +1839,11 @@ func (c *gatedChild) View() h.H         { return h.Div(h.Button(on.Click(c.Nuke)
 
 type gatedMid struct{ Leaf gatedChild }
 
-func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Child(m.Leaf)) }
+func (m *gatedMid) View() h.H { return h.Div(h.Str("mid"), via.Child(&m.Leaf)) }
 
 // gatedChildPage puts the gated action inside a Child the root's When wraps.
-// The Clock rides in its own When so the live and plain variants each keep a
-// stable ordinal for the life of a connection — p.live is fixed by the field
-// literal, which is the only kind of condition Child's trap allows.
+// The Clock rides in its own When, fixed by the field literal, so one type
+// serves both the live and the plain variant.
 type gatedChildPage struct {
 	live    bool
 	deep    bool
@@ -1943,12 +1860,12 @@ func (p *gatedChildPage) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *gatedChildPage) Safe(ctx *via.Ctx) {}
-func (p *gatedChildPage) clock() h.H        { return via.Child(p.Clock) }
+func (p *gatedChildPage) clock() h.H        { return via.Child(&p.Clock) }
 func (p *gatedChildPage) gated() h.H {
 	if p.deep {
-		return via.Child(p.Mid)
+		return via.Child(&p.Mid)
 	}
-	return via.Child(p.Child)
+	return via.Child(&p.Child)
 }
 
 func (p *gatedChildPage) View() h.H {
@@ -1982,7 +1899,7 @@ var gatedShapes = []gatedShape{{
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
 		via.Mount(r, path, gatedEach{hits: hits, live: true})
 	},
-	plainChild: "r", liveChild: "r", gatedN: 1,
+	plainChild: "_", liveChild: "_", gatedN: 1,
 }, {
 	name: "Child inside a When",
 	plain: func(hits *gatedHits) http.Handler {
@@ -1994,7 +1911,7 @@ var gatedShapes = []gatedShape{{
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
 		via.Mount(r, path, gatedChildPage{hits: hits, live: true, Child: gatedChild{hits: hits}})
 	},
-	plainChild: "0", liveChild: "1", gatedN: 0,
+	plainChild: "Child", liveChild: "Child", gatedN: 0,
 }, {
 	name: "depth-2 child",
 	plain: func(hits *gatedHits) http.Handler {
@@ -2006,7 +1923,7 @@ var gatedShapes = []gatedShape{{
 	mountLive: func(r *via.Router, path string, hits *gatedHits) {
 		via.Mount(r, path, gatedChildPage{hits: hits, deep: true, live: true, Mid: gatedMid{Leaf: gatedChild{hits: hits}}})
 	},
-	plainChild: "0-0", liveChild: "1-0", gatedN: 0,
+	plainChild: "Mid-Leaf", liveChild: "Mid-Leaf", gatedN: 0,
 }}
 
 const forgedAdmin = `{"isAdmin":true}`
@@ -2149,7 +2066,7 @@ func (p *listenReadsSignal) View() h.H {
 
 type listenChildPage struct{ Child listenReadsSignal }
 
-func (p *listenChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(p.Child)) }
+func (p *listenChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(&p.Child)) }
 
 func TestConnect_aListenHandlerNeverSeesThePostedSignalValue(t *testing.T) {
 	t.Parallel()
@@ -2286,7 +2203,7 @@ func TestDispatch_actionRunningPastThePinnedDeadlineStillAnswersItsResult(t *tes
 		defer cancel()
 		tab := awaitTabID(t, lines)
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), strings.NewReader(withTab(tab, "{}")))
+		req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "_", 0), strings.NewReader(withTab(tab, "{}")))
 		require.NoError(t, err)
 		req.Header.Set("Datastar-Request", "true")
 		req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -2369,7 +2286,7 @@ func TestDispatch_liveActionOnAnUnboundTabAnswers503WhileTheStoreIsDown(t *testi
 	store.down = true
 	store.mu.Unlock()
 
-	resp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	resp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "_", 0))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
@@ -2434,11 +2351,11 @@ func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
 	defer conn.Close()
 
 	for range 5 {
-		status, _ := app.Action(0).Over(conn).Raw("/_via/a/r/deadbeef").Fire()
+		status, _ := app.Action(0).Over(conn).Raw("/_via/a/_/deadbeef").Fire()
 		require.Equal(t, http.StatusGone, status)
 	}
 	for range 5 {
-		status, _ := app.Action(0).Over(conn).Raw("/_via/a/r/cafebabe").Fire()
+		status, _ := app.Action(0).Over(conn).Raw("/_via/a/_/cafebabe").Fire()
 		require.Equal(t, http.StatusGone, status)
 	}
 
@@ -2468,7 +2385,7 @@ func TestDispatch_unknownActionSkipsTheLogForAnIDViaNeverMints(t *testing.T) {
 			srv := serve(t, r)
 			_, page := do(t, srv, http.MethodGet, "/", "")
 
-			resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), tt.act), "{}")
+			resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "_", 0), tt.act), "{}")
 			assert.Equal(t, http.StatusGone, resp.StatusCode)
 			assert.NotContains(t, body, tt.act, "the body must not echo an id no render could have shipped")
 			assert.NotContains(t, out.String(), "no such action", "an id of the wrong shape is noise, not a stale tab")
@@ -2483,7 +2400,7 @@ func TestDispatch_unknownActionLogStopsAtACapOfDistinctIDs(t *testing.T) {
 	via.Mount(r, "/", counter{count: &store{}})
 	srv := serve(t, r)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 
 	const sent = 1100
 	for i := range sent {
@@ -2506,7 +2423,7 @@ func TestDispatch_unknownActionLogResumesAfterAnHour(t *testing.T) {
 		via.Mount(r, "/", counter{count: &store{}})
 		app := vt.Serve(t, r)
 		_, page := app.Get("/")
-		url := actionURL(t, page, "r", 0)
+		url := actionURL(t, page, "_", 0)
 		flood := func(prefix string) {
 			for i := range 1030 {
 				status, _ := app.Action(0).Raw(swapActionID(t, url, fmt.Sprintf("%s%06d", prefix, i))).Fire()
@@ -2648,7 +2565,7 @@ func TestDispatch_explainsA400ForABodyWithoutTheDatastarHeader(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 1)
+	url := actionURL(t, page, "_", 1)
 	tests := []struct {
 		name        string
 		contentType string

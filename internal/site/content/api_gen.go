@@ -5,7 +5,7 @@ package content
 var apiSymbols = []apiSymbol{
 	{"via", "Assets", "type", "type Assets struct{ … }", "Assets is the CSP-governed half of the document head: everything that loads or executes.", ""},
 	{"via", "Attr", "type", "type Attr struct{ … }", "Attr is one attribute via writes on <html> or <body>, as Name=\"Value\" with the value escaped.", ""},
-	{"via", "Child", "func", "func Child[C any](child C) h.H", "Child renders a child composition — a plain struct field of the parent, seeded at the parent's literal — into its own positional container.", ""},
+	{"via", "Child", "func", "func Child[C any](child *C) h.H", "Child renders a child composition — a struct field of the parent, passed by address — into its own container.", ""},
 	{"via", "Compressor", "type", "type Compressor interface{ … }", "Compressor is the writer an Encoder returns.", ""},
 	{"via", "Ctx", "type", "type Ctx struct{ … }", "Ctx is the per-request binder: it keys signal slots by field offset and actions by handler identity during a render pass, hydrates signals from the request, and records per-slot initial values.", ""},
 	{"via", "Ctx.Context", "method", "func (c *Ctx) Context() context.Context", "Context returns the context that bounds this unit's work.", ""},
@@ -364,7 +364,7 @@ var apiSymbols = []apiSymbol{
 	{"vt", "Action.SecFetch", "method", "func (a *Action) SecFetch(s string) *Action", "SecFetch sets the Sec-Fetch-Site header explicitly.", ""},
 	{"vt", "Action.Tab", "method", "func (a *Action) Tab(id string) *Action", "Tab sets the viatab signal in the POST body, routing a live action to a connection's child — the same channel the real client uses, since Datastar ships the whole (underscore-filtered) signal store with every @post.", ""},
 	{"vt", "App", "type", "type App struct{ … }", "App wraps a via handler under an httptest server, registered for cleanup.", ""},
-	{"vt", "App.Action", "method", "func (a *App) Action(n int) *Action", "Action builds a POST to the n-th action the root renders, in document order (the root is child \"r\").", ""},
+	{"vt", "App.Action", "method", "func (a *App) Action(n int) *Action", "Action builds a POST to the n-th action the root renders, in document order (the root is child \"_\").", ""},
 	{"vt", "App.ChildAction", "method", "func (a *App) ChildAction(child string, n int) *Action", "ChildAction builds a POST to the n-th action a child renders, in document order.", ""},
 	{"vt", "App.Client", "method", "func (a *App) Client() *http.Client", "Client returns the server's http.Client, wired to reach it (over the in-memory network for Serve, or trusting the self-signed cert for ServeTLS).", ""},
 	{"vt", "App.Connect", "method", "func (a *App) Connect() *Conn", "Connect opens the per-tab SSE stream and reads the connect-time signals frame that carries the tab id, so the returned Conn is ready to route actions.", ""},

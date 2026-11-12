@@ -129,24 +129,24 @@ type bDash struct {
 	Counter bCounter
 }
 
-func (d *bDash) View() h.H { return h.Div(via.Child(d.Clock), via.Child(d.Counter)) }
+func (d *bDash) View() h.H { return h.Div(via.Child(&d.Clock), via.Child(&d.Counter)) }
 
 func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
 	t.Parallel()
 	s := vtbrowser.Open(t, via.Handler(bDash{}))
 
-	// Clock child ticks on its own (no interaction) → server-push morphs #via-i0.
-	s.WaitFor("#via-i0 p", func(text string) bool {
+	// Clock child ticks on its own (no interaction) → server-push morphs #via-iClock.
+	s.WaitFor("#via-iClock p", func(text string) bool {
 		var n int
 		_, err := fmt.Sscanf(text, "uptime %d", &n)
 		return err == nil && n >= 2
-	}, "the clock child to tick past 2 (live push to #via-i0)")
+	}, "the clock child to tick past 2 (live push to #via-iClock)")
 
-	// Counter child: its action must route to #via-i1 via the viatab signal and morph
+	// Counter child: its action must route to #via-iCounter via the viatab signal and morph
 	// only that container, leaving the clock running.
 	s.WaitLiveConnected()
-	s.Click("#via-i1 button")
-	s.WaitTextContains("#via-i1 p", "clicks 1")
+	s.Click("#via-iCounter button")
+	s.WaitTextContains("#via-iCounter p", "clicks 1")
 	s.RequireCleanConsole()
 }
 
@@ -163,7 +163,7 @@ func (p *pRoot) View() h.H {
 	return h.Div(
 		h.P(h.Str("hits "), h.Str(p.hits)),
 		h.Button(on.Click(p.Hit), h.Str("hit")),
-		via.Child(p.Counter),
+		via.Child(&p.Counter),
 	)
 }
 
@@ -172,8 +172,8 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	s := vtbrowser.Open(t, via.Handler(pRoot{}))
 
 	s.WaitLiveConnected()
-	s.Click("#via-i0 button")
-	s.WaitTextContains("#via-i0 p", "clicks 1")
+	s.Click("#via-iCounter button")
+	s.WaitTextContains("#via-iCounter p", "clicks 1")
 
 	s.Click("#root > div > button")
 	s.WaitTextContains("#root > div > p", "hits 1")
@@ -181,11 +181,11 @@ func TestChild_rootActionPatchLeavesLiveChildAlone(t *testing.T) {
 	// Datastar applies one patch-elements frame as a single morph, so "hits 1"
 	// being on screen means the whole root patch has already been applied — there
 	// is no later moment for a stray repaint of the child to arrive from it.
-	assert.Contains(t, s.Text("#via-i0 p"), "clicks 1",
+	assert.Contains(t, s.Text("#via-iCounter p"), "clicks 1",
 		"the root's own action patch repainted the live child from its seed")
 
-	s.Click("#via-i0 button")
-	s.WaitTextContains("#via-i0 p", "clicks 2")
+	s.Click("#via-iCounter button")
+	s.WaitTextContains("#via-iCounter p", "clicks 2")
 	s.RequireCleanConsole()
 }
 
@@ -977,7 +977,7 @@ func (c *bSeedChild) View() h.H {
 
 type bSeedRoot struct{ Uptime bSeedChild }
 
-func (r *bSeedRoot) View() h.H { return h.Div(via.Child(r.Uptime)) }
+func (r *bSeedRoot) View() h.H { return h.Div(via.Child(&r.Uptime)) }
 
 func TestChild_seededChildSignalReachesTheIslandWithoutRootPhantom(t *testing.T) {
 	t.Parallel()
@@ -987,7 +987,7 @@ func TestChild_seededChildSignalReachesTheIslandWithoutRootPhantom(t *testing.T)
 
 	var root, child string
 	s.Eval(`document.getElementById('root').getAttribute('data-signals')||""`, &root)
-	s.Eval(`document.getElementById('via-i0').getAttribute('data-signals')||""`, &child)
+	s.Eval(`document.getElementById('via-iUptime').getAttribute('data-signals')||""`, &child)
 	assert.NotContains(t, root, "uptime_load", "the root minted a slot for its child's signal")
 	assert.Contains(t, child, "uptime__load", "the child unit did not declare its own signal")
 
@@ -1007,7 +1007,7 @@ func (r *bToggleRoot) View() h.H {
 	return h.Div(
 		h.Button(h.ID("toggle"), h.DataOn("click", r.Details.Ref().Toggle()), h.Str("toggle")),
 		h.Div(h.ID("panel"), h.DataShow(r.Details.Ref()), h.Str("panel")),
-		via.Child(r.Clock),
+		via.Child(&r.Clock),
 	)
 }
 
@@ -1022,7 +1022,7 @@ func TestChild_clientOnlyToggleSeededOpenSurvivesChildPushes(t *testing.T) {
 	s.Click("#toggle")
 	s.WaitEvalTrue(panelHidden, "the click to hide the panel")
 
-	s.WaitFor("#via-i0 p", func(text string) bool {
+	s.WaitFor("#via-iClock p", func(text string) bool {
 		var n int
 		_, err := fmt.Sscanf(text, "uptime %d", &n)
 		return err == nil && n >= 3
@@ -1055,7 +1055,7 @@ func (r *bTickRoot) View() h.H {
 	return h.Div(
 		h.P(h.ID("hits"), h.Str("hits "), h.Str(r.hits)),
 		h.Button(h.ID("hit"), on.Click(r.Hit), h.Str("hit")),
-		via.Child(r.Ticks),
+		via.Child(&r.Ticks),
 	)
 }
 
@@ -1361,7 +1361,7 @@ func (b *fBoard) View() h.H {
 
 type fPage struct{ Board fBoard }
 
-func (p *fPage) View() h.H { return h.Div(via.Child(p.Board)) }
+func (p *fPage) View() h.H { return h.Div(via.Child(&p.Board)) }
 
 func TestSignal_serverSetFilterSurvivesTheFirstPush(t *testing.T) {
 	t.Parallel()

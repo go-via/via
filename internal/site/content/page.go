@@ -26,6 +26,6 @@ func newPage(path string, env Env) page {
 	return page{nav: shell.NavFor(path), site: env.Site, Search: search.NewBox(env.Index)}
 }
 
-func (p *page) doc() *shell.Doc { return p.site.Doc(p.nav, via.Child(p.Search)) }
+func (p *page) doc() *shell.Doc { return p.site.Doc(p.nav, via.Child(&p.Search)) }
 
 func (p *page) meta(desc string) via.Meta { return shell.Meta(p.site, p.nav, desc) }

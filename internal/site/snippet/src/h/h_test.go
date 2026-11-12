@@ -35,7 +35,7 @@ func (n *node) View() h.H { return n.n }
 
 type colonPage struct{ Colon demos.HColon }
 
-func (p *colonPage) View() h.H { return via.Child(p.Colon) }
+func (p *colonPage) View() h.H { return via.Child(&p.Colon) }
 
 func body(t *testing.T, r *via.Router) string {
 	t.Helper()

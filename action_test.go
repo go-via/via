@@ -98,7 +98,7 @@ func TestActionArg_handlerReceivesTheTypedValue(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(todoList{box: newTodoList()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the row whose value was sent must be deleted")
 	assert.Contains(t, body, "alpha")
@@ -111,7 +111,7 @@ func TestActionArg_valueNotSlotIdentifiesTheRow(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	// slot 0 is alpha's own action (its rendered arg is ?a=1); swap in bravo's
 	// value (2) while keeping alpha's action id.
-	url := strings.Replace(actionURL(t, page, "r", 0), "a=1", "a=2", 1)
+	url := strings.Replace(actionURL(t, page, "_", 0), "a=1", "a=2", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}") // slot 0 (alpha), but arg=2 (bravo)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the carried value (2) must win over the slot (0)")
@@ -128,7 +128,7 @@ func TestActionArg_malformedArgAnswers400(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(todoList{box: newTodoListWithZero()}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := strings.Replace(actionURL(t, page, "r", 1), "a=1", "a=%22abc%22", 1)
+	url := strings.Replace(actionURL(t, page, "_", 1), "a=1", "a=%22abc%22", 1)
 	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	_, after := do(t, srv, http.MethodGet, "/", "")
@@ -150,7 +150,7 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 			t.Parallel()
 			srv := serve(t, via.Handler(todoList{box: newTodoListWithZero()}))
 			_, page := do(t, srv, http.MethodGet, "/", "")
-			url := strings.Replace(actionURL(t, page, "r", 1), "a=1", tt.a, 1)
+			url := strings.Replace(actionURL(t, page, "_", 1), "a=1", tt.a, 1)
 			resp, _ := do(t, srv, http.MethodPost, url, "{}")
 			assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 			_, after := do(t, srv, http.MethodGet, "/", "")
@@ -164,7 +164,7 @@ func TestActionArg_missingArgAnswers400(t *testing.T) {
 // must work there too, not only at the root.
 type todoBoard struct{ List todoList }
 
-func (b *todoBoard) View() h.H { return h.Div(via.Child(b.List)) }
+func (b *todoBoard) View() h.H { return h.Div(via.Child(&b.List)) }
 
 func TestActionArg_worksInsideAPlainChild(t *testing.T) {
 	t.Parallel()
@@ -172,7 +172,7 @@ func TestActionArg_worksInsideAPlainChild(t *testing.T) {
 	srv := serve(t, via.Handler(board))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 1), "{}") // child 1, bravo's slot, arg=2
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "List", 1), "{}") // child 1, bravo's slot, arg=2
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.NotContains(t, body, "bravo", "the child row's value-action did not fire")
 	assert.Contains(t, body, "alpha")
@@ -200,7 +200,7 @@ func TestActionID_listMutationByAnotherTabDoesNotBreakOpenTabs(t *testing.T) {
 func rowActionURL(t *testing.T, html string, id int) string {
 	t.Helper()
 	re := regexp.MustCompile(`[?&]a=` + strconv.Itoa(id) + `(?:&|$)`)
-	for _, u := range actionURLsOf(html, "r") {
+	for _, u := range actionURLsOf(html, "_") {
 		if re.MatchString(u) {
 			return u
 		}
@@ -213,7 +213,7 @@ func TestActionID_isStableAcrossRendersAndInstances(t *testing.T) {
 	t.Parallel()
 	_, first := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
 	_, second := do(t, serve(t, via.Handler(counter{count: &store{}})), http.MethodGet, "/", "")
-	assert.Equal(t, actionURL(t, first, "r", 1), actionURL(t, second, "r", 1),
+	assert.Equal(t, actionURL(t, first, "_", 1), actionURL(t, second, "_", 1),
 		"two independent instances must address the same handler identically")
 }
 
@@ -235,10 +235,10 @@ func TestActionID_sameHandlerTwiceCollapsesToOneEntry(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(twinButtons{count: &store{}}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	assert.Equal(t, actionURL(t, page, "r", 0), actionURL(t, page, "r", 1),
+	assert.Equal(t, actionURL(t, page, "_", 0), actionURL(t, page, "_", 1),
 		"two bindings of one handler must share one id")
 
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "<h1>1</h1>", "and it must dispatch to that handler")
 }
@@ -249,7 +249,7 @@ func TestUnknownAction_answers410NamingOnlyTheAskedForID(t *testing.T) {
 
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz"), "{}")
+	resp, body := do(t, srv, http.MethodPost, swapActionID(t, actionURL(t, page, "_", 0), "zzzzzzzz"), "{}")
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Contains(t, body, "zzzzzzzz", "the 410 must name the id that was asked for")
 	assert.NotContains(t, body, "Inc", "but never the Go method names of the render")
@@ -268,7 +268,7 @@ func (c *idCounter) View() h.H {
 
 type idPair struct{ A, B idCounter }
 
-func (p *idPair) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
+func (p *idPair) View() h.H { return h.Div(via.Child(&p.A), via.Child(&p.B)) }
 
 // idTwins holds two instances of one type as plain fields (no Child), so both
 // bind into the same action table. runtime.FuncForPC drops the receiver, so
@@ -317,13 +317,13 @@ func TestActionID_embeddedSiblingsRouteToTheirOwnChild(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(idPair{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	a, b := actionURL(t, page, "0", 0), actionURL(t, page, "1", 0)
+	a, b := actionURL(t, page, "A", 0), actionURL(t, page, "B", 0)
 	require.NotEqual(t, a, b)
 
 	resp, body := do(t, srv, http.MethodPost, b, "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, body, `"i1__n":1`, "B's click must move B")
-	assert.NotContains(t, body, "i0__n", "B's click must not reach A")
+	assert.Contains(t, body, `"b__n":1`, "B's click must move B")
+	assert.NotContains(t, body, "a__n", "B's click must not reach A")
 }
 
 func TestActionID_postRoutesToItsOwnReceiver(t *testing.T) {
@@ -685,7 +685,7 @@ func TestActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 	require.Contains(t, page, "a=2", "bob's own row must be bound")
 	require.NotContains(t, page, "a=1", "alice's row must not be rendered for bob")
 
-	url := strings.Replace(actionURL(t, page, "r", 0), "a=2", "a=1", 1)
+	url := strings.Replace(actionURL(t, page, "_", 0), "a=2", "a=1", 1)
 	resp, body := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "an arg bob's render never bound must not dispatch")
 	assert.NotContains(t, body, "deleted: [1]", "alice's row was deleted by an arg swap")
@@ -696,7 +696,7 @@ func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveOwnedRows{}))
 		conn := app.Connect()
 
-		url := strings.Replace(conn.ActionURL("r", 0), "a=2", "a=1", 1)
+		url := strings.Replace(conn.ActionURL("_", 0), "a=2", "a=1", 1)
 		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusGone, status, "an unrendered arg must not dispatch over a live stream")
 
@@ -720,7 +720,7 @@ func TestActionArg_argFromAClosedWhenBranchIs410(t *testing.T) {
 	admin := serve(t, via.Handler(newOwnedRows("alice", true)))
 	_, adminPage := do(t, admin, http.MethodGet, "/", "")
 	require.Contains(t, adminPage, `id="system"`)
-	systemURL := actionURL(t, adminPage, "r", 1) // the When branch's own binding
+	systemURL := actionURL(t, adminPage, "_", 1) // the When branch's own binding
 	require.Contains(t, systemURL, "a=9")
 
 	// Same handler, same action id, same URL — but a render with the branch shut.
@@ -738,7 +738,7 @@ func TestActionArg_renderedArgStillDispatches(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(newOwnedRows("bob", false)))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "deleted: [2]", "bob's own row must still be deletable")
 }
@@ -763,7 +763,7 @@ func TestActionArg_eachOverALargeListDispatchesEveryRow(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(bigList{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	base := actionURL(t, page, "r", 0)
+	base := actionURL(t, page, "_", 0)
 	for _, id := range []string{"1", "500", "1000"} {
 		url := strings.Replace(base, "a=1", "a="+id, 1)
 		resp, body := do(t, srv, http.MethodPost, url, "{}")
@@ -811,7 +811,7 @@ func (l *liveOwned) OnInit(ctx *via.Ctx) error {
 // a child key, which is the part the root-only tests never exercise.
 type ownedChildPage struct{ Rows liveOwned }
 
-func (p *ownedChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(p.Rows)) }
+func (p *ownedChildPage) View() h.H { return h.Div(h.Str("page"), via.Child(&p.Rows)) }
 
 func bobsRows(live bool) liveOwned {
 	return liveOwned{ownedRows: newOwnedRows("bob", false), live: live}
@@ -825,9 +825,9 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 		child   string
 		live    bool
 	}{
-		{"live root", via.Handler(bobsRows(true)), "r", true},
-		{"plain child", via.Handler(ownedChildPage{Rows: bobsRows(false)}), "0", false},
-		{"live child", via.Handler(ownedChildPage{Rows: bobsRows(true)}), "0", true},
+		{"live root", via.Handler(bobsRows(true)), "_", true},
+		{"plain child", via.Handler(ownedChildPage{Rows: bobsRows(false)}), "Rows", false},
+		{"live child", via.Handler(ownedChildPage{Rows: bobsRows(true)}), "Rows", true},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {

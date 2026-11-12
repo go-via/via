@@ -7,9 +7,9 @@ import (
 )
 
 // Region is one region: its own State, its own action, its own container. Two
-// of them on a page never collide — via keys a child by its position among its
-// parent's Child calls, and that key is the container id, the signal prefix
-// and the action address alike.
+// of them on a page never collide — via keys a child by its field path, and
+// that key is the container id, the signal prefix and the action address
+// alike.
 type Region struct {
 	Label string
 	N     via.State[int]
@@ -39,5 +39,5 @@ func (c *Compose) OnInit(ctx *via.Ctx) error {
 }
 
 func (c *Compose) View() h.H {
-	return h.Div(h.Class("pair"), via.Child(c.Left), via.Child(c.Right))
+	return h.Div(h.Class("pair"), via.Child(&c.Left), via.Child(&c.Right))
 }

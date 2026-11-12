@@ -131,7 +131,7 @@ func (p *Security) View() h.H {
 				h.Str(" reads it back as a type. Both handlers call "), API("via.Session.Rotate"),
 				h.Str(", which moves the data to a fresh cookie id and deletes the old one, so an id an attacker planted "+
 					"before the login, or copied during it, resolves to nothing afterwards.")),
-			via.Child(p.Auth), "security_auth.go", demo.WireOpen(),
+			via.Child(&p.Auth), "security_auth.go", demo.WireOpen(),
 			demo.Try(
 				h.Str("Sign in, sign out, sign in again: each Rotate lists the id it retired, and Session.ID() never changes."),
 				h.Str("Sign out and read the Wire pane: one POST, answered with a patch showing the next id. Its Set-Cookie is hidden from page script; the sign-in response below shows one."),

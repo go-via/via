@@ -208,7 +208,7 @@ func TestLive_stalledWriteDoesNotBlockActionPOST(t *testing.T) {
 		getRec := httptest.NewRecorder()
 		getReq := httptest.NewRequest(http.MethodGet, "/", nil)
 		handler.ServeHTTP(getRec, getReq)
-		url := actionURL(t, getRec.Body.String(), "r", 0)
+		url := actionURL(t, getRec.Body.String(), "_", 0)
 
 		actionRec := httptest.NewRecorder()
 		actionReq := httptest.NewRequest(http.MethodPost, url, strings.NewReader(withTab(peer.tab, "{}")))
@@ -742,7 +742,7 @@ func TestLiveAction_signalPatchSurvivesARacingPush(t *testing.T) {
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 
 	var seen sync.Map // values (int) observed in the counter signal's signals-patch frame
 	re := regexp.MustCompile(`"n":(\d+)`)
@@ -810,7 +810,7 @@ func TestLiveAction_pushesStayInCommitOrderUnderConcurrentDispatch(t *testing.T)
 	tab := awaitTabID(t, lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 
 	re := regexp.MustCompile(`"n":(\d+)`)
 	var mu sync.Mutex

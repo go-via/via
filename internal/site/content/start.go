@@ -60,7 +60,7 @@ func (p *Start) View() h.H {
 			h.Li(h.Str("An action is a method taking "), API("via.Ctx"), h.Str(". "), API("on.Click"),
 				h.Str(" takes the method value "), Code("c.Inc"), h.Str(", so a misspelled action does not compile.")),
 			h.Li(API("via.Handler"), h.Str(" and "), API("via.Mount"),
-				h.Str(" take the composition by value: no "), Code("&"), h.Str(" at the call site, and a missing or mistyped "),
+				h.Str(" take the composition by value: no "), Code("&"), h.Str(" at the call site (only "), API("via.Child"), h.Str(" takes a field's address), and a missing or mistyped "),
 				Code("View"), h.Str(" is a compile error.")),
 			h.Li(h.Str("Ctrl-C ends the process and every open stream with it. A graceful shutdown calls "),
 				APIText("via.Router.Close", "r.Close()"), h.Str(" first, because "), Code("http.Server.Shutdown"),
@@ -83,7 +83,7 @@ func (p *Start) View() h.H {
 			h.P(h.Str("The program above, running. Open this page in a second tab and click there: "+
 				"this card's "), d.Link("/glossary#wire-pane", "Wire pane"), h.Str(" shows the patch arriving on this tab's stream with no POST from it. "+
 				"Clicks are capped at 30 a minute per client.")),
-			via.Child(p.Counter), "start_counter.go", demo.WireOpen(),
+			via.Child(&p.Counter), "start_counter.go", demo.WireOpen(),
 			demo.Try(h.Str("Open this page in a second tab, click + there, and come back."),
 				h.Str("Click + here: the POST answers 204 and the new number arrives on the stream."))),
 

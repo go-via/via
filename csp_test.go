@@ -80,7 +80,7 @@ func TestPage_cspForbidsEval(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	resp, page := do(t, srv, http.MethodGet, "/", "")
-	patch, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	patch, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 	for name, csp := range map[string]string{
 		"document": resp.Header.Get("Content-Security-Policy"),
 		"patch":    patch.Header.Get("Content-Security-Policy"),
@@ -146,7 +146,7 @@ func TestActionPatch_carriesNoNonce(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 	assert.NotContains(t, resp.Header.Get("Content-Security-Policy"), "'nonce-",
 		"a fragment's header governs nothing; the document's nonce stays the document's")
 }
@@ -155,7 +155,7 @@ func TestActionPatch_carriesSecurityHeaders(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 	assert.Equal(t, "text/html; charset=utf-8", resp.Header.Get("Content-Type"))
 	assert.Equal(t, "nosniff", resp.Header.Get("X-Content-Type-Options"))
 	assert.Contains(t, resp.Header.Get("Content-Security-Policy"), "frame-ancestors 'self'")

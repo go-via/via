@@ -24,7 +24,7 @@ var overrides = map[string]string{
 	"via.Handler":         "A one-page app: a Router with root mounted at \"/\". It returns the Router rather than an http.Handler so the live half stays reachable.",
 	"via.Router.Shutdown": "Drains the live half — stream goroutines, Tick timers, Listen subscriptions — and returns once it is quiet, or with ctx's error at its deadline, logging the tabs whose handler is still blocked. Call it before http.Server.Shutdown, which does not cancel the router's own context.",
 	"via.Router.Close":    "Shutdown with no deadline.",
-	"via.Child":           "Renders a struct field as its own child, keyed by its position among the parent's Child calls. The argument must be a field selector: a composite literal would re-seed the child on every render.",
+	"via.Child":           "Renders a struct field as its own child, keyed by its field path in the root. The argument is the field's address (via.Child(&p.Chat)); the child's state lives in that field.",
 	"via.When":            "Renders build() when cond holds and does not call it otherwise. cond decides what is dispatchable as well as what is drawn, so a handler inside a closed branch answers 410.",
 	"via.Each":            "Renders row(item) for every item, in order, in place. Rows morph by position, so give a row a stable id when the order can change.",
 	"via.PostForm":        "A native multipart form whose submit is a real navigation, read back with ctx.Request().FormValue.",
@@ -38,7 +38,7 @@ var overrides = map[string]string{
 
 	"via.Ctx":                  "The per-request binder, handed to OnInit, OnReload, actions, Tick and Listen handlers and the error page. It is not safe for concurrent use: call it only from the via callback it was given to.",
 	"via.Ctx.Param":            "The mount pattern's named segment, decoded into T. A segment that will not decode answers 404 rather than a zero value, and naming a segment the pattern does not have panics.",
-	"via.Ctx.Request":          "The request behind this render. Its query string is the page's on the GET. An action's URL is the mount pattern plus via's own ?a= and ?u=, and a live unit's stream connect posts to {mount}/_via/sse, so none of the page's query reaches either. Keep page state in path params or the session, not the query.",
+	"via.Ctx.Request":          "The request behind this render. Its query string is the page's on the GET. An action's URL is the mount pattern plus via's own ?a=, and a live unit's stream connect posts to {mount}/_via/sse, so none of the page's query reaches either. Keep page state in path params or the session, not the query.",
 	"via.Ctx.Context":          "The context bounding this unit's work: the stream's on a live unit, the request's otherwise. Never nil. Watch it in a Tick or Listen handler to abandon a slow call against a dead socket.",
 	"via.Ctx.Session":          "The browser session — one value, Get/Put/Delete, ID and Rotate — resolved from the signed cookie and created lazily on the first write.",
 	"via.Ctx.Tick":             "Runs the handler every d for the life of the connection and re-renders the unit after each run; a d of 0 or less runs every second, with one warning. Makes the unit live. OnInit only.",

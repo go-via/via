@@ -164,7 +164,7 @@ func TestErrorPage_skipsDatastarActionResponse(t *testing.T) {
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 
-	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/r/nope", strings.NewReader("{}"))
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/_/nope", strings.NewReader("{}"))
 	req.Header.Set("Datastar-Request", "true")
 	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
@@ -188,7 +188,7 @@ func TestErrorPage_rendersOnNativeFormFailure(t *testing.T) {
 
 	// A native submit carries no Datastar-Request header; a non-multipart body
 	// is the shortest way to fail one, and the browser renders the answer.
-	resp, err := plainClient(t).Post(srv.URL+"/_via/a/r/nope", "application/x-www-form-urlencoded", strings.NewReader("a=1"))
+	resp, err := plainClient(t).Post(srv.URL+"/_via/a/_/nope", "application/x-www-form-urlencoded", strings.NewReader("a=1"))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	var b bytes.Buffer
@@ -378,7 +378,7 @@ func TestErrorPage_reportsMethodNotAllowed(t *testing.T) {
 	via.Mount(r, "/", errOK{})
 	t.Cleanup(r.Close)
 
-	resp, _ := errGet(t, r, "/_via/a/r/0")
+	resp, _ := errGet(t, r, "/_via/a/_/0")
 	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
 	assert.Equal(t, via.ReasonMethodNotAllowed, got.Reason,
 		"a GET of an action URL is a wrong method, not a malformed request")
@@ -397,7 +397,7 @@ func TestErrorPage_carriesErrStaleTabOnAnActionWithNoStream(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	page := jarGet(t, srv.Client(), srv.URL+"/")
-	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), nil)
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "_", 0), nil)
 
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.Equal(t, via.ReasonGone, got.Reason)
@@ -423,7 +423,7 @@ func TestErrorPage_rendersOnAnOversizeNativeSubmit(t *testing.T) {
 	require.NoError(t, err)
 	fw.Write(make([]byte, 9<<20))
 	require.NoError(t, mw.Close())
-	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/r/0", &buf)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/_via/a/_/0", &buf)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -490,7 +490,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 	conn := app.Connect()
 	// The action URL is read off a rendered page, so it has to be taken while
 	// the store still answers — a GET during the outage is refused as well.
-	action := app.URL() + conn.ActionURL("r", 0)
+	action := app.URL() + conn.ActionURL("_", 0)
 	store.down.Store(true)
 
 	resp, body := nativePost(t, app.Client(), action,
@@ -566,7 +566,7 @@ func TestErrorPage_carriesALiveActionsPanic(t *testing.T) {
 	conn := app.Connect()
 	page := fetchPage(t, app, "/")
 
-	resp, _ := nativePost(t, app.Client(), app.URL()+actionURL(t, page, "r", 0), map[string]string{"_viatab": conn.TabID()})
+	resp, _ := nativePost(t, app.Client(), app.URL()+actionURL(t, page, "_", 0), map[string]string{"_viatab": conn.TabID()})
 
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	assert.ErrorContains(t, got.Err, "boom", "a live action's panic must reach the error page as the plain path's does")
@@ -590,7 +590,7 @@ func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T)
 	t.Cleanup(srv.Close)
 
 	page := jarGet(t, srv.Client(), srv.URL+"/thread/abc")
-	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), nil)
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "_", 0), nil)
 
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	assert.ErrorIs(t, got.Err, via.ErrNotFound, "an action's Param miss must report what OnInit's does")
@@ -610,7 +610,7 @@ func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	page := jarGet(t, srv.Client(), srv.URL+"/")
-	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "r", 0), map[string]string{"f": strings.Repeat("x", 12<<20)})
+	resp, _ := nativePost(t, srv.Client(), srv.URL+actionURL(t, page, "_", 0), map[string]string{"f": strings.Repeat("x", 12<<20)})
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
@@ -631,7 +631,7 @@ func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
 		c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 		body := jarGet(t, c, srv.URL+strings.Replace(path, "{id}", "7", 1))
-		resp, _ := nativePost(t, c, srv.URL+actionURL(t, body, "r", 0), nil)
+		resp, _ := nativePost(t, c, srv.URL+actionURL(t, body, "_", 0), nil)
 		require.Equal(t, http.StatusSeeOther, resp.StatusCode, path)
 		assert.Equal(t, want, resp.Header.Get("Location"), path)
 	}
@@ -660,7 +660,7 @@ func TestErrorPage_carriesErrStaleTabOnANativeSubmitToAnEndedStream(t *testing.T
 	lines, cancel := openStreamWithBody(t, srv, c, "/_via/sse", "")
 	defer cancel()
 	tab := awaitTabID(t, lines)
-	jarPost(t, c, srv.URL+actionURL(t, jarGet(t, c, srv.URL+"/out"), "r", 0))
+	jarPost(t, c, srv.URL+actionURL(t, jarGet(t, c, srv.URL+"/out"), "_", 0))
 	drained := time.After(5 * time.Second)
 	for open := true; open; {
 		select {
@@ -670,7 +670,7 @@ func TestErrorPage_carriesErrStaleTabOnANativeSubmitToAnEndedStream(t *testing.T
 		}
 	}
 
-	resp, _ := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	resp, _ := nativePost(t, c, srv.URL+actionURL(t, page, "_", 0), map[string]string{"_viatab": tab})
 	require.Equal(t, http.StatusGone, resp.StatusCode)
 	assert.ErrorIs(t, got.Err, via.ErrStaleTab)
 }

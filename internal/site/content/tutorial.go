@@ -130,7 +130,7 @@ func (p *Tutorial) View() h.H {
 				"client IP, names capped at 24 characters and messages at 200, a blank name posts as anon, a "+
 				"whitespace-only draft is dropped, and each tab keeps the newest 50 lines. The count is tabs open on "+
 				"this page. Nothing stores a message, so a reload starts empty.")),
-			via.Child(p.Chat), "tutorial_chat.go", demo.WireOpen(),
+			via.Child(&p.Chat), "tutorial_chat.go", demo.WireOpen(),
 			demo.Try(d.SecondTabLink("/tutorial#live-chat"),
 				h.Str("Send a line from one tab: Wire shows the POST, then the patch arriving on this tab's stream."),
 				h.Str("Close the second tab: the count drops as soon as its stream ends."))),

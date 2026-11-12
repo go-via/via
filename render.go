@@ -45,9 +45,9 @@ func renderRootBase(inst instance, declareSignals bool, r rerender) (*Ctx, []byt
 // inheritRequestScope carries a request-scoped render's wiring onto a later
 // render off the same request (an action's response, a live root's push).
 //
-// doInit is load-bearing: the acted-on unit's OnInit already ran, but every
-// nested child here is a fresh copy whose OnInit never has. Skipping them
-// served the child zero-valued, nothing like what a GET renders.
+// doInit is load-bearing: a child this render reaches first (a branch the
+// action opened) has never run its OnInit, and skipping it would serve the
+// child zero-valued. A child already in reqScope.inited does not run it again.
 func inheritRequestScope(ctx, from *Ctx) {
 	if from == nil {
 		return
@@ -61,15 +61,6 @@ func inheritRequestScope(ctx, from *Ctx) {
 	// has its cookie on w and nothing in req, so a re-resolve here would miss it
 	// and mint a second id (and a second Set-Cookie).
 	ctx.session = from.session
-	// A child's mutation landed on the copy via.Child made at the previous
-	// render. A root walk from here would call via.Child(parent.Field) again
-	// and re-copy the parent's untouched field, throwing it away (validation
-	// errors gone, submitted values back to empty) — so carry the instance down
-	// for the walk to substitute at its own key. A root action mutates the very
-	// instance the walk starts from, so it needs nothing.
-	if from.isChild {
-		ctx.actedKey, ctx.actedInst = from.childKey, from.unitV
-	}
 }
 
 // newRootCtx builds the root bind Ctx for one render. A request-scoped
@@ -108,8 +99,9 @@ const liveUnderLiveMsg = "via: via.Child: a live unit cannot sit inside another 
 
 // checkLiveNesting enforces the two deferred-feature rules on the finished
 // render tree: a live unit may not hold another live unit, and a live child's
-// View may not call Child at all (a live root may — its plain children are
-// re-inited on every push, see unitPusher.from). It runs after the walk because
+// View may not call Child at all (a live root may — its plain children keep
+// their state in the root's fields, and their OnInit ran once at connect; see
+// unitPusher.from). It runs after the walk because
 // liveness is only knowable then — loud and early, rather than serving a page
 // that silently misroutes an action.
 func checkLiveNesting(c *Ctx, underLive bool) {

@@ -54,7 +54,7 @@ var changes = []change{
 	{"`s.Text(ctx)`, `sig.Text()`, `sig.TextSpan()`", "`s.Display()`", byCompiler},
 	{"`SignalNum[T]` and the other `Signal` shapes", "`Signal[T]`", byCompiler},
 	{"`via:\"name,init=v\"` field tag", "`via:\"init=<json>\"`; the wire name is the field name, and a string seed is JSON: `init=\"all\"`", byPanic},
-	{"a child rendered by hand: `p.A.View(ctx, …)`", "`via.Child(p.A)`; what the child's `View` took as arguments becomes its fields", byCompiler},
+	{"a child rendered by hand: `p.A.View(ctx, …)`", "`via.Child(&p.A)`; what the child's `View` took as arguments becomes its fields", byCompiler},
 	{"an action `func(*via.Ctx) error`, `WithActionErrorHandler`", "`func(*via.Ctx)`; handle the error inside", byCompiler},
 	{"an `OnInit` error, logged while the page renders anyway", "an `OnInit` error aborts: `via.ErrNotFound` answers 404, `via.ErrForbidden` 403, any other 500", bySilent},
 	{"`path:\"id\"` field tag", "`ctx.Param[T](\"id\")` in `OnInit`, stored in a field", bySilent},
@@ -146,7 +146,7 @@ func (p *Migrate) View() h.H {
 			"and warns on a near-miss name that has the right one.")...),
 		d.H3("Composition is via.Child, and roots are taken by value"),
 		h.P(join(inline("v0.7 rendered a child by calling its `View` by hand, `p.A.View(ctx, …)`, passing whatever it "+
-			"needed. In v0.8 a child is a plain struct field rendered with "), APIText("via.Child", "via.Child(p.A)"),
+			"needed. In v0.8 a child is a plain struct field rendered with "), APIText("via.Child", "via.Child(&p.A)"),
 			inline(", with its own `OnInit`; what used to be arguments are fields. "), API("via.Handler"), h.Str(" and "), API("via.Mount"),
 			inline(" take the root by value, `Counter{…}` and not `&Counter{…}`. A live child may sit under plain ancestors; "+
 				"a live child inside another live one panics at render."))...),

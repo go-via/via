@@ -46,7 +46,7 @@ func (p *Actions) View() h.H {
 			h.P(API("on.Click"), h.Str(" takes the method value "), Code("c.Inc"), h.Str(". via addresses it by the method's name "+
 				"and the receiver's place in the page, so the POST goes to this child alone and the answer patches this "+
 				"region. The other demos on the page are untouched.")),
-			via.Child(p.Counter), "counter.go", demo.WireOpen(),
+			via.Child(&p.Counter), "counter.go", demo.WireOpen(),
 			demo.Try(
 				h.Span(h.Str("Click + and read the POST's URL in the Wire pane: "), Code("/actions/_via/a/{child}/{id}"), h.Str(".")),
 				h.Str("Reload the page: the count starts at 0 again, because a State lives on this tab's connection."),
@@ -75,7 +75,7 @@ func (p *Actions) View() h.H {
 		table([]string{"Call", "Gives you"},
 			[]h.H{API("via.Ctx.Request"), h.Str("The POST's headers, cookies and RemoteAddr. Read-only: the body is already decoded. On a PostForm submit, FormValue and FormFile.")},
 			[]h.H{API("via.Ctx.Session"), h.Span(h.Str("The browser session: "), API("via.Session.Get"), h.Str(", "), API("via.Session.Put"), h.Str(", and "), API("via.Session.Rotate"), h.Str(" after a login."))},
-			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. An action's URL carries none of the page's query string, only via's own ?a= and ?u=, so keep a filter or page number in a path param, not the query.")},
+			[]h.H{API("via.Ctx.Param"), h.Str("A {name} segment of the mount path, decoded into T; one that does not decode answers 404. An action's URL carries none of the page's query string, only via's own ?a=, so keep a filter or page number in a path param, not the query.")},
 			[]h.H{API("via.Ctx.Context"), h.Str("A context to pass to slow calls. On a live unit it is cancelled when the tab disconnects.")},
 			[]h.H{API("via.Ctx.Redirect"), h.Str("Navigate once the handler returns, on this site only. The answer skips OnReload and the render.")},
 			[]h.H{API("via.Ctx.RedirectExternal"), h.Str("The same, to another site: an OAuth provider, a payment page.")},
@@ -93,7 +93,7 @@ func (p *Actions) View() h.H {
 				Code("Cast"), h.Str(" receives it as an int. Dispatch accepts only an argument that the render before it bound for "+
 					"that handler, and answers 410 to any other before Cast runs, so the handler can index with it. "+
 					"The tallies are shared with everyone reading this, hence the cap.")),
-			via.Child(p.Vote), "vote.go",
+			via.Child(&p.Vote), "vote.go",
 			demo.Try(
 				h.Span(h.Str("Vote for Go, then expand the POST in the Wire pane: its URL ends in "), Code("?a=0"), h.Str(".")),
 				h.Str("Vote in a second tab. This tab shows the new tally on its next vote, not before: nothing pushes it."),
@@ -111,7 +111,7 @@ func (p *Actions) View() h.H {
 			h.P(API("on.Submit"), h.Str(" on a "), Code("<form>"), h.Str(" stops the native submit and posts the tab's signals as JSON, "+
 				"so the text box is a bound Signal and "), Code("Add"), h.Str(" reads it with Get. The answer is a patch: the note appears, "+
 				"Set(\"\") empties the box, and focus and scroll stay where they were.")),
-			via.Child(p.Note), "actions_note.go",
+			via.Child(&p.Note), "actions_note.go",
 			demo.Try(
 				h.Str("Submit an empty box: the error arrives as a signal patch."),
 				h.Str("Add six notes: the list keeps the last five, and the page never reloads."),
@@ -120,7 +120,7 @@ func (p *Actions) View() h.H {
 			h.P(API("via.PostForm"), h.Str(" renders a native multipart form, so the submit is a real navigation and the handler "+
 				"reads fields with "), Code("ctx.Request().FormValue"), h.Str(". Validation is server-side, and the page comes back with "+
 				"the errors and whatever was typed.")),
-			via.Child(p.Signup), "signup.go",
+			via.Child(&p.Signup), "signup.go",
 			demo.Try(
 				h.Str("Submit with one letter in Name: the page reloads with the error and your input kept."),
 				h.Str("Sign up with valid input: the counter above is back to 0, because the whole document was replaced."),
@@ -152,7 +152,7 @@ func (p *Actions) View() h.H {
 		demo.Card(d.H3("Inspect a file"),
 			h.P(h.Str("PostForm always sends "), Code("multipart/form-data"), h.Str(", so "), Code("ctx.Request().FormFile"),
 				h.Str(" works in the handler. This one hashes the bytes, sniffs the type from the first 512, and keeps nothing.")),
-			via.Child(p.Upload), "actions_upload.go",
+			via.Child(&p.Upload), "actions_upload.go",
 			demo.Try(
 				h.Str("Upload a PNG renamed to .txt: the sniffed type ignores the name and the claimed type."),
 				h.Str("Submit with no file chosen."),
@@ -170,7 +170,7 @@ func (p *Actions) View() h.H {
 		demo.Card(d.H3("Live search"),
 			h.P(API("on.Input"), h.Str(" fires on every keystroke. "), APIText("on.WithDebounce", "on.WithDebounce(300*time.Millisecond)"),
 				h.Str(" holds the POST until typing stops for 300 ms. The box is a bound Signal, so the handler reads the latest text whatever the timing.")),
-			via.Child(p.Search), "actions_search.go",
+			via.Child(&p.Search), "actions_search.go",
 			demo.Try(
 				h.Span(h.Str("Type "), Code("sync"), h.Str(" quickly and count the POSTs in the Wire pane: one, not four.")),
 				h.Str("Type, pause, type again: one POST per pause."),

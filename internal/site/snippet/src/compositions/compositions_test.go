@@ -21,9 +21,9 @@ func TestNames_matchTheComments(t *testing.T) {
 		root http.Handler
 		want []string
 	}{
-		{"one field of the type", via.Handler(compositions.Inbox{}), []string{`data-bind="chat__draft"`, `id="via-i0"`}},
+		{"one field of the type", via.Handler(compositions.Inbox{}), []string{`data-bind="chat__draft"`, `id="via-iChat"`}},
 		{"two fields of the type", via.Handler(compositions.Split{}), []string{
-			`data-bind="i0__chat__draft"`, `data-bind="i1__chat__draft"`, `id="via-i0-0"`, `id="via-i1-0"`,
+			`data-bind="left__chat__draft"`, `data-bind="right__chat__draft"`, `id="via-iLeft-Chat"`, `id="via-iRight-Chat"`,
 		}},
 	}
 	for _, tt := range tests {
@@ -64,7 +64,7 @@ func TestShell_rendersItsBodyAsAChild(t *testing.T) {
 	status, body := app.Get("/settings")
 	require.Equal(t, 200, status)
 	assert.Contains(t, body, "<title>Settings</title>")
-	assert.Contains(t, body, `<main><div id="via-i0"`)
+	assert.Contains(t, body, `<main><div id="via-iBody"`)
 	assert.Contains(t, body, "volume")
 
 	status, body = app.Get("/inbox")

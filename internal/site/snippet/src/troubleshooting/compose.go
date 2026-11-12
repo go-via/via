@@ -41,7 +41,7 @@ type Dashboard struct {
 }
 
 func (d *Dashboard) View() h.H {
-	return h.Main(via.Child(d.Chat), via.Child(d.Clock), via.Child(d.Feed))
+	return h.Main(via.Child(&d.Chat), via.Child(&d.Clock), via.Child(&d.Feed))
 }
 
 // snippet:end

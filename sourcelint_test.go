@@ -45,9 +45,9 @@ const viaPkg = "github.com/go-via/via"
 // go/types, so an aliased or dot import is caught and an unrelated Listen or a
 // local named via is not. Every func in package on binds a handler, so
 // handlerSite matches that package whole. Ctx.Listen admits '&': its topic is
-// a pointer.
+// a pointer, and Child takes the address of the parent's field.
 var handlerSites = map[string]bool{
-	viaPkg + ".Handler": true, viaPkg + ".Mount": true, viaPkg + ".Child": true,
+	viaPkg + ".Handler": true, viaPkg + ".Mount": true, viaPkg + ".Child": false,
 	viaPkg + ".When": true, viaPkg + ".Each": true, viaPkg + ".PostForm": true,
 	viaPkg + ".List.Each":     true,
 	viaPkg + ".Ctx.OnDispose": true, viaPkg + ".Ctx.Listen": false,
@@ -158,8 +158,8 @@ func (p *P) V() h.H { return p.L.Each(func(int) h.H { return nil }) }`,
 func (p *P) V() h.H { return h.Button(on.Click(on.Bind(p.Pick, &p.N))) }`,
 			[]string{"'&' passed to via/on.Bind: via takes compositions by value"}},
 		{"literal to via.Child", header + `
-func (p *P) V() h.H { return via.Child(C{}) }`,
-			[]string{"composite literal passed to via.Child: pass the parent's field (p.Chat)"}},
+func (p *P) V() h.H { return via.Child(&C{}) }`,
+			[]string{"composite literal passed to via.Child: pass the parent's field (&p.Chat)"}},
 		{"named method values pass", header + `
 func (p *P) OnInit(ctx *via.Ctx) error {
 	ctx.Listen(&p.T, p.recv)
@@ -168,7 +168,7 @@ func (p *P) OnInit(ctx *via.Ctx) error {
 }
 
 func (p *P) V() h.H {
-	return h.Div(h.Button(on.Click(p.Inc)), p.L.Each(p.row), via.When(true, p.body), via.Child(p.C))
+	return h.Div(h.Button(on.Click(p.Inc)), p.L.Each(p.row), via.When(true, p.body), via.Child(&p.C))
 }`, nil},
 		{"stdlib package imported as via", `package p
 
@@ -233,16 +233,15 @@ func callSiteViolations(fset *token.FileSet, files []*ast.File, info *types.Info
 					out = append(out, violation{fset.Position(a.Pos()),
 						"closure passed to " + name + ": pass a named method value"})
 				case *ast.UnaryExpr:
+					if _, lit := ast.Unparen(a.X).(*ast.CompositeLit); lit && key == viaPkg+".Child" {
+						// via.Child(&p.Chat) renders the parent's field; a
+						// literal is no field, and Mount refuses it.
+						out = append(out, violation{fset.Position(a.Pos()),
+							"composite literal passed to via.Child: pass the parent's field (&p.Chat)"})
+					}
 					if a.Op == token.AND && noAddr {
 						out = append(out, violation{fset.Position(a.Pos()),
 							"'&' passed to " + name + ": via takes compositions by value"})
-					}
-				case *ast.CompositeLit:
-					// via.Child(p.Chat) embeds the parent's field; a literal
-					// would re-seed a fresh child on every render.
-					if key == viaPkg+".Child" {
-						out = append(out, violation{fset.Position(a.Pos()),
-							"composite literal passed to via.Child: pass the parent's field (p.Chat)"})
 					}
 				}
 			}
@@ -359,7 +358,7 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 		// valueMethodID.
 		"action.go": {"reflect.Array", "reflect.Interface", "reflect.Struct",
 			"reflect.StructField", "reflect.Type", "reflect.ValueOf"},
-		"child.go": {"reflect.TypeOf"},
+		"child.go": {"reflect.Array", "reflect.Struct", "reflect.StructField", "reflect.Type", "reflect.TypeFor"},
 		// hooks.go checks each composition type's hook methods once — see
 		// checkHooks.
 		"hooks.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
@@ -2144,7 +2143,7 @@ func (*State[T]) Display() h.H
 func (*State[T]) Get() T
 func (*State[T]) Set(T)
 func (*State[T]) Track(*Ctx, *topic.Topic[T], func() T)
-func Child[C any](C) h.H
+func Child[C any](*C) h.H
 func Each[T any]([]T, func(T) h.H) h.H
 func Gzip(int) Encoder
 func Handler[T any, PT ptrViewer[T]](T, ...Option) *Router

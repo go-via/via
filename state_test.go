@@ -260,7 +260,7 @@ func liLine(s string) h.H { return h.Li(h.Str(s)) }
 
 type seededParent struct{ Child seededChild }
 
-func (p *seededParent) View() h.H { return h.Div(via.Child(p.Child)) }
+func (p *seededParent) View() h.H { return h.Div(via.Child(&p.Child)) }
 
 func TestStateOf_seedsAChildEmbeddedByValue(t *testing.T) {
 	t.Parallel()
@@ -314,7 +314,7 @@ func (c *tagSeedChild) View() h.H { return h.P(c.Room.Display()) }
 
 type tagSeedParent struct{ Child tagSeedChild }
 
-func (p *tagSeedParent) View() h.H { return h.Div(via.Child(p.Child)) }
+func (p *tagSeedParent) View() h.H { return h.Div(via.Child(&p.Child)) }
 
 func TestState_literalSeedWinsOverTheTagSeed(t *testing.T) {
 	t.Parallel()
@@ -619,7 +619,7 @@ type litTrackParent struct {
 	Kid litTrackKid
 }
 
-func (p *litTrackParent) View() h.H { return h.Div(via.Child(p.Kid)) }
+func (p *litTrackParent) View() h.H { return h.Div(via.Child(&p.Kid)) }
 
 func TestStateTrack_worksOnAnEmbeddedChild(t *testing.T) {
 	t.Parallel()

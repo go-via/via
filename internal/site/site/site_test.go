@@ -264,7 +264,7 @@ func TestSite_prefixesLinksAndMountsWithTheBase(t *testing.T) {
 
 var (
 	searchSlot = regexp.MustCompile(`data-bind="([^"]+)"`)
-	searchPost = regexp.MustCompile(`data-via-q-input__debounce\.250ms="([^"]*)" data-on:input__debounce\.250ms="@post\('([^']+)'`)
+	searchPost = regexp.MustCompile(`(?:data-via-q-input__debounce\.250ms="([^"]*)" )?data-on:input__debounce\.250ms="@post\('([^']+)'`)
 )
 
 func TestSite_searchReturnsAnchoredHits(t *testing.T) {

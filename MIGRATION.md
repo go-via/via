@@ -147,8 +147,11 @@ composition is a plain struct field, rendered explicitly, with its own
 ```go
 // v0.8
 type Page struct{ Sidebar Sidebar }
-func (p *Page) View() h.H { return h.Div(via.Child(p.Sidebar), ...) }
+func (p *Page) View() h.H { return h.Div(via.Child(&p.Sidebar), ...) }
 ```
+
+`via.Child` takes the field's address (v0.10.0 took the value): the child's
+state lives in the parent's field, and its key is the field path.
 
 `via.Handler` and `via.Mount` take the root **by value** (`Counter{...}`, not
 `&Counter{...}`); via passes a pointer to the per-request instance, which is why
@@ -235,7 +238,7 @@ child's warning waits for its first render), or nothing.
 - `via:"name,init=v"` field tag → `via:"init=<json>"`; the wire name is the
   field name, and a string seed is JSON: `init="all"`. Caught by: panic at
   Mount.
-- a child rendered by hand: `p.A.View(ctx, …)` → `via.Child(p.A)`; what the
+- a child rendered by hand: `p.A.View(ctx, …)` → `via.Child(&p.A)`; what the
   child's `View` took as arguments becomes its fields. Caught by: compiler.
 - an action `func(*via.Ctx) error`, `WithActionErrorHandler` → `func(*via.Ctx)`;
   handle the error inside. Caught by: compiler.
@@ -560,12 +563,11 @@ can break:
 ## Wire break: action URLs
 
 v0.7 posted every action to `POST /_action/{id}`. v0.8's action endpoint is
-`{path}/_via/a/{child}/{id}` with an optional `?a=` row datum, and `?u=`, the
-child's call-site identity, on a child's action. `{child}` is `r`
-for the page root, or the acting child's key: its ordinal among its parent's
-`Child` calls, composed onto the parent's, so the second `Child` inside the
-first is `0-1`. `id` is a hash of the handler method's own Go name
-(`main.(*Poll).Vote-fm`) and, for a method of a struct field, that field's
+`{path}/_via/a/{child}/{id}` with an optional `?a=` row datum. `{child}` is `_`
+for the page root, or the acting child's key: its field path from the root,
+joined by dashes, so `via.Child(&p.Stats.A)` is `Stats-A` and a `Kid` inside
+the child `Outer` is `Outer-Kid`. `id` is a hash of the handler method's own Go
+name (`main.(*Poll).Vote-fm`) and, for a method of a struct field, that field's
 path (`Stats.A`), stable across renders, instances, rebuilds and field
 reorders.
 
@@ -598,15 +600,13 @@ composition type at `Mount`/`Child`, never per render.
 A plain nested struct joins its path with one underscore (`c_s`), a child
 boundary with two (`c__s`). A parent cannot bind its child's signal itself:
 with `C` a composition, `p.C.S` in the parent's View has no slot in the
-parent's unit and panics at `Mount`. A parent holding two fields of the
-child's type, or one plus a nested struct, slice or map that holds it, is
-ambiguous (`Child`'s argument order need not match
-declaration order), so those children fall back to the positional key:
-`i0__s`, `i1__s`, and `i0__i0_0__s` for one nested inside the first. The key's
-own depth
-separator is `-` (`via-i0-0`, `/_via/a/0-0/…`), but `-` is not a JS
-identifier character and `Ref()` hands slot names straight to Datastar
-expressions, so the slot spells it `_`.
+parent's unit and panics at `Mount`. A child's prefix is its field path, so
+two fields of one type stay apart:
+`left__chat__draft`, `right__chat__draft`. A child in a nested struct field
+or an array joins the path's parts with `_` (`stats_A__s`, `rows_1__s`): the
+key's own separator is `-` (`via-iStats-A`, `/_via/a/Stats-A/…`), but `-` is
+not a JS identifier character and `Ref()` hands slot names straight to
+Datastar expressions.
 
 `Signal[T].Ref()` is the companion: it returns `"$count"` as an `expr.Expr`
 (`h.DataShow(p.Open.Ref())`), so a name you need in markup comes off the struct
@@ -715,14 +715,13 @@ goes stale the moment a render moves it, and the in-flight click 410s. Bind a
 stable identity (a row's primary key) and read changing state off the
 composition in an argless handler.
 
-## A live root re-inits its plain children every frame
+## A child's OnInit runs once per request or connection
 
-A live root re-renders its whole tree on every pushed frame, and each plain
-child is a fresh copy, so its `OnInit` runs on every frame: once, or more
-on a page carrying a `Bind()`, where each frame renders the tree twice. That is
-what keeps such a child from coming back zero-valued, but any side effect in
-that `OnInit` repeats at the frame rate. Keep it cheap and pure, or hold the
-data on the live root and pass it down the field.
+A child's state lives in its parent's field, so its `OnInit` runs once per
+request on a plain page and once per connection on a live one, however many
+times the tree renders. A plain child of a live root does not re-run it on
+each pushed frame (v0.10.0 did): derive what changes with the root in the
+child's `View`, or reload it in `OnReload`.
 
 ## Known rough edges in v0.8
 
@@ -748,12 +747,6 @@ data on the live root and pass it down the field.
   request's cookie, which predates the `Set-Cookie` the same action
   wrote. `Redirect` after a session-establishing submit instead of returning
   a page directly.
-- **A `Child`'s child key — its ordinal among its own parent's `Child`
-  calls, composed onto the parent's key — is its identity** (container id,
-  signal prefix, dispatch address). A `When` around a `Child` renumbers that
-  parent's later siblings when it flips, so it must depend only on data fixed
-  by `OnInit` or the field literal, never on time, a client signal, or shared
-  state that changes while the page is open.
 
 ## Staying on v0.7
 
@@ -786,9 +779,10 @@ looks like at runtime.
 
 - **`r.Mount(path, page)`** → `via.Mount(r, path, page)`. **Compiler** —
   `Mount` is no longer a `*Router` method.
-- **`via.Embed(child)`** → `via.Child(child)`. **Compiler** — `Embed` is gone.
+- **`via.Embed(child)`** → `via.Child(&p.Child)`. **Compiler** — `Embed` is
+  gone.
 - **`Slot`, `Child[C]`, `NewChild`, `Fill` and the `.Child` method** → a
-  plain child field rendered with `via.Child(p.Field)`; a generic layout is
+  plain child field rendered with `via.Child(&p.Field)`; a generic layout is
   `Shell[C]{Body C}`. **Compiler** — the old names are gone.
 - **`via.Param[T](ctx, n)`, `via.Redirect(ctx, path)`, `via.Listen`** →
   `ctx.Param[T](n)`, `ctx.Redirect(path)`, `ctx.Listen(topic, fn)`.
@@ -857,7 +851,7 @@ looks like at runtime.
 - **`topic.Topic.Subs()`** → `Topic.NumSubs()`. **Compiler** — `Subs` is gone.
 - **Action ids**: flat page-wide counter + `?v=` shape digest →
   content-addressed id (hash of the handler's Go name), keyed by child path
-  (`0-1`, not a flat `n`). Wire-only; nothing in your code builds these
+  (`Outer-Kid`, not a flat `n`). Wire-only; nothing in your code builds these
   URLs. A tab left open across the upgrade holds the old shape and gets
   `410` on its first click, then comes back correct on reload — see "Wire
   break: action URLs" above.
@@ -980,3 +974,25 @@ spelling outright.
   as HTML must read frames; `vt`'s `Fire` returns the frames as its body.
 - **`vtbrowser.Session.Reload` reloads the tab's current page.** It went back
   to the root; call `GoTo("/")` for that.
+
+## Upgrading from v0.10.0
+
+- **`via.Child` takes the field's address**: `via.Child(p.Chat)` →
+  `via.Child(&p.Chat)`. Compiler. The argument must be a field (or array
+  element) of the composition whose View renders it; a local variable,
+  package var or slice element panics at Mount (or at the first render that
+  reaches it), and so does one View rendering the same field twice.
+- **A child's key is its field path**: `Chat`, `Stats-A`, `Rows-1`, `Outer-Kid`,
+  not its position among its parent's `Child` calls. Container ids
+  (`#via-iChat`), action URLs (`/_via/a/Chat/…`) and the signal prefix of a
+  child that shared its type with a sibling (`left__chat__draft`, was
+  `i0__chat__draft`) change with it. A `via.When` around a `Child` no longer
+  moves its siblings' keys. A `vt` test that names a child by ordinal
+  (`ChildAction("0", n)`) names it by field path (`ChildAction("Chat", n)`).
+- **The page root's action address is `_`**, was `r`: `ChildAction("_", n)`.
+- **A child's `OnInit` runs once per request or connection.** See [A child's
+  OnInit runs once per request or
+  connection](#a-childs-oninit-runs-once-per-request-or-connection).
+- **The `?u=` call-site query on a child's action URL is gone.** A tab open
+  across the upgrade posts old URLs; its first click answers 410 and the page
+  reloads.

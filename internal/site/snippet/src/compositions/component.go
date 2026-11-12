@@ -38,7 +38,7 @@ func (a *Avatar) View() h.H {
 	return h.Span(h.Str(a.Name), h.Small(h.Str(a.Size), h.Str("px")))
 }
 
-func (p *Profile) View() h.H { return h.Div(via.Child(p.Me)) }
+func (p *Profile) View() h.H { return h.Div(via.Child(&p.Me)) }
 
 func lookup(ctx *via.Ctx) string { return "ana" }
 

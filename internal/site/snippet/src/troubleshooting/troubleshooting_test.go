@@ -168,11 +168,14 @@ type LiveParent struct {
 	Clock troubleshooting.Clock
 }
 
-func (p *LiveParent) View() h.H { return h.Div(p.N.Display(), via.Child(p.Clock)) }
+func (p *LiveParent) View() h.H { return h.Div(p.N.Display(), via.Child(&p.Clock)) }
 
-type PtrParent struct{ Chat troubleshooting.Chat }
+type LocalParent struct{}
 
-func (p *PtrParent) View() h.H { return h.Div(via.Child(&p.Chat)) }
+func (p *LocalParent) View() h.H {
+	var chat troubleshooting.Chat
+	return h.Div(via.Child(&chat))
+}
 
 func TestRenderFailed_logsTheCompositionMistake(t *testing.T) {
 	t.Parallel()
@@ -268,7 +271,9 @@ func TestMount_panicsAtStartup(t *testing.T) {
 		func() { via.Handler(ValueView{}) })
 	assert.PanicsWithValue(t, `via: Mount path "/files/{path...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`,
 		func() { via.Mount(via.NewRouter(), "/files/{path...}", NoErrInit{}) })
-	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting_test.PtrParent as mounted: "+
-		"via: via.Child(child) requires child to have a View() method",
-		func() { via.Handler(PtrParent{}) })
+	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting_test.LocalParent as mounted: "+
+		"via: via.Child(&x) needs x to be a field of troubleshooting_test.LocalParent, the composition whose View "+
+		"renders it; the troubleshooting.Chat passed is not one of its fields. Hold the child as a struct field "+
+		"(or an element of an array field) and pass its address.",
+		func() { via.Handler(LocalParent{}) })
 }

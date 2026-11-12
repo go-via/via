@@ -69,8 +69,7 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPus
 // Cost: two renders per push on any page carrying a Bind() — a real Datastar
 // connect body is the whole signal store (writeHTMLPage delays the connect
 // until every data-signals is applied), so lc.client holds every bindable
-// slot from the first connect on. Each extra render re-runs every plain child's
-// OnInit (inheritRequestScope sets doInit) and re-walks checkLiveNesting.
+// slot from the first connect on. Each extra render re-walks checkLiveNesting.
 func livePush(lc *tabStream, p *unitPusher) (*Ctx, []byte) {
 	// One set for the life of the connection, never replaced: a signal's
 	// hydrator notes its undo into the rev of the Ctx that bound the signal, so a second
@@ -114,13 +113,11 @@ type unitPusher struct {
 	stream *stream
 	inst   instance
 	base   string
-	// from is what makes a live root's plain children survive a push: Child
-	// re-copies each child from the root's field every render, so a child whose
-	// fields OnInit filled comes back zero-valued unless that OnInit runs again.
-	// Cost: a plain child of a live unit runs its OnInit on every pushed frame,
-	// once per render livePush makes (two on a page carrying a Bind()) —
-	// keep it cheap, or hold the data on the live unit. It also carries the
-	// unit's liveness, which a Tick or Listen set at connect and no push re-runs.
+	// from carries the connect's request scope into every push, and with it
+	// reqScope.inited: a plain child of a live root keeps its state in the
+	// root's field and its OnInit already ran at connect, so a push renders it
+	// without running that OnInit again. It also carries the unit's liveness,
+	// which a Tick or Listen set at connect and no push re-runs.
 	from        *Ctx
 	last        *Ctx   // the bind a Tick/Listen/action handler's Sets landed on; the connect render's until the first push
 	childKey    string // empty for the root
@@ -197,8 +194,8 @@ func (p *unitPusher) rebind() []byte {
 // recover, which logs it and keeps the stream up.
 //
 // For the root it is a plain child's failed OnInit: initOutcome panics from
-// inside the render on every frame, and a push has no response to turn that
-// into a 500/303/404. Dropping the frame loops forever with no client-visible
+// inside the render on the first frame that reaches it, and a push has no
+// response to turn that into a 500/303/404. Dropping the frame loops forever with no client-visible
 // signal at all, and rendering the child empty serves a page that is quietly
 // wrong. For a child it is a live grandchild grown under it: the tree shape,
 // not the data, is what's wrong. Either way the client reloads the page after

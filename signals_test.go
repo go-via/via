@@ -189,7 +189,7 @@ func (i *plainIsland) View() h.H {
 
 type islandHost struct{ Panel seededIsland }
 
-func (p *islandHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+func (p *islandHost) View() h.H { return h.Div(via.Child(&p.Panel)) }
 
 func TestSignal_setInOnInitReachesTheDocumentUnrendered(t *testing.T) {
 	t.Parallel()
@@ -393,7 +393,7 @@ type refPage struct {
 }
 
 func (p *refPage) View() h.H {
-	return h.Div(h.DataShow(p.Count.Ref()), p.Count.Display(), via.Child(p.Chat))
+	return h.Div(h.DataShow(p.Count.Ref()), p.Count.Display(), via.Child(&p.Chat))
 }
 
 func TestSignal_slotIsTheFieldNameAndRefMatchesIt(t *testing.T) {
@@ -423,7 +423,7 @@ func (c *refLiveChild) View() h.H         { return h.Div(h.Input(c.Draft.Bind())
 
 type refLivePage struct{ Room refLiveChild }
 
-func (p *refLivePage) View() h.H { return h.Div(via.Child(p.Room)) }
+func (p *refLivePage) View() h.H { return h.Div(via.Child(&p.Room)) }
 
 func TestSignal_childFieldPrefixSurvivesALivePush(t *testing.T) {
 	t.Parallel()
@@ -525,7 +525,7 @@ func (p *stalePage) OnInit(ctx *via.Ctx) error {
 func (p *stalePage) tick(ctx *via.Ctx) { p.Beat.Set(p.Beat.Get() + 1) }
 
 func (p *stalePage) View() h.H {
-	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Child(p.C))
+	return h.Div(p.Beat.Display(), h.Input(p.C.S.Bind()), via.Child(&p.C))
 }
 
 func TestSignal_parentBindingAChildsSignalPanicsNamingViaChild(t *testing.T) {
@@ -702,7 +702,7 @@ func (p *csPage) View() h.H {
 		h.Input(p.Open.Bind()),
 		p.Open.Display(),
 		h.Div(h.DataShow(p.Chat.Open.Ref())),
-		via.Child(p.Room),
+		via.Child(&p.Room),
 	)
 }
 
@@ -825,7 +825,7 @@ type csSeedNestingPage struct {
 	Room   csSeedChild
 }
 
-func (p *csSeedNestingPage) View() h.H { return h.Div(via.Child(p.Room)) }
+func (p *csSeedNestingPage) View() h.H { return h.Div(via.Child(&p.Room)) }
 
 func TestSignalCS_seedsThroughNestedAndChildScopes(t *testing.T) {
 	t.Parallel()
@@ -966,7 +966,7 @@ type kidOpener struct {
 }
 
 func (p *kidOpener) Open(*via.Ctx) { p.open.Set(true) }
-func (p *kidOpener) kid() h.H      { return via.Child(p.Kid) }
+func (p *kidOpener) kid() h.H      { return via.Child(&p.Kid) }
 func (p *kidOpener) View() h.H {
 	return h.Div(p.open.Display(), h.Button(on.Click(p.Open)), via.When(p.open.Get(), p.kid))
 }
@@ -1029,7 +1029,7 @@ func TestPlainAction_signalAnswerIsAnUncachedEventStreamWithNoCSP(t *testing.T) 
 	t.Parallel()
 	srv := serve(t, via.Handler(twoSignals{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 
 	assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"), "Datastar picks its parser from this header")
 	assert.Empty(t, resp.Header.Get("Content-Security-Policy"), "a frame is no document; the page's policy governs")
@@ -1145,11 +1145,11 @@ func TestLiveSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 
 type csSetHost struct{ Panel csSetAction }
 
-func (p *csSetHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+func (p *csSetHost) View() h.H { return h.Div(via.Child(&p.Panel)) }
 
 func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(csSetHost{})).ChildAction("0", 0).Fire()
+	_, frag := vt.Serve(t, via.Handler(csSetHost{})).ChildAction("Panel", 0).Fire()
 
 	assert.Contains(t, frag, "data: signals {\"_panel__open\":false}")
 	assert.Contains(t, frag, `<span data-text="$_panel__open">false</span>`)
@@ -1157,14 +1157,14 @@ func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 
 type csSetLiveHost struct{ Panel csSetLive }
 
-func (p *csSetLiveHost) View() h.H { return h.Div(via.Child(p.Panel)) }
+func (p *csSetLiveHost) View() h.H { return h.Div(via.Child(&p.Panel)) }
 
 func TestLiveSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(csSetLiveHost{}))
 		conn := app.Connect()
 
-		status, _ := app.ChildAction("0", 0).Over(conn).Fire()
+		status, _ := app.ChildAction("Panel", 0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		assert.Contains(t, conn.Await(`"_panel__open"`), `"_panel__open":false`)
@@ -1205,12 +1205,12 @@ type editMid struct {
 
 func (m *editMid) Bump(ctx *via.Ctx) { m.n++ }
 func (m *editMid) View() h.H {
-	return h.Div(h.Str(strings.Repeat("x", m.n)), h.Button(on.Click(m.Bump)), via.Child(m.Leaf))
+	return h.Div(h.Str(strings.Repeat("x", m.n)), h.Button(on.Click(m.Bump)), via.Child(&m.Leaf))
 }
 
 type editHost struct{ Mid editMid }
 
-func (p *editHost) View() h.H { return h.Div(via.Child(p.Mid)) }
+func (p *editHost) View() h.H { return h.Div(via.Child(&p.Mid)) }
 
 func TestPlainChildAction_answerDoesNotRedeclareAGrandchildsSignals(t *testing.T) {
 	t.Parallel()
@@ -1218,7 +1218,7 @@ func TestPlainChildAction_answerDoesNotRedeclareAGrandchildsSignals(t *testing.T
 	_, page := app.Get("/")
 	require.Contains(t, page, `"mid__leaf__name":"ada"`, "the page declares the grandchild's signal")
 
-	_, frag := app.ChildAction("0", 0).Fire()
+	_, frag := app.ChildAction("Mid", 0).Fire()
 	require.Contains(t, frag, "<div>x<button", "the child re-rendered after the action")
 	assert.NotContains(t, frag, "data-signals", "a re-declared seed would overwrite what the user is typing")
 }

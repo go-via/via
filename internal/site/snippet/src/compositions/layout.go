@@ -16,7 +16,7 @@ func (s *Shell[C]) PageMeta() via.Meta { return via.Meta{Title: s.Title} }
 func (s *Shell[C]) View() h.H {
 	return h.Div(
 		h.Header(h.H1(h.Str(s.Title))),
-		h.Main(via.Child(s.Body)),
+		h.Main(via.Child(&s.Body)),
 	)
 }
 
@@ -30,8 +30,8 @@ type TwoColumn[S, M any] struct {
 
 func (t *TwoColumn[S, M]) View() h.H {
 	return h.Div(h.Class("cols"),
-		h.Aside(via.Child(t.Side)),
-		h.Section(via.Child(t.Main)),
+		h.Aside(via.Child(&t.Side)),
+		h.Section(via.Child(&t.Main)),
 	)
 }
 

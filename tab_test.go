@@ -31,7 +31,7 @@ func TestLiveAction_unknownTabIsGone(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 
 	resp, _ := post(t, srv, url, withTab("nonexistent", "{}"), map[string]string{
 		"Sec-Fetch-Site": "same-origin",
@@ -120,7 +120,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
 	signInReq.Header.Set("Datastar-Request", "true")
@@ -139,7 +139,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0)
+	req := liveActionRequest(t, srv, string(page), tab, "_", 0)
 	// No cookie at all on this request — the stolen-tab-id, no-session attack.
 	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
@@ -150,7 +150,7 @@ func TestDispatch_liveActionUnderASessionRejectsAMismatchedSession(t *testing.T)
 
 	// The rightful owner, same tab, same session cookie, must still work —
 	// the check rejects a mismatch, not the connection itself.
-	ownReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
+	ownReq := liveActionRequest(t, srv, string(page), tab, "_", 0)
 	ownResp, err := owner.Do(ownReq)
 	require.NoError(t, err)
 	defer ownResp.Body.Close()
@@ -173,7 +173,7 @@ func TestDispatch_liveActionOnAnAnonymousConnectionIsUnaffected(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie anywhere
+	req := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, no cookie anywhere
 	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -191,7 +191,7 @@ func signIn(t *testing.T, srv *httptest.Server, c *http.Client, path string) {
 	loginPage, err := io.ReadAll(loginResp.Body)
 	require.NoError(t, err)
 	loginResp.Body.Close()
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -240,12 +240,12 @@ func TestDispatch_aLeakedTabIDBoundByAnAttackerGrantsNoVictimSession(t *testing.
 	signIn(t, srv, victim, "/as-victim")
 	signIn(t, srv, attacker, "/as-attacker")
 
-	atkResp, err := attacker.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	atkResp, err := attacker.Do(liveActionRequest(t, srv, string(page), tab, "_", 0))
 	require.NoError(t, err)
 	atkResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, atkResp.StatusCode, "the leaked id still drives the anonymous tab")
 
-	vicResp, err := victim.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	vicResp, err := victim.Do(liveActionRequest(t, srv, string(page), tab, "_", 0))
 	require.NoError(t, err)
 	vicResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, vicResp.StatusCode, "the first session to reach the tab owns it")
@@ -282,18 +282,18 @@ func TestDispatch_liveActionCarryingASessionBindsAnAnonymousConnection(t *testin
 	owner := jarClient(t)
 	signIn(t, srv, owner, "/login")
 
-	ownResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 1)) // Peek, owner's cookie
+	ownResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "_", 1)) // Peek, owner's cookie
 	require.NoError(t, err)
 	ownResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, ownResp.StatusCode)
 
-	bareResp, err := plainClient(t).Do(liveActionRequest(t, srv, string(page), tab, "r", 0)) // Bump, no cookie
+	bareResp, err := plainClient(t).Do(liveActionRequest(t, srv, string(page), tab, "_", 0)) // Bump, no cookie
 	require.NoError(t, err)
 	bareResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bareResp.StatusCode,
 		"once a session reached the tab, its id must stop being a bearer credential")
 
-	againResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "r", 0))
+	againResp, err := owner.Do(liveActionRequest(t, srv, string(page), tab, "_", 0))
 	require.NoError(t, err)
 	againResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, againResp.StatusCode, "the binding session still dispatches")
@@ -314,14 +314,14 @@ func TestDispatch_liveCookielessSessionReadNeitherMintsNorBinds(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	peekReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Peek, no cookie
+	peekReq := liveActionRequest(t, srv, string(page), tab, "_", 1) // Peek, no cookie
 	peekResp, err := plainClient(t).Do(peekReq)
 	require.NoError(t, err)
 	peekResp.Body.Close()
 	require.Equal(t, http.StatusNoContent, peekResp.StatusCode, "Peek must run")
 	assert.Empty(t, peekResp.Header.Values("Set-Cookie"), "a Session().Get with no session must not mint one")
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, still no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, still no cookie
 	bumpResp, err := plainClient(t).Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
@@ -365,13 +365,13 @@ func TestDispatch_liveActionLoginBindsTheConnectionAgainstALaterCookielessDispat
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "_", 1) // Login
 	loginResp, err := plainClient(t).Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	require.NotEmpty(t, loginResp.Header.Get("Set-Cookie"), "a live Login must still mint the session cookie")
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, no cookie
 	bumpResp, err := plainClient(t).Do(bumpReq)
 	require.NoError(t, err)
 	defer bumpResp.Body.Close()
@@ -409,7 +409,7 @@ func TestDispatch_onConnectMintedSessionBindsTheConnection(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
+	req := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, no cookie
 	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -435,18 +435,18 @@ func TestDispatch_liveLoginOnOneTabDoesNotBindASiblingTab(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tabA, "r", 1) // Login on A
+	loginReq := liveActionRequest(t, srv, string(page), tabA, "_", 1) // Login on A
 	loginResp, err := plainClient(t).Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
-	bumpA := liveActionRequest(t, srv, string(page), tabA, "r", 0)
+	bumpA := liveActionRequest(t, srv, string(page), tabA, "_", 0)
 	bumpAResp, err := plainClient(t).Do(bumpA)
 	require.NoError(t, err)
 	bumpAResp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, bumpAResp.StatusCode, "the logged-in tab rejects a cookieless dispatch")
 
-	bumpB := liveActionRequest(t, srv, string(page), tabB, "r", 0)
+	bumpB := liveActionRequest(t, srv, string(page), tabB, "_", 0)
 	bumpBResp, err := plainClient(t).Do(bumpB)
 	require.NoError(t, err)
 	defer bumpBResp.Body.Close()
@@ -470,28 +470,28 @@ func TestDispatch_rotateAfterALiveLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "_", 1) // Login
 	loginResp, err := owner.Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	before := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEmpty(t, before)
 
-	rotReq := liveActionRequest(t, srv, string(page), tab, "r", 2) // Rotate
+	rotReq := liveActionRequest(t, srv, string(page), tab, "_", 2) // Rotate
 	rotResp, err := owner.Do(rotReq)
 	require.NoError(t, err)
 	rotResp.Body.Close()
 	after := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
 
-	okReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, new cookie
+	okReq := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, new cookie
 	okResp, err := owner.Do(okReq)
 	require.NoError(t, err)
 	okResp.Body.Close()
 	assert.Equal(t, http.StatusNoContent, okResp.StatusCode,
 		"the post-rotate dispatch with the new cookie must still be bound")
 
-	staleReq := liveActionRequest(t, srv, string(page), tab, "r", 0)
+	staleReq := liveActionRequest(t, srv, string(page), tab, "_", 0)
 	staleReq.AddCookie(&http.Cookie{Name: "via_session", Value: before})
 	staleResp, err := plainClient(t).Do(staleReq)
 	require.NoError(t, err)
@@ -541,7 +541,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, "r", 1) // Login
+	loginReq := liveActionRequest(t, srv, string(page), tab, "_", 1) // Login
 	loginDone := make(chan *http.Response, 1)
 	loginErr := make(chan error, 1)
 	go func() {
@@ -551,7 +551,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 	}()
 	<-root.started // Login now holds the stream goroutine, unbound so far
 
-	bumpReq := liveActionRequest(t, srv, string(page), tab, "r", 0) // Bump, no cookie
+	bumpReq := liveActionRequest(t, srv, string(page), tab, "_", 0) // Bump, no cookie
 	bumpDone := make(chan *http.Response, 1)
 	bumpErr := make(chan error, 1)
 	go func() {
@@ -586,7 +586,7 @@ func TestDispatch_cookielessDispatchRacingAConcurrentLoginIsRejectedNotAppliedSt
 // child key, and the session check and the child lookup are separate sites.
 type sessionLiveChild struct{ Child sessionLive }
 
-func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p.Child)) }
+func (p *sessionLiveChild) View() h.H { return h.Div(h.Str("shell"), via.Child(&p.Child)) }
 
 func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testing.T) {
 	t.Parallel()
@@ -603,7 +603,7 @@ func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testi
 	require.NoError(t, err)
 	loginResp.Body.Close()
 
-	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "r", 0), strings.NewReader("{}"))
+	signInReq, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, string(loginPage), "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	signInReq.Header.Set("Sec-Fetch-Site", "same-origin")
 	signInReq.Header.Set("Datastar-Request", "true")
@@ -622,14 +622,14 @@ func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testi
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	req := liveActionRequest(t, srv, string(page), tab, "0", 0) // Bump, no cookie at all
+	req := liveActionRequest(t, srv, string(page), tab, "Child", 0) // Bump, no cookie at all
 	resp, err := plainClient(t).Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusForbidden, resp.StatusCode,
 		"a child-scoped dispatch against a session-bound connection with no session must be rejected")
 
-	ownReq := liveActionRequest(t, srv, string(page), tab, "0", 0)
+	ownReq := liveActionRequest(t, srv, string(page), tab, "Child", 0)
 	ownResp, err := owner.Do(ownReq)
 	require.NoError(t, err)
 	defer ownResp.Body.Close()
@@ -639,7 +639,7 @@ func TestDispatch_liveChildActionUnderASessionRejectsAMismatchedSession(t *testi
 
 type liveLoginerChild struct{ Child liveLoginer }
 
-func (p *liveLoginerChild) View() h.H { return h.Div(h.Str("shell"), via.Child(p.Child)) }
+func (p *liveLoginerChild) View() h.H { return h.Div(h.Str("shell"), via.Child(&p.Child)) }
 
 func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing.T) {
 	t.Parallel()
@@ -657,21 +657,21 @@ func TestDispatch_rotateAfterALiveChildLoginKeepsTheBindingOnTheNewID(t *testing
 	require.NoError(t, err)
 	getResp.Body.Close()
 
-	loginReq := liveActionRequest(t, srv, string(page), tab, "0", 1)
+	loginReq := liveActionRequest(t, srv, string(page), tab, "Child", 1)
 	loginResp, err := owner.Do(loginReq)
 	require.NoError(t, err)
 	loginResp.Body.Close()
 	before := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEmpty(t, before)
 
-	rotReq := liveActionRequest(t, srv, string(page), tab, "0", 2)
+	rotReq := liveActionRequest(t, srv, string(page), tab, "Child", 2)
 	rotResp, err := owner.Do(rotReq)
 	require.NoError(t, err)
 	rotResp.Body.Close()
 	after := cookieValue(t, owner, srv.URL, "via_session")
 	require.NotEqual(t, before, after, "Rotate must mint a fresh id")
 
-	okReq := liveActionRequest(t, srv, string(page), tab, "0", 0)
+	okReq := liveActionRequest(t, srv, string(page), tab, "Child", 0)
 	okResp, err := owner.Do(okReq)
 	require.NoError(t, err)
 	defer okResp.Body.Close()
@@ -870,7 +870,7 @@ func TestLive_aStreamStuckWritingToAClientThatStoppedReadingSaysSo(t *testing.T)
 
 	require.Eventually(t, func() bool { return strings.Contains(out.String(), "not reading") }, 10*time.Second, 20*time.Millisecond,
 		"the warning must say the stream is stuck writing to its client")
-	resp, _ := post(t, srv, actionURL(t, page, "r", 0), withTab(tab, "{}"), map[string]string{
+	resp, _ := post(t, srv, actionURL(t, page, "_", 0), withTab(tab, "{}"), map[string]string{
 		"Sec-Fetch-Site": "same-origin", "Datastar-Request": "true",
 	})
 
@@ -1049,7 +1049,7 @@ func TestDispatch_actionBeforeItsStreamConnectsRunsOnceTheStreamOpens(t *testing
 		srv := liveServer(t, via.Handler(clicker{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		id := pageTab(t, page)
-		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0))
 		synctest.Wait()
 		select {
 		case a := <-got:
@@ -1081,7 +1081,7 @@ func TestDispatch_actionOnATabWhoseStreamNeverConnectsAnswers410AfterTwoSecondsA
 				srv := liveServer(t, via.Handler(clicker{}, via.WithPinnedDeadline(tt.deadline)))
 				_, page := do(t, srv, http.MethodGet, "/", "")
 				start := time.Now()
-				assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, pageTab(t, page), "r", 0)))
+				assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, pageTab(t, page), "_", 0)))
 				assert.Equal(t, tt.want, time.Since(start), "the wait for a stream is min(2s, the pinned deadline)")
 			})
 		})
@@ -1093,7 +1093,7 @@ func TestDispatch_actionWhoseStreamConnectsInsideTwoSecondsRuns(t *testing.T) {
 		srv := liveServer(t, via.Handler(clicker{}, via.WithPinnedDeadline(10*time.Second)))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		id := pageTab(t, page)
-		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0))
 
 		time.Sleep(1500 * time.Millisecond)
 		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
@@ -1110,7 +1110,7 @@ func TestDispatch_actionCarryingAnotherProcesssIDDoesNotWait(t *testing.T) {
 		podB := liveServer(t, via.Handler(clicker{}, testSessionKey))
 		_, page := do(t, podA, http.MethodGet, "/", "")
 		start := time.Now()
-		assert.Equal(t, http.StatusGone, fireNow(t, podB, liveActionRequest(t, podB, page, pageTab(t, page), "r", 0)))
+		assert.Equal(t, http.StatusGone, fireNow(t, podB, liveActionRequest(t, podB, page, pageTab(t, page), "_", 0)))
 		assert.Zero(t, time.Since(start), "a stream for another pod's tab never connects here, so waiting only delays the reload")
 	})
 }
@@ -1121,7 +1121,7 @@ func TestDispatch_actionCarryingAnIDNoRenderIssuedDoesNotWait(t *testing.T) {
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		forged := strings.Repeat("A", len(pageTab(t, page)))
 		start := time.Now()
-		assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, forged, "r", 0)))
+		assert.Equal(t, http.StatusGone, fireNow(t, srv, liveActionRequest(t, srv, page, forged, "_", 0)))
 		assert.Zero(t, time.Since(start), "only an id this server issued is worth waiting for")
 	})
 }
@@ -1160,10 +1160,10 @@ func TestDispatch_actionWithAMalformedAddressDoesNotWait(t *testing.T) {
 		srv := liveServer(t, via.Handler(clicker{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		id := pageTab(t, page)
-		good := liveActionRequest(t, srv, page, id, "r", 0)
+		good := liveActionRequest(t, srv, page, id, "_", 0)
 		act := good.URL.Path[strings.LastIndex(good.URL.Path, "/")+1:]
-		for _, path := range []string{"/_via/a/r/nope", "/_via/a/r-1/" + act, "/_via/a/0-/" + act} {
-			req := liveActionRequest(t, srv, page, id, "r", 0)
+		for _, path := range []string{"/_via/a/_/nope", "/_via/a/Kid.1/" + act, "/_via/a/Kid-/" + act} {
+			req := liveActionRequest(t, srv, page, id, "_", 0)
 			req.URL.Path = path
 			start := time.Now()
 			assert.Equal(t, http.StatusGone, fireNow(t, srv, req), path)
@@ -1180,14 +1180,14 @@ func TestDispatch_parkedActionsPastTheRouterCapAnswer503AtOnce(t *testing.T) {
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		id := pageTab(t, page)
 		parked := []<-chan answer{
-			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
-			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0)),
 		}
 		synctest.Wait()
 
 		start := time.Now()
 		for range 2 {
-			assert.Equal(t, http.StatusServiceUnavailable, fireNow(t, srv, liveActionRequest(t, srv, page, id, "r", 0)))
+			assert.Equal(t, http.StatusServiceUnavailable, fireNow(t, srv, liveActionRequest(t, srv, page, id, "_", 0)))
 		}
 		assert.Zero(t, time.Since(start), "a request past the cap is refused, not parked")
 		assert.Equal(t, 1, strings.Count(out.String(), "actions parked"), "the refusal is logged once per interval")
@@ -1207,7 +1207,7 @@ func TestDispatch_parkedActionAnswers503WhenTheRouterCloses(t *testing.T) {
 		via.Mount(r, "/", clicker{})
 		srv := liveServer(t, r)
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		got := fireAsync(srv, liveActionRequest(t, srv, page, pageTab(t, page), "r", 0))
+		got := fireAsync(srv, liveActionRequest(t, srv, page, pageTab(t, page), "_", 0))
 		synctest.Wait()
 
 		start := time.Now()
@@ -1244,7 +1244,7 @@ func TestDispatch_aParkedActionsWholeWaitIsBoundedByThePinnedDeadline(t *testing
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		id := pageTab(t, page)
 		start := time.Now()
-		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+		got := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0))
 
 		time.Sleep(1500 * time.Millisecond)
 		lines, cancel := openStreamWithBody(t, srv, srv.Client(), "/_via/sse", withTab(id, "{}"))
@@ -1295,9 +1295,9 @@ func TestDispatch_parkedActionsRunInArrivalOrder(t *testing.T) {
 			srv := liveServer(t, via.Handler(ordered{log: log}))
 			_, page := do(t, srv, http.MethodGet, "/", "")
 			id := pageTab(t, page)
-			a := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0))
+			a := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0))
 			synctest.Wait()
-			b := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 1))
+			b := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 1))
 			synctest.Wait()
 
 			connected := make(chan context.CancelFunc, 1)
@@ -1306,7 +1306,7 @@ func TestDispatch_parkedActionsRunInArrivalOrder(t *testing.T) {
 				awaitTabID(t, lines)
 				connected <- cancel
 			}()
-			c := fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 2))
+			c := fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 2))
 			for _, ch := range []<-chan answer{a, b, c} {
 				require.Equal(t, http.StatusNoContent, (<-ch).status)
 			}
@@ -1408,8 +1408,8 @@ func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(
 		// The stream goroutine is inside the Tick, so no action on the tab is picked up.
 		<-p.entered
 		waiting := []<-chan answer{
-			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
-			fireAsync(srv, liveActionRequest(t, srv, page, id, "r", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0)),
+			fireAsync(srv, liveActionRequest(t, srv, page, id, "_", 0)),
 		}
 		synctest.Wait()
 		for _, w := range waiting {
@@ -1422,7 +1422,7 @@ func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(
 
 		start := time.Now()
 		login := pageBody(t, srv, c, "/login")
-		rotate, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, login, "r", 3), strings.NewReader("{}"))
+		rotate, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, login, "_", 3), strings.NewReader("{}"))
 		require.NoError(t, err)
 		rotate.Header.Set("Sec-Fetch-Site", "same-origin")
 		rotate.Header.Set("Datastar-Request", "true")
@@ -1439,7 +1439,7 @@ func TestDispatch_actionsWaitingOnATabAnswer410AtOnceWhenTheServerEndsItsStream(
 
 type plainBlockedHost struct{ B blockedTick }
 
-func (p *plainBlockedHost) View() h.H { return h.Div(via.Child(p.B)) }
+func (p *plainBlockedHost) View() h.H { return h.Div(via.Child(&p.B)) }
 
 func TestLive_aPinnedTabUnderAPlainRootIsLoggedWithTheRootType(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {

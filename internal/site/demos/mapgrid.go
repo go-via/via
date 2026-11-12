@@ -33,9 +33,8 @@ var cities = []MapView{
 // maxMaps is the cap the grid is written to. One Signal per map, as fixed
 // fields: the number of maps changes while the page is open, and a Signal
 // reached through a slice has no field name to spell in a Datastar
-// expression. A slice of via.Child would have the same problem one level up —
-// a child's key is its position among its parent's Child calls and must not
-// move for the life of the connection.
+// expression. A slice of via.Child has the same problem one level up: a
+// slice element is not a field, so it has no key, and Child refuses it.
 const maxMaps = 6
 
 // MapGrid is one live unit holding every map, not a parent with a child per

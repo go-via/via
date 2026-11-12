@@ -101,7 +101,7 @@ func cookieValue(t *testing.T, c *http.Client, base, name string) string {
 // value, so a test can replay a stale session id the jar has already replaced.
 func greetWithRawCookie(t *testing.T, base, name, value string) string {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "r", 1), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "_", 1), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -158,7 +158,7 @@ func jarClient(t *testing.T) *http.Client {
 
 func fireAction(t *testing.T, c *http.Client, base string, n int) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "_", n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -293,7 +293,7 @@ func TestSession_concurrentWritesOnOneCookieUseOneSessionID(t *testing.T) {
 
 	// Resolved up front: fireAction's require would call FailNow off the test
 	// goroutine. Every render carries the same action set.
-	bump := srv.URL + actionPath(t, c, srv.URL, "r", 0)
+	bump := srv.URL + actionPath(t, c, srv.URL, "_", 0)
 	const n = 16
 	statuses := make([]int, n)
 	var wg sync.WaitGroup
@@ -332,7 +332,7 @@ func TestSession_issuesAnHttpOnlyCookieWhenEnabled(t *testing.T) {
 
 	// Fire the first session access on a raw request so we can read the
 	// Set-Cookie attributes the cookiejar would otherwise hide.
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, plainClient(t), base, "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -377,7 +377,7 @@ func TestSession_expiresAfterIdleTTL(t *testing.T) {
 // on the default one.
 func fireWithCookie(t *testing.T, c *http.Client, base string, n int, name, value string) (int, string) {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "_", n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -496,7 +496,7 @@ func TestSession_cookieIsSecureOverTLS(t *testing.T) {
 		testSessionKey))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, srv.Client(), srv.URL, "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -662,7 +662,7 @@ func TestSession_usesACustomCookieName(t *testing.T) {
 		via.WithSessionCookieName("myapp_sid")))
 	t.Cleanup(srv.Close)
 
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, plainClient(t), srv.URL, "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionPath(t, plainClient(t), srv.URL, "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -758,7 +758,7 @@ func TestSessionStore_sharedStoreCarriesSessionsAcrossProcesses(t *testing.T) {
 
 	a := storeApp(t, via.WithSessionStore(store))
 	page := jarGet(t, c, a.URL+"/p")
-	jarPost(t, c, a.URL+actionURL(t, page, "r", 0))
+	jarPost(t, c, a.URL+actionURL(t, page, "_", 0))
 	require.Contains(t, jarGet(t, c, a.URL+"/p"), "hi alice", "the session must work on the pod that minted it")
 
 	// A different Router over the same key and store: a restart, or a second pod.
@@ -773,7 +773,7 @@ func TestSessionStore_defaultStoreLosesSessionsOnRestart(t *testing.T) {
 
 	a := storeApp(t)
 	page := jarGet(t, c, a.URL+"/p")
-	jarPost(t, c, a.URL+actionURL(t, page, "r", 0))
+	jarPost(t, c, a.URL+actionURL(t, page, "_", 0))
 	require.Contains(t, jarGet(t, c, a.URL+"/p"), "hi alice")
 
 	b := storeApp(t)
@@ -866,7 +866,7 @@ func TestDispatchPlain_sessionMintedInOnInitReachesTheHandlerOnce(t *testing.T) 
 	app := vt.Serve(t, via.Handler(sessInAction{}))
 	page := fetchPage(t, app, "/")
 
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "_", 0), strings.NewReader(`{"q":"x"}`))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -907,7 +907,7 @@ func (p *sessSiblings) Save(ctx *via.Ctx) {
 func (p *sessSiblings) View() h.H {
 	return h.Div(
 		h.Input(p.Q.Bind()),
-		via.Child(p.A), via.Child(p.B),
+		via.Child(&p.A), via.Child(&p.B),
 		h.P(h.Str(p.hit)),
 		h.Button(on.Click(p.Save)),
 	)
@@ -931,7 +931,7 @@ func TestSession_siblingChildsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	app := vt.Serve(t, via.Handler(sessSiblings{}))
 	page := fetchPage(t, app, "/")
 
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "r", 0), strings.NewReader(`{"q":"x"}`))
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, page, "_", 0), strings.NewReader(`{"q":"x"}`))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -1102,7 +1102,7 @@ func auditServer(t *testing.T, opts ...via.Option) (base string, acts []string) 
 	b, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	for n := range audShow + 1 {
-		acts = append(acts, actionURL(t, string(b), "r", n))
+		acts = append(acts, actionURL(t, string(b), "_", n))
 	}
 	return srv.URL, acts
 }
@@ -1637,7 +1637,7 @@ func TestSession_refusesAPlainActionWhileTheStoreIsDown(t *testing.T) {
 
 	// The action URL is read off a rendered page, so it has to be taken while
 	// the store still answers — the GET would otherwise 503 first.
-	path := actionPath(t, c, base, "r", 1)
+	path := actionPath(t, c, base, "_", 1)
 
 	store.mu.Lock()
 	store.down = true
@@ -1993,7 +1993,7 @@ func TestSession_signalAnswerOverridesAMiddlewaresCacheControl(t *testing.T) {
 
 func sessionActionResponse(t *testing.T, c *http.Client, base string, n int, headers ...map[string]string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "r", n), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, base+actionPath(t, c, base, "_", n), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
@@ -2082,7 +2082,7 @@ func TestSession_aLiveNativeSubmitsPageSeesTheSessionItsActionWrote(t *testing.T
 	defer cancel()
 	tab := awaitTabID(t, lines)
 
-	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "r", 0), map[string]string{"_viatab": tab})
+	resp, body := nativePost(t, c, srv.URL+actionURL(t, page, "_", 0), map[string]string{"_viatab": tab})
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Contains(t, body, "who=alice")
 }

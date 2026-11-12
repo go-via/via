@@ -188,7 +188,7 @@ func TestPageCompression_coversAPlainActionsSignalFrame(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(twoSignals{}, via.WithPageCompression()))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := getEncoded(t, srv.URL, http.MethodPost, actionURL(t, page, "r", 0), "gzip",
+	resp, body := getEncoded(t, srv.URL, http.MethodPost, actionURL(t, page, "_", 0), "gzip",
 		"Datastar-Request", "true", "Sec-Fetch-Site", "same-origin")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "a finished action answer is not the stream")

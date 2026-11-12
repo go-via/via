@@ -53,7 +53,7 @@ var ErrNotFound = errors.New("via: not found")
 var errRedirected = errors.New("via: redirected")
 
 func (m *mount) scope(w http.ResponseWriter, req *http.Request) reqScope {
-	return reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w}
+	return reqScope{req: req, sessions: m.sessions, policy: m.policy, sessW: w, inited: map[string]*Ctx{}}
 }
 
 // runOnInit calls v.OnInit on ctx — the same Ctx the render then binds, so a
@@ -68,8 +68,8 @@ func (m *mount) scope(w http.ResponseWriter, req *http.Request) reqScope {
 func runOnInit(v any, ctx *Ctx, scope reqScope, sse bool) (err error) {
 	ctx.reqScope = scope
 	w, req := scope.sessW, scope.req
-	ctx.doInit = true // every child's OnInit runs too, inside Child
-	// Resolve once, eagerly, even with no OnInit: Child copies the parent's
+	ctx.doInit = true // each child's OnInit runs too, inside Child (see reqScope.inited)
+	// Resolve once, eagerly, even with no OnInit: each child takes the parent's
 	// handle, so a nil here lets each child resolve its own and every Put mint
 	// its own id — two sibling children writing the session sent two Set-Cookie
 	// headers and orphaned the first. Resolving alone reads the cookie and
@@ -818,9 +818,10 @@ func sharedFields(v reflect.Value, path string, depth int) []string {
 }
 
 func inVia(pkg string) bool {
-	root := strings.TrimSuffix(viaPkg, ".")
-	return pkg == root || strings.HasPrefix(pkg, root+"/")
+	return pkg == viaPkg || strings.HasPrefix(pkg, viaPkg+"/")
 }
+
+var viaPkg = reflect.TypeOf(instance{}).PkgPath()
 
 // rootOf gives every non-generic internal a fresh, correctly-typed root
 // without carrying T/PT past Mount.

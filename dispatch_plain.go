@@ -35,7 +35,9 @@ func (m *mount) dispatchPlain(ar *actionReq) {
 		http.Error(w, noStream(ar.mode, ar.tab), http.StatusGone)
 		return
 	}
-	u.reqScope = m.scope(w, req)
+	sc := m.scope(w, req)
+	sc.inited = u.inited // the discovery's: the response render must not re-run a child's OnInit
+	u.reqScope = sc
 	a.run(u) // no long-lived handler holds this render's Ctx, so u is its own dispatch Ctx
 
 	// The handler mutated state the acted unit's OnInit had already read, so
@@ -105,21 +107,6 @@ func (m *mount) actedUnit(ar *actionReq, d *discovered) (ua, u *Ctx, authAct, a 
 		http.Error(w, "no such child", http.StatusGone)
 		return
 	}
-	// Same guard, same reason, as the acted-instance substitution in
-	// childViewer: a When around a Child that depends on a hydrated signal can
-	// shift ordinals, so one key may denote different types in the auth and
-	// bind renders. Child's docs forbid such a When; fail closed rather than
-	// run the handler against a unit the authorization never looked at.
-	if ua.unitV.typ != u.unitV.typ {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
-	// A matching type is not yet the same unit: a sibling of the same type
-	// shifted onto this key carries a different identity (see childViewer).
-	if ident := ar.req.URL.Query().Get(unitIdentParam); ua.unitV.ident != ident || u.unitV.ident != ident {
-		http.Error(w, "no such child", http.StatusGone)
-		return
-	}
 	a, ok = u.actions[act]
 	if !ok {
 		http.Error(w, m.unknownAction(u, act), http.StatusGone)
@@ -140,10 +127,9 @@ func (m *mount) discoverPlain(ar *actionReq) (*discovered, bool) {
 	auth := newRootCtx(false, ar.base)
 	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
 	// several malformed slots at once still logs one Warn, not one per slot per
-	// pass (rebindFrom copies the pointer; childViewer carries it to children).
+	// pass (rebindFrom copies the pointer; newChildCtx carries it to children).
 	auth.badDecodeLogged = new(atomic.Bool)
 	auth.unitV = inst // so auth.unit(rootAddr)'s liveness reads the same way a child's does
-	auth.passUnits = map[string]*Ctx{}
 	prebindSignals(auth, inst)
 	if runOnInit(inst.v, auth, m.scope(ar.w, ar.req), false) != nil {
 		return nil, false
@@ -162,19 +148,6 @@ func (m *mount) discoverPlain(ar *actionReq) (*discovered, bool) {
 		// silently half-hydrated render.
 		m.cfg.log.Warn("via: plain discovery hit its hydration-pass cap; some posted signals may be unapplied",
 			"passes", maxHydratePasses, "act", ar.act)
-	}
-	if ar.child == rootAddr && n > 0 && len(auth.passUnits) > 0 {
-		// The response render re-copies every child from its field, as it must
-		// to show what the root action did to them, so the render it is
-		// compared against has to as well: the last pass shows the children's
-		// hydrated copies, and every root action would differ from it. bind is
-		// rendered again afterwards so the handler's Sets land on the Ctx the
-		// response reads.
-		fresh := rebindFrom(auth)
-		fresh.passUnits = nil
-		rootBefore = renderRootWith(fresh, inst.v)
-		bind = rebindFrom(auth)
-		renderRootWith(bind, inst.v)
 	}
 	return &discovered{inst: inst, auth: auth, bind: bind, rootBefore: rootBefore}, true
 }
@@ -258,9 +231,8 @@ func hydrateTree(c *Ctx, in map[string]json.RawMessage, done map[string]bool) bo
 // slot takes exactly 2 passes (2 renders), which is the floor: the handler has
 // to run on a render that already saw the posted values.
 //
-// Each pass re-renders the whole tree, but a child keeps the instance
-// its first pass made (see Ctx.passUnits), so its OnInit runs once, as a root's
-// does.
+// Each pass re-renders the whole tree, but a child's OnInit runs once, as a
+// root's does (see reqScope.inited).
 const maxHydratePasses = 8
 
 // rerenderPlain re-renders the acted-on unit for a Datastar action's response

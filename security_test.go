@@ -172,7 +172,7 @@ func postCSRFForm(t *testing.T, srv *httptest.Server, withFile bool, headers map
 		require.NoError(t, err)
 	}
 	require.NoError(t, mw.Close())
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), &buf)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "_", 0), &buf)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	for k, v := range headers {
@@ -190,7 +190,7 @@ func TestAction_plainFormWithoutTrustedOriginAdmitsCrossSite(t *testing.T) {
 	srv := serve(t, via.Handler(csrfForm{hits: hits}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	body, ctype := multipartForm(t, nil)
-	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "r", 0), body)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+actionURL(t, page, "_", 0), body)
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", ctype)
 	req.Header.Set("Sec-Fetch-Site", "cross-site")
@@ -453,7 +453,7 @@ func (u *unsafeChild) View() h.H { return h.Div(h.Str(u.n), h.Button(on.Click(u.
 
 type unsafeParent struct{ I unsafeChild }
 
-func (p *unsafeParent) View() h.H { return h.Div(via.Child(p.I)) }
+func (p *unsafeParent) View() h.H { return h.Div(via.Child(&p.I)) }
 
 func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 	t.Parallel()
@@ -462,7 +462,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(unsafeRoot{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
@@ -472,7 +472,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(unsafeParent{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "0", 0), "{}")
+		resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "I", 0), "{}")
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.NotContains(t, resp.Header.Get("Content-Type"), "text/javascript")
 		assert.Contains(t, body, ">1<", "the mutation must still land in the fallback patch")
@@ -482,7 +482,7 @@ func TestDispatch_unsafeRedirectFallsBackEverywhere(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(loginForm{}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "r", 0), "name", "evil")
+		resp := postForm(noFollowClient(t), t, srv.URL+actionURL(t, page, "_", 0), "name", "evil")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode, "an unsafe redirect must not 303")
 		assert.Empty(t, resp.Header.Get("Location"))
 	})
@@ -559,7 +559,7 @@ func TestRedirect_dropsAnOffSiteTargetOnEveryTransport(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(hopForm{hop{to: "https://evil.example/"}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(client, t, srv.URL+actionURL(t, page, "r", 0), "x", "y")
+		resp := postForm(client, t, srv.URL+actionURL(t, page, "_", 0), "x", "y")
 		assert.NotEqual(t, http.StatusSeeOther, resp.StatusCode)
 		assert.Empty(t, resp.Header.Get("Location"))
 	})
@@ -584,7 +584,7 @@ func TestRedirectExternal_leavesTheSiteOnEveryTransport(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(hopForm{hop{to: target, external: true}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		resp := postForm(client, t, srv.URL+actionURL(t, page, "r", 0), "x", "y")
+		resp := postForm(client, t, srv.URL+actionURL(t, page, "_", 0), "x", "y")
 		assert.Equal(t, http.StatusSeeOther, resp.StatusCode)
 		assert.Equal(t, target, resp.Header.Get("Location"))
 	})
@@ -606,7 +606,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 		t.Parallel()
 		srv := serve(t, via.Handler(counter{count: &store{}}))
 		_, page := do(t, srv, http.MethodGet, "/", "")
-		url := actionURL(t, page, "r", 0)
+		url := actionURL(t, page, "_", 0)
 		for _, n := range []string{"99", "-1", "________"} {
 			resp, _ := do(t, srv, http.MethodPost, swapActionID(t, url, n), "{}")
 			assert.Equal(t, http.StatusGone, resp.StatusCode, "forged id=%s must 410, not panic/misroute", n)
@@ -618,7 +618,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 			app := vt.Serve(t, via.Handler(liveClicker{}))
 			conn := app.Connect()
 			page := fetchPage(t, app, "/")
-			url := actionURL(t, page, "r", 0)
+			url := actionURL(t, page, "_", 0)
 			for _, n := range []string{"99", "-1", "________"} {
 				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
 				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
@@ -703,7 +703,7 @@ func TestDispatch_liveActionCannotCrossMounts(t *testing.T) {
 		srv := liveServer(t, r)
 
 		_, aPage := do(t, srv, http.MethodGet, "/a", "")
-		aURL := actionURL(t, aPage, "r", 0)
+		aURL := actionURL(t, aPage, "_", 0)
 
 		cLines, cancel := openStreamAt(t, srv, "/c/_via/sse")
 		defer cancel()
@@ -723,9 +723,9 @@ func TestDispatch_branchedViewCannotMisroute(t *testing.T) {
 	srv := serve(t, via.Handler(branchedView{st: &toggleState{}}))
 
 	_, unlocked := do(t, srv, http.MethodGet, "/", "")
-	staleSave := actionURL(t, unlocked, "r", 0)   // Save, only bound while unlocked
-	staleDelete := actionURL(t, unlocked, "r", 1) // Delete, bound in both branches
-	flip := actionURL(t, unlocked, "r", 2)
+	staleSave := actionURL(t, unlocked, "_", 0)   // Save, only bound while unlocked
+	staleDelete := actionURL(t, unlocked, "_", 1) // Delete, bound in both branches
+	flip := actionURL(t, unlocked, "_", 2)
 
 	// Flip to locked: Save leaves the table and every later index shifts down
 	// by one — under positional routing the pre-flip Delete URL (index 1)
@@ -792,7 +792,7 @@ func TestDispatch_ignoresTheXViaTabHeader(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0), strings.NewReader("{}"))
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "_", 0), strings.NewReader("{}"))
 	require.NoError(t, err)
 	req.Header.Set("Datastar-Request", "true")
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
@@ -812,7 +812,7 @@ func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T
 	conn := app.Connect()
 	defer conn.Close()
 
-	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "r", 0),
+	req, err := http.NewRequest(http.MethodPost, app.URL()+actionURL(t, fetchPage(t, app, "/"), "_", 0),
 		strings.NewReader(`{"viatab":"`+conn.TabID()+`"}`))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
@@ -872,7 +872,7 @@ func TestWithMaxBody_refusesAnActionBodyOverTheCap(t *testing.T) {
 	// the reader ever passed the cap.
 	body := `{"a":"` + strings.Repeat("y", 1025-8) + `"}`
 	require.Len(t, body, 1025)
-	resp, _ := do(t, srv, http.MethodPost, "/p/_via/a/r/0", body)
+	resp, _ := do(t, srv, http.MethodPost, "/p/_via/a/_/0", body)
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
@@ -884,7 +884,7 @@ func TestWithMaxUpload_refusesAMultipartBodyOverTheCap(t *testing.T) {
 	srv := serve(t, r)
 
 	resp := uploadPOST(noFollowClient(t), t,
-		srv.URL+"/p/_via/a/r/0", "big.bin", strings.Repeat("x", 4096))
+		srv.URL+"/p/_via/a/_/0", "big.bin", strings.Repeat("x", 4096))
 
 	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }

@@ -211,7 +211,7 @@ type metaPage struct {
 }
 
 func (p *metaPage) PageMeta() via.Meta { return via.Meta{Title: p.title} }
-func (p *metaPage) View() h.H          { return h.Div(h.Str("hi"), via.Child(p.Child)) }
+func (p *metaPage) View() h.H          { return h.Div(h.Str("hi"), via.Child(&p.Child)) }
 
 type metaChild struct{ title string }
 
@@ -326,7 +326,7 @@ var warnChildOnce = func() func(*testing.T) string {
 
 type warnPage struct{ Child warnChild }
 
-func (p *warnPage) View() h.H { return h.Div(via.Child(p.Child)) }
+func (p *warnPage) View() h.H { return h.Div(via.Child(&p.Child)) }
 
 type warnChild struct{ title string }
 
@@ -394,7 +394,7 @@ func TestPageMeta_patchResponsesCarryTheFloorCSPNotTheDocuments(t *testing.T) {
 	require.Contains(t, docCSP, "https://cdn.charts.example")
 	require.Contains(t, docCSP, "https://fonts.gstatic.com")
 
-	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	resp, _ := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	csp := resp.Header.Get("Content-Security-Policy")
 	assert.Contains(t, csp, "style-src 'self';")

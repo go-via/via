@@ -79,7 +79,7 @@ func (p *Styleguide) View() h.H {
 		d.H2("Demo card"),
 		demo.Card(d.H3("Counter"),
 			h.P(h.Str("A live unit with its Wire pane open: each click is one POST and one patch.")),
-			via.Child(p.Counter), "counter.go",
+			via.Child(&p.Counter), "counter.go",
 			demo.WireOpen(),
 			demo.Try(h.Str("Click + and watch the POST and its patch arrive."), h.Str("Open Source: the file shown is the file that runs."))),
 	)

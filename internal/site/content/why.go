@@ -41,7 +41,7 @@ func (p *Why) View() h.H {
 		),
 		demo.Card(d.H3("Price a quote"),
 			h.P(h.Str("The code above, running. The quantity is a browser value until you press Price; the total comes back as a patch on the stream.")),
-			via.Child(p.Quote), "why_quote.go",
+			via.Child(&p.Quote), "why_quote.go",
 			demo.WireOpen(),
 			demo.Try(h.Str("Change the quantity: the Signals box follows it and no request is sent."),
 				h.Span(h.Str("Press Price: one POST, then one patch that re-renders the whole unit, "), Code("<output>"), h.Str(" included.")),

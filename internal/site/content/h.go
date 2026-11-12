@@ -102,7 +102,7 @@ func (p *Helpers) View() h.H {
 		demo.Card(d.H3("One attribute, three spellings"),
 			h.P(h.Str("The buttons write the same attribute three ways. Datastar splits a key at the first colon into plugin and argument, so "),
 				Code("data-attr-disabled"), h.Str(" names a plugin called attr-disabled, which does not exist. Datastar ignores it with no console error.")),
-			via.Child(p.Colon), "h_colon.go", demo.WireOpen(),
+			via.Child(&p.Colon), "h_colon.go", demo.WireOpen(),
 			demo.Try(h.Str("Clear the input: the first two buttons disable, the third stays enabled."),
 				h.Str("Type a letter and watch the Wire pane: _colon__draft changes and no request appears."))),
 		snippet.Text("rendered HTML", hs.ColonHTML),

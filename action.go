@@ -559,16 +559,7 @@ func isActionID(act string) bool {
 	return true
 }
 
-// unitIdentParam carries a child's call-site identity (instance.ident) on its
-// action URLs, so dispatch can refuse a stale URL whose key now holds another
-// child of the same type.
-const unitIdentParam = "u"
-
 // actionPath is the POST path of action id on c's unit, unescaped.
 func actionPath(c *Ctx, id string) string {
-	path := c.base + actionRoute + unitAddr(c) + "/" + id
-	if c.unitV.ident != "" {
-		path += "?" + unitIdentParam + "=" + c.unitV.ident
-	}
-	return path
+	return c.base + actionRoute + unitAddr(c) + "/" + id
 }

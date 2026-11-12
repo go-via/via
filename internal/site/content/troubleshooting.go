@@ -37,7 +37,7 @@ level=ERROR msg="via: action panic" err="via: this action made a unit live on a 
 const tsLiveNested = `500 render failed
 level=ERROR msg="via: render panic" err="via: via.Child: a live unit cannot sit inside another live unit — embed it directly from a plain ancestor instead"`
 
-const tsChildPointer = `panic: via: found at Mount, rendering *main.Page as mounted: via: via.Child(child) requires child to have a View() method`
+const tsChildNotField = `panic: via: found at Mount, rendering *main.Page as mounted: via: via.Child(&x) needs x to be a field of main.Page, the composition whose View renders it; the main.Chat passed is not one of its fields. Hold the child as a struct field (or an element of an array field) and pass its address.`
 
 const tsMisnamed = `level=WARN msg="via: main.Room.Oninit looks like a mis-named OnInit — it has the hook's exact signature but main.Room has no OnInit func(*via.Ctx) error, so nothing will ever call it. Rename it to OnInit."`
 
@@ -185,11 +185,11 @@ func (p *Troubleshooting) View() h.H {
 			h.Str(", a Signal with no slot, a child without a View. Those messages start "), Code("found at Mount"),
 			h.Str(". Any other panic in that render is ignored, since the page has no data yet. A mistake behind a branch "+
 				"the empty value does not take panics at the first render that takes it.")),
-		d.H3("via.Child given a pointer"),
-		snippet.Text("panic", tsChildPointer),
-		h.P(API("via.Child"), h.Str(" takes the child by value and calls "), Code("View"), h.Str(" on its own copy, so "),
-			Code("via.Child(&p.Chat)"), h.Str(" hands it a "), Code("**Chat"), h.Str(". Pass the field: "),
-			Code("via.Child(p.Chat)"), h.Str(".")),
+		d.H3("via.Child given something other than a field"),
+		snippet.Text("panic", tsChildNotField),
+		h.P(API("via.Child"), h.Str(" keys the child by its field path in the parent and keeps its state in that field, so "),
+			Code("via.Child(&chat)"), h.Str(" on a local variable or a package var has no key and no owner. Hold the child as a field and pass "),
+			Code("via.Child(&p.Chat)"), h.Str(".")),
 		tsSee(d, "/compositions", "Compositions"),
 
 		d.H2("A page answers 500 render failed"),

@@ -254,7 +254,7 @@ func TestChat_messageFromOneTabFansOutToAnother(t *testing.T) {
 		_ = awaitTabID(t, lb)
 
 		// Learn A's Send action id + the Draft signal slot from a page render
-		// (positional/handle identity is deterministic, so it matches A's child).
+		// (field-path key and handler id are deterministic, so they match A's child).
 		_, page := do(t, srv, http.MethodGet, "/", "")
 		draftSlot := attrValue(t, page, "data-bind")
 		sendID := actionID(t, page)
@@ -468,7 +468,7 @@ func TestLive_tickAndActionPOSTDoNotRaceOnConnState(t *testing.T) {
 	frames := tallyEvents(lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 
 	before := frames.Load()
 	statuses := postConcurrently(srv, func() (*http.Request, error) {
@@ -556,7 +556,7 @@ func TestLive_nativeFormPostAndTickDoNotRaceOnPageState(t *testing.T) {
 	frames := tallyEvents(lines)
 
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := actionURL(t, page, "r", 0)
+	url := actionURL(t, page, "_", 0)
 	form, ctype := multipartForm(t, map[string]string{"_viatab": tab})
 	body, err := io.ReadAll(form)
 	require.NoError(t, err)
@@ -684,7 +684,7 @@ func (r *leakRoom) View() h.H { return h.Div(h.Str("room")) }
 
 type leakPage struct{ A, B leakRoom }
 
-func (p *leakPage) View() h.H { return h.Div(via.Child(p.A), via.Child(p.B)) }
+func (p *leakPage) View() h.H { return h.Div(via.Child(&p.A), via.Child(&p.B)) }
 
 func TestLive_onLivePanicReleasesEarlierAcquires(t *testing.T) {
 	t.Parallel()

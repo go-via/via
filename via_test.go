@@ -150,8 +150,8 @@ func TestPage_shipsServerRenderedSkeleton(t *testing.T) {
 	for _, want := range []string{
 		`<div id="root"`,
 		`<h1>0</h1>`, // value rendered server-side, not a signal
-		`data-on:click="@post('` + actionURL(t, body, "r", 0) + `'`, // Dec, declared first
-		`data-on:click="@post('` + actionURL(t, body, "r", 1) + `'`, // Inc, declared second
+		`data-on:click="@post('` + actionURL(t, body, "_", 0) + `'`, // Dec, declared first
+		`data-on:click="@post('` + actionURL(t, body, "_", 1) + `'`, // Inc, declared second
 		`src="/_via/datastar.js?v=`,                                 // module script tag (external, admitted by 'self')
 	} {
 		assert.Contains(t, body, want, "page missing skeleton fragment")
@@ -170,7 +170,7 @@ func TestAction_elementPatchesAndPersists(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	dec, inc := actionURL(t, page, "r", 0), actionURL(t, page, "r", 1)
+	dec, inc := actionURL(t, page, "_", 0), actionURL(t, page, "_", 1)
 
 	resp, body := do(t, srv, http.MethodPost, inc, "{}") // Inc: 0 -> 1
 	ct := resp.Header.Get("Content-Type")
@@ -189,7 +189,7 @@ func TestUnknownAction_isGone(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	url := swapActionID(t, actionURL(t, page, "r", 0), "zzzzzzzz")
+	url := swapActionID(t, actionURL(t, page, "_", 0), "zzzzzzzz")
 
 	resp, _ := do(t, srv, http.MethodPost, url, "{}")
 	assert.Equal(t, http.StatusGone, resp.StatusCode, "want 410 Gone")
@@ -288,7 +288,7 @@ func TestAction_withNoSignalsRespondsWithAnHTMLElementPatch(t *testing.T) {
 	t.Parallel()
 	srv := newCounter(t)
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 1), "{}")
+	resp, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 1), "{}")
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	ct := resp.Header.Get("Content-Type")
@@ -311,7 +311,7 @@ func TestAction_returns204WhenViewIsUnchanged(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(noopComp{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	resp, body := post(t, srv, actionURL(t, page, "r", 0), "{}", sameOrigin())
+	resp, body := post(t, srv, actionURL(t, page, "_", 0), "{}", sameOrigin())
 	assert.Equal(t, http.StatusNoContent, resp.StatusCode)
 	assert.Empty(t, body)
 }
@@ -326,7 +326,7 @@ func (c *formComp) View() h.H {
 func TestSubmit_wiresAPostAction(t *testing.T) {
 	t.Parallel()
 	_, body := do(t, serve(t, via.Handler(formComp{})), http.MethodGet, "/", "")
-	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, "r", 0)+`'`)
+	assert.Contains(t, body, `data-on:submit="@post('`+actionURL(t, body, "_", 0)+`'`)
 	assert.NotContains(t, body, "data-on-submit", "must use the colon form, not the dead dash form")
 }
 
@@ -351,7 +351,7 @@ func TestAction_canReadTheTriggeringRequest(t *testing.T) {
 	t.Parallel()
 	srv := serve(t, via.Handler(reqEchoer{}))
 	_, page := do(t, srv, http.MethodGet, "/", "")
-	_, body := post(t, srv, actionURL(t, page, "r", 0), "{}", map[string]string{
+	_, body := post(t, srv, actionURL(t, page, "_", 0), "{}", map[string]string{
 		"Sec-Fetch-Site": "same-origin",
 		"X-Echo":         "hello-from-header",
 	})
@@ -379,7 +379,7 @@ func TestAction_nulInUserTextRendersAsTheReplacementCharacter(t *testing.T) {
 	nul := string(byte(0))
 	reqBody, err := json.Marshal(map[string]string{slot: "a" + nul + "b" + nul})
 	require.NoError(t, err)
-	_, body := post(t, srv, actionURL(t, page, "r", 0), string(reqBody), sameOrigin())
+	_, body := post(t, srv, actionURL(t, page, "_", 0), string(reqBody), sameOrigin())
 	p := regexp.MustCompile(`<p>(.*?)</p>`).FindStringSubmatch(body)
 	require.Len(t, p, 2, "rendered paragraph not found:\n%s", body)
 	assert.Equal(t, "a&#65533;b&#65533;", p[1], "a NUL must render as a visible U+FFFD")
@@ -404,7 +404,7 @@ func TestChange_firesHandlerOnCommit(t *testing.T) {
 	_, page := do(t, srv, http.MethodGet, "/", "")
 	assert.Contains(t, page, `data-on:change`, "on.Change must bind the change event")
 
-	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "r", 0), "{}")
+	_, body := do(t, srv, http.MethodPost, actionURL(t, page, "_", 0), "{}")
 	assert.Contains(t, body, "picked", "the change handler did not run")
 }
 
@@ -430,7 +430,7 @@ type childCollidePage struct {
 	A__b via.Signal[int]
 }
 
-func (p *childCollidePage) View() h.H { return h.Div(via.Child(p.A), p.A__b.Bind()) }
+func (p *childCollidePage) View() h.H { return h.Div(via.Child(&p.A), p.A__b.Bind()) }
 
 // panicMsg runs fn and returns what it panicked with, or "" if it returned.
 func panicMsg(fn func()) (msg string) {
@@ -547,7 +547,7 @@ func (b *mappedSignal) View() h.H { return h.Div() }
 
 type valueReceiverChildParent struct{ C valueReceiverView }
 
-func (p *valueReceiverChildParent) View() h.H { return h.Div(via.Child(p.C)) }
+func (p *valueReceiverChildParent) View() h.H { return h.Div(via.Child(&p.C)) }
 
 func (v valueReceiverView) View() h.H { return h.Div(v.S.Display()) }
 
@@ -580,7 +580,7 @@ func TestSignal_valueReceiverChildPanicsAtMount(t *testing.T) {
 
 func TestSignal_slotCollidingWithAChildPrefixPanics(t *testing.T) {
 	t.Parallel()
-	assertSlotPanic(t, "collides with the child prefix of field a", func() { via.Handler(childCollidePage{}) })
+	assertSlotPanic(t, "collides with the child prefix of field path a", func() { via.Handler(childCollidePage{}) })
 }
 
 type phantomChild struct {
@@ -592,7 +592,7 @@ func (c *phantomChild) View() h.H { return h.Div() }
 
 type phantomRoot struct{ Sub phantomChild }
 
-func (p *phantomRoot) View() h.H { return h.Div(via.Child(p.Sub)) }
+func (p *phantomRoot) View() h.H { return h.Div(via.Child(&p.Sub)) }
 
 func TestMount_mintsNoSlotForAChildCompositionsSignals(t *testing.T) {
 	t.Parallel()
@@ -612,7 +612,7 @@ type tagOnChildComposition struct {
 	Sub tagChildSub `via:"init=1"`
 }
 
-func (p *tagOnChildComposition) View() h.H { return h.Div(via.Child(p.Sub)) }
+func (p *tagOnChildComposition) View() h.H { return h.Div(via.Child(&p.Sub)) }
 
 func TestMount_panicsOnASeedTagOnAChildComposition(t *testing.T) {
 	t.Parallel()

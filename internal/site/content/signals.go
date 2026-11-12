@@ -68,7 +68,7 @@ func (p *Signals) View() h.H {
 			h.P(API("via.Signal.Bind"), h.Str(" and "), API("via.Signal.Display"),
 				h.Str(" are two views of one field, so they share its wire name whatever order they render in. "+
 					"Typing reaches no handler: the browser updates the text on its own.")),
-			via.Child(p.Greeting), "greeting.go", demo.WireOpen(),
+			via.Child(&p.Greeting), "greeting.go", demo.WireOpen(),
 			demo.Try(h.Str("Type a name. The greeting follows as you type."),
 				h.Str("Watch the Wire pane: the signal changes with each keystroke and no request appears."))),
 		h.P(h.Str("A "), Code(`via:"init=…"`),
@@ -90,7 +90,7 @@ func (p *Signals) View() h.H {
 			h.P(API("via.SignalCS"), h.Str(" is for UI state the server has no use for: an open panel, the active tab. "+
 				"Its name starts with an underscore, which Datastar's fetch filter drops, so it never reaches a POST. "+
 				"The tag gives it a start value, and the server can Set it, from OnInit or an action, but never read it: it has no Get.")),
-			via.Child(p.Toggle), "toggle.go",
+			via.Child(&p.Toggle), "toggle.go",
 			demo.Try(h.Str("Click the button to show and hide the panel."),
 				h.Str("Open the Wire pane: _toggle__open flips and no request appears. The flag and the handler both live in the browser."))),
 
@@ -99,7 +99,7 @@ func (p *Signals) View() h.H {
 			h.P(API("via.Signal.Set"), h.Str(" writes the value and declares the signal, so the View need not render it. "+
 				"A Set in OnInit puts the server clock in the first paint, and the action sets it again. "+
 				"The action's response carries the signals it wrote and any the new render added, never one it left alone, so an input the user is editing is not overwritten.")),
-			via.Child(p.Seed), "seed.go",
+			via.Child(&p.Seed), "seed.go",
 			demo.Try(h.Str("Click read the clock and open the Wire pane: one POST, and a patch carrying the new signal value."))),
 		h.P(h.Str("A JavaScript island gets data from Go the same way: Set a signal the island reads, and no element has to spell the value out. "+
 			"Declaring is not binding: the server ignores a posted value for a Set signal unless something Binds it.")),
@@ -109,7 +109,7 @@ func (p *Signals) View() h.H {
 			h.P(h.Str("Ref hands a signal to the "), h.Code(h.Str("expr")),
 				h.Str(" package, and the h.Data* attributes take the expression it builds. "+
 					"The sum and the class on it derive from the same two refs, and the browser re-evaluates both on every keystroke.")),
-			via.Child(p.Computed), "computed.go",
+			via.Child(&p.Computed), "computed.go",
 			demo.Try(h.Str("Raise A or B until the sum passes 10; it turns amber."),
 				h.Str("Open the Wire pane: the signals change and no request appears. A Bound signal is sent only when an action runs."))),
 		h.P(h.Str("An "), API("expr.Expr"), h.Str(" goes into any "), API("h.DataShow"), h.Str("-style attribute or an "),
@@ -119,7 +119,7 @@ func (p *Signals) View() h.H {
 			h.P(API("expr.CopyTextOf"), h.Str(" copies the text of an element next to the button, read from the page at click time. "),
 				API("expr.Class"), h.Str(" flags the button for a moment: feedback that needs no signal. "+
 					"The clipboard works only in a secure context and from a click. A refused write is swallowed, so it fails with nothing in the console.")),
-			via.Child(p.Copy), "signals_copy.go",
+			via.Child(&p.Copy), "signals_copy.go",
 			demo.Try(h.Str("Click Copy, then paste somewhere."),
 				h.Str("Open the Wire pane: no request appears. Copying never involves the server."))),
 		Callout(Caveat, "Raw is unescaped JavaScript",

@@ -68,7 +68,7 @@ func (p *Live) View() h.H {
 				h.Str(" renders it and marks its unit live; "), API("via.State.Get"),
 				h.Str(" does not. Here the State is rendered on every request and only hidden, so this unit is "+
 					"live from the GET, and the reveal comes back as a frame on the stream.")),
-			via.Child(p.Reveal), "live_reveal.go",
+			via.Child(&p.Reveal), "live_reveal.go",
 			demo.WireOpen(),
 			demo.Try(h.Str("Click reveal: the Wire pane shows the POST, then the patch arriving on the SSE stream."),
 				h.Str("Reload and reveal again: the time moves, because each connection runs OnInit afresh."))),
@@ -86,7 +86,7 @@ func (p *Live) View() h.H {
 				"Every beat runs the handler on its tab's stream goroutine, re-renders this unit and patches it; the "+
 				"header, the sidebar and the other demos are not touched. Tick is valid only inside OnInit; a "+
 				"later call registers nothing and logs.")),
-			via.Child(p.Pulse), "pulse.go",
+			via.Child(&p.Pulse), "pulse.go",
 			demo.Try(h.Str("Open Wire: one patch a second, carrying only this card's markup."))),
 
 		d.H2("Topics"),
@@ -96,7 +96,7 @@ func (p *Live) View() h.H {
 				h.Str(" subscribes this unit, runs the handler on its tab's stream goroutine for every value, and "+
 					"unsubscribes when the tab goes away. The list is this tab's own and keeps the newest 50; "+
 					"posting is capped at 20 a minute per client IP.")),
-			via.Child(p.Feed), "feed.go",
+			via.Child(&p.Feed), "feed.go",
 			demo.Try(d.SecondTabLink("/live#broadcast-feed"),
 				h.Str("Post from one tab: the event lands in both."))),
 		Callout(Caveat, "Slow subscribers",
@@ -121,7 +121,7 @@ func (p *Live) View() h.H {
 						"as the room named by a path param. The counter resets to zero every 15 minutes, through "+
 						"the topic, so open tabs redraw.")),
 			),
-			via.Child(p.Shared), "shared.go",
+			via.Child(&p.Shared), "shared.go",
 			demo.Try(d.SecondTabLink("/live#shared-counter"),
 				h.Str("Click +1 in one tab and watch the other follow."))),
 		h.P(APIText("via.State.Track", "Track"), h.Str(" works on a "), API("via.List"),
@@ -134,7 +134,7 @@ func (p *Live) View() h.H {
 				"Listen handler drops the rest. "), APIText("via.Session.ID", "ctx.Session().ID()"),
 				h.Str(" is the routing key: it is stable, it is not the cookie, and it grants nothing. The session "+
 					"is the unit of fan-out, not the tab.")),
-			via.Child(p.Ping), "ping.go",
+			via.Child(&p.Ping), "ping.go",
 			demo.Try(h.Str("Ping once here. The first ping mints the session. A tab opened before then joins once it pings or "+
 				"reloads; pings from other tabs cannot reach it until it sends the cookie."),
 				d.SecondTabLink("/live#ping-me"),
@@ -152,7 +152,7 @@ func (p *Live) View() h.H {
 					"that never connects counts for nothing. They move a count and publish it under one lock; "),
 				API("via.StateTrack"), h.Str(" does the rest. Neither hook makes a unit live on its own; the "+
 					"tracked State does.")),
-			via.Child(p.Presence), "live_presence.go",
+			via.Child(&p.Presence), "live_presence.go",
 			demo.Try(d.SecondTabLink("/live#tabs-connected"),
 				h.Str("Close that tab: the count drops as soon as its stream ends."))),
 

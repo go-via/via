@@ -31,7 +31,7 @@ func (c *Cart) View() h.H {
 		h.Button(on.Click(c.Add),
 			h.Str("add")),
 		h.Ul(c.Items.Each(c.row)),
-		via.Child(c.Total),
+		via.Child(&c.Total),
 	)
 }
 

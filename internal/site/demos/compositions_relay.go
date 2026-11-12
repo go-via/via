@@ -62,7 +62,7 @@ func (s *Summary) picked(ctx *via.Ctx, choice string) {
 }
 
 func (r *Relay) View() h.H {
-	return h.Div(h.Class("pair"), via.Child(r.Picker), via.Child(r.Summary))
+	return h.Div(h.Class("pair"), via.Child(&r.Picker), via.Child(&r.Summary))
 }
 
 func (p *Picker) View() h.H {

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode"
 )
 
 // actionMode is decided by the request, not the route: the bundled Datastar
@@ -181,22 +182,31 @@ type mount struct {
 	assetsFP string
 }
 
-// unit returns the bind pass's unit Ctx for dispatch address child: "r" is the
-// root, anything else a '-'-joined ordinal path down the child tree ("0-1" is
-// the root's first Child's second Child).
+// unit returns the bind pass's unit Ctx for dispatch address child: rootAddr
+// is the root, anything else a child key ("Chat", "Stats-A").
 func (bind *Ctx) unit(child string) *Ctx {
 	if child == rootAddr {
 		return bind
 	}
-	cur := bind
-	for _, seg := range strings.Split(child, "-") {
-		k, err := strconv.Atoi(seg)
-		if err != nil || k < 0 || k >= len(cur.children) {
-			return nil
+	u, _ := findUnit(bind, child, false)
+	return u
+}
+
+// findUnit searches c's subtree for the child at key, and reports whether a
+// unit above it is live. The whole tree is searched, not just the children
+// whose key prefixes key: the root may render p.Stats.A, keyed Stats-A, with
+// no Stats child above it.
+func findUnit(c *Ctx, key string, liveAbove bool) (*Ctx, bool) {
+	liveAbove = liveAbove || c.live
+	for _, ch := range c.children {
+		if ch.childKey == key {
+			return ch, liveAbove
 		}
-		cur = cur.children[k]
+		if u, live := findUnit(ch, key, liveAbove); u != nil {
+			return u, live
+		}
 	}
-	return cur
+	return nil, false
 }
 
 // unit returns the connected live unit for dispatch address child. Called on
@@ -216,39 +226,23 @@ func (c *tabStream) unit(child string) *Ctx {
 // plain child never gets its own stream registration, see connectUnit), so
 // the re-render at child needs this to seed checkLiveUnderLive correctly.
 func liveAncestor(bind *Ctx, child string) bool {
-	if child == rootAddr {
-		return false
-	}
-	cur := bind
-	segs := strings.Split(child, "-")
-	for _, seg := range segs[:len(segs)-1] {
-		if cur.live {
-			return true
-		}
-		k, err := strconv.Atoi(seg)
-		if err != nil || k < 0 || k >= len(cur.children) {
-			return false
-		}
-		cur = cur.children[k]
-	}
-	return cur.live
+	_, live := findUnit(bind, child, false)
+	return live
 }
 
-// rootAddr is a letter precisely so it cannot collide with a child key, which
-// is always a '-'-joined path of ordinals.
-const rootAddr = "r"
+// rootAddr is "_" because no child key can be: a blank field cannot have its
+// address taken.
+const rootAddr = "_"
 
-// validAddr reports whether child has the shape unitAddr produces.
+// validAddr reports whether child has the shape unitAddr produces: rootAddr, or
+// '-'-joined Go field names and array indexes.
 func validAddr(child string) bool {
-	if child == rootAddr {
-		return true
-	}
 	for seg := range strings.SplitSeq(child, "-") {
 		if seg == "" {
 			return false
 		}
-		for i := range len(seg) {
-			if seg[i] < '0' || seg[i] > '9' {
+		for _, r := range seg {
+			if r != '_' && !unicode.IsLetter(r) && !unicode.IsDigit(r) {
 				return false
 			}
 		}
@@ -653,10 +647,7 @@ func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
 // dispatchPlain does, for the same reason: a posted signal may widen
 // what the client sees and must never widen what it may call.
 //
-// Walked by child ordinal, since that is the dispatch address. A type mismatch
-// at a key (a When around a Child that a hydrated signal shifted) fails the
-// whole subtree closed rather than authorizing against a unit the authority
-// render never looked at.
+// Walked by child key, since that is the dispatch address.
 //
 // The top-level handler and per-arg intersection are load-bearing: they are
 // what a live action actually dispatches through. The child recursion below
@@ -667,7 +658,7 @@ func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
 // registered unit address. It becomes load-bearing the day live-under-live is
 // permitted, or registration ever descends into a pushed bind.
 func pruneToAuthority(bind, auth *Ctx) {
-	if auth == nil || bind.unitV.typ != auth.unitV.typ {
+	if auth == nil {
 		clear(bind.actions)
 		for _, child := range bind.children {
 			pruneToAuthority(child, nil)
@@ -682,10 +673,13 @@ func pruneToAuthority(bind, auth *Ctx) {
 		}
 		pruneArgs(a, authAct)
 	}
-	for i, child := range bind.children {
+	for _, child := range bind.children {
 		var ac *Ctx
-		if i < len(auth.children) {
-			ac = auth.children[i]
+		for _, a := range auth.children {
+			if a.childKey == child.childKey {
+				ac = a
+				break
+			}
 		}
 		pruneToAuthority(child, ac)
 	}

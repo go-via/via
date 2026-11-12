@@ -286,10 +286,10 @@ func (s *Signal[T]) bind(r *render.Renderer, writable bool) {
 	if s.bound == nil {
 		panic("via: a Signal was rendered outside a via render")
 	}
-	// Resolved on every bind, not cached: via.Child copies the child by value,
-	// so a signal the parent's View already bound arrives still carrying the
-	// parent's prefix and would collide in the page's one signal store. It is
-	// also the one place a Signal that is not a plain field is caught.
+	// Resolved on every bind, not cached: a parent's View may bind a child
+	// field's signal under the parent's prefix before the child renders it, and
+	// the stale name would collide in the page's one signal store. It is also
+	// the one place a Signal that is not a plain field is caught.
 	s.slot = s.bound.signalSlot(unsafe.Pointer(s))
 	if writable {
 		// The one hydration door, deliberately: it is the only one that records
@@ -417,9 +417,8 @@ func (s *SignalCS[T]) bind(r *render.Renderer) any {
 	if c == nil {
 		panic("via: a SignalCS was rendered outside a via render")
 	}
-	// Re-resolved per bind for the same reason Signal.bind does it: via.Child
-	// copies the child by value, so a slot stamped under the parent's prefix
-	// must be re-minted under the child's.
+	// Re-resolved per bind for the same reason Signal.bind does it: a slot
+	// stamped under the parent's prefix must be re-minted under the child's.
 	s.slot = c.signalSlot(unsafe.Pointer(s))
 	// No hydrator: an inbound value for an "_" name is never an echo of one via
 	// sent, so accepting it would only admit a forgery.

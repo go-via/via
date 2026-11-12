@@ -172,19 +172,20 @@ func (a *App) Get(path string) (int, string) {
 }
 
 // Action builds a POST to the n-th action the root renders, in document
-// order (the root is child "r"). The URL is read off the root page the App's
+// order (the root is child "_"). The URL is read off the root page the App's
 // first Fire fetched, not constructed: the wire id is a hash of the handler's
 // func name and any ?a= row datum rides along with it, so a hand-built path
 // would be wrong. That page is cached, so an action that only appears after a
 // change needs Raw with a URL read off a fresh Get. By default it carries
 // Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch; the
 // builder methods override that to exercise the origin floor.
-func (a *App) Action(n int) *Action { return a.ChildAction("r", n) }
+func (a *App) Action(n int) *Action { return a.ChildAction("_", n) }
 
 // ChildAction builds a POST to the n-th action a child renders,
 // in document order. child is the key a child's own container carries:
-// "0" for the root's first Child, "1" for its second, "0-1" for the second
-// Child inside the first, and so on (the root is "r"; use Action for that).
+// its field path from the root, '-'-joined: "Chat" for via.Child(&p.Chat),
+// "Stats-A" for &p.Stats.A, "Rows-1" for &p.Rows[1], "Outer-Kid" for a Kid
+// the child Outer renders (the root is "_"; use Action for that).
 func (a *App) ChildAction(child string, n int) *Action {
 	return &Action{app: a, child: child, n: n, headers: map[string]string{}, body: "{}"}
 }

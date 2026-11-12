@@ -77,14 +77,14 @@ func (s *Search) View() h.H {
 
 type Layout struct{ Search Search }
 
-func (l *Layout) View() h.H { return h.Main(via.Child(l.Search)) }
+func (l *Layout) View() h.H { return h.Main(via.Child(&l.Search)) }
 
 func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Layout{}, via.WithLogger(vt.Logger(t))))
 
-	// "0" is the root's first Child; its signals are prefixed with its field name.
-	_, body := app.ChildAction("0", 0).Body(`{"search__q":"via"}`).Fire()
+	// "Search" is the child's field path; its signals are prefixed with its field name.
+	_, body := app.ChildAction("Search", 0).Body(`{"search__q":"via"}`).Fire()
 	assert.Contains(t, body, "searched: via")
 }
 

@@ -17,7 +17,7 @@ type Inbox struct {
 	Form  struct {
 		Email via.Signal[string] // $form_email
 	}
-	Chat Chat // rendered with via.Child(p.Chat)
+	Chat Chat // rendered with via.Child(&p.Chat)
 }
 
 // snippet:end
@@ -29,6 +29,6 @@ func (p *Inbox) View() h.H {
 		p.Count.Display(),
 		p.Open.Display(),
 		h.Input(p.Form.Email.Bind()),
-		via.Child(p.Chat),
+		via.Child(&p.Chat),
 	)
 }

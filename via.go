@@ -3,11 +3,12 @@
 // server-authoritative State/List, client-resident Signal, and always-on
 // sessions.
 //
-// Hard guarantees (the point of the design): no '&' at any user call site, no
+// Hard guarantees (the point of the design): no '&' at a user call site but
+// via.Child's, which names the parent's field (via.Child(&p.Chat)), no
 // reflection in the public API surface (inside, reflect walks each composition
 // type once and memoizes; a render does no walk, only the reads that key those
-// memos: a bound handler's code pointer and a Child's type), no closures in it
-// either, no any in element/child signatures. The library is stdlib-only.
+// memos: a bound handler's code pointer, a Child's type and field offset), no
+// closures in it either, no any in element/child signatures. The library is stdlib-only.
 // Identifier strings do appear at the edges the caller controls directly —
 // ctx.Param[T]("id"), FormFile("avatar"), Mount("/thread/{id}") — but never
 // as an internal wire-name a caller could desync: a handle keeps its fields
@@ -34,9 +35,9 @@
 // action over an already-open stream: it ran once, at connect, so a session
 // whose authorization changes after that keeps acting on the stream until
 // the tab next acts and is denied, the stream closes, or the router shuts
-// down. A plain child of a live root is the exception: it is a fresh copy on
-// every pushed frame, so its OnInit runs on every frame (twice on a page
-// carrying a Bind()).
+// down. A child's OnInit runs once per request, or once per connection on a
+// live page: its state lives in its parent's field, which every later render
+// of the request or connection reads.
 //
 // OnReload is the fix for the commonest week-one defect — OnInit loads, the
 // handler mutates the store, and the render answering the action still shows
@@ -140,9 +141,6 @@ type instance struct {
 	// push re-renders the child with no parent in scope and must still mint
 	// the exact same names the full-page walk did.
 	slotPrefix string
-	// ident is set on a child its parent cannot name by field (see
-	// childViewer), for the same reason: a push must ship the URLs the walk did.
-	ident string
 }
 
 // slotID is embedded first in Signal[T] so prebindSignals can stamp it through
@@ -406,8 +404,8 @@ func lowerFirst(s string) string {
 
 // prebindSignals stamps every field-held Signal with its wire name and this
 // render's Ctx before OnInit and the View run, so Ref reads a real name
-// wherever it is called, a Child's by-value copy carries the child's prefix
-// rather than the parent's last binding, and a Set on a signal the View never
+// wherever it is called, a child's signal carries the child's prefix rather
+// than the parent's last binding, and a Set on a signal the View never
 // renders still has a pass to ship its patch.
 func prebindSignals(c *Ctx, inst instance) {
 	if inst.sig == nil || inst.base == nil {
@@ -452,82 +450,17 @@ func (c *Ctx) restoreInInit(was bool) { c.inInit = was }
 
 func (c *Ctx) endInit() { c.inInit = false }
 
-// childPrefixKey memoizes the parent-type -> child-type field-name lookup.
-type childPrefixKey struct{ parent, child reflect.Type }
-
-var childPrefixes sync.Map // childPrefixKey -> string ("" = ambiguous)
-
-// childFieldName is the parent field a Child's child came from. Child takes
-// the child by value, so the copy's address says nothing about which field it
-// came from; the type does, as long as the parent holds exactly one value of
-// it, in a direct field. More than one place that can hold it answers ""
-// (Child's argument order need not match declaration order), and the caller
-// falls back to the positional child key.
-func childFieldName(parent, child reflect.Type) string {
-	if parent == nil || child == nil || parent.Kind() != reflect.Struct {
-		return ""
-	}
-	k := childPrefixKey{parent, child}
-	if v, ok := childPrefixes.Load(k); ok {
-		return v.(string)
-	}
-	name, n := "", 0
-	for i := range parent.NumField() {
-		f := parent.Field(i)
-		if f.Type == child {
-			name, n = lowerFirst(f.Name), n+1
-			continue
-		}
-		// A nested struct, slice or map holding the type is a candidate too:
-		// Child(p.Box.B) would otherwise take the direct field's name.
-		n += holdsType(f.Type, child, map[reflect.Type]bool{})
-	}
-	if n != 1 {
-		name = "" // ambiguous, or the only candidate is nested
-	}
-	if name != "" {
-		checkChildPrefix(parent, name)
-	}
-	childPrefixes.Store(k, name)
-	return name
-}
-
 // checkChildPrefix panics when a parent slot collides with the slot prefix of
-// its child field name: a child's slots are scoped under name+"__", while a
+// a child's field path: a child's slots are scoped under name+"__", while a
 // plain field literally named A__b mints "a__b" in the parent — same slot, two
 // different fields.
 func checkChildPrefix(parent reflect.Type, name string) {
 	for own := range signalsOf(parent).names {
 		if strings.HasPrefix(own, name+"__") {
 			panic(render.Miswired("via: signal slot " + own + " on " + parent.String() +
-				" collides with the child prefix of field " + name + " — rename the field"))
+				" collides with the child prefix of field path " + name + " — rename the field"))
 		}
 	}
-}
-
-// holdsType counts the places a value of type t can hold a child, with any
-// collection counted as two: its elements are as many children as it holds.
-func holdsType(t, child reflect.Type, seen map[reflect.Type]bool) int {
-	if t == child {
-		return 1
-	}
-	if seen[t] {
-		return 0
-	}
-	seen[t] = true
-	switch t.Kind() {
-	case reflect.Struct:
-		n := 0
-		for i := range t.NumField() {
-			n += holdsType(t.Field(i).Type, child, seen)
-		}
-		return n
-	case reflect.Array, reflect.Slice, reflect.Map:
-		if holdsType(t.Elem(), child, seen) > 0 {
-			return 2
-		}
-	}
-	return 0
 }
 
 // ptrViewer is the *T constraint Handler/Mount share. Exported so `go doc`
@@ -545,6 +478,11 @@ type reqScope struct {
 	sessions *sessionManager
 	policy   *routerPolicy
 	sessW    http.ResponseWriter // nil once the connect response is flushed, so a Tick/Listen Ctx's Session().Put warns instead of writing a dead response (I4)
+	// inited is each child key's first Ctx in this request or connection. A
+	// later render of the key (a hydration pass, an action's response, a live
+	// root's push) skips the child's OnInit, which already ran on the field,
+	// and inherits that Ctx's liveness verdict (I5).
+	inited map[string]*Ctx
 }
 
 // Ctx is the per-request binder: it keys signal slots by field offset and
@@ -561,18 +499,12 @@ type Ctx struct {
 	reqScope
 	session   *Session
 	isChild   bool
-	childKey  string // ordinal among the parent's Children, composed with the parent's key ("0", "0-0")
+	childKey  string // field path from the root, '-'-joined ("Chat", "Stats-A", "Rows-1")
+	parent    *Ctx   // the Ctx whose View rendered this child; nil for a root
 	unitV     instance
-	declare   bool   // this render declares page-level data-signals
-	base      string // mount path prefix for action POSTs
-	doInit    bool   // request-scoped, so every child's OnInit runs before its View
-	actedKey  string // child key of the unit an action just mutated; Child re-uses that instance instead of re-copying the parent's pristine field
-	actedInst instance
-	// passUnits is dispatchPlain's discovery-only record of each child key's
-	// first-pass Ctx, shared by the whole tree. Later passes render that pass's
-	// instance again instead of a fresh copy off the parent's field, so a
-	// child's hydrated values survive into the next pass the way a root's do.
-	passUnits map[string]*Ctx
+	declare   bool            // this render declares page-level data-signals
+	base      string          // mount path prefix for action POSTs
+	doInit    bool            // request-scoped, so each child's OnInit runs once, before its first View (see reqScope.inited)
 	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
 	inReload  bool            // this Ctx is OnReload's: load again, register nothing
 	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
@@ -659,7 +591,7 @@ type unitPass struct {
 	actions   map[string]action          // content-addressed action table, keyed by handler identity
 	hydrators map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	dirty     map[string]any
-	children  []*Ctx      // children, in positional order (parent binder only)
+	children  []*Ctx      // children, in render order (parent binder only)
 	rendered  []byte      // inner HTML from the discovery render (for the 204 compare)
 	pusher    *unitPusher // live only: re-renders this unit and frames it on the stream
 	redirect  redirectTo
@@ -738,15 +670,6 @@ func (c *Ctx) signalSlot(field unsafe.Pointer) string {
 		"through via.Child, not by calling its View; and View needs a POINTER receiver with every " +
 		"Signal (and every child) held as a plain struct field, not behind a pointer, slice, array, " +
 		"map or interface"))
-}
-
-// keyOf composes onto the parent's key, so a subtree re-rendered on its own
-// (renderChildBind) numbers its descendants exactly as the full-page walk did.
-func (c *Ctx) keyOf(ordinal int) string {
-	if c.isChild {
-		return c.childKey + "-" + strconv.Itoa(ordinal)
-	}
-	return strconv.Itoa(ordinal)
 }
 
 // scopePrefix lives on the instance so a live child's parentless push
@@ -851,13 +774,13 @@ type paramMiss struct {
 //
 // Path params survive an action; query params do not. An action POSTs to
 // {mount}/_via/a/{child}/{act}, built from the mount pattern with its {name}
-// segments filled in — and nothing else. The page's "?q=urgent&sort=age" is not on that
-// URL, so the discovery render that decides what is dispatchable runs against
-// the unfiltered page: a row that only exists under the filter binds no action
-// in that render, and clicking it answers 410. Ctx.Request().URL.Query() is
-// therefore the page's on the GET; on an action it holds only via's own a and
-// u keys. A live unit's OnInit on the stream connect sees no query either: the
-// connect POSTs to {mount}/_via/sse.
+// segments filled in — and nothing else. The page's "?q=urgent&sort=age" is
+// not on that URL, so the discovery render that decides what is dispatchable
+// runs against the unfiltered page: a row that only exists under the filter
+// binds no action in that render, and clicking it answers 410.
+// Ctx.Request().URL.Query() is therefore the page's on the GET; on an action
+// it holds only via's own a key. A live unit's OnInit on the stream connect
+// sees no query either: the connect POSTs to {mount}/_via/sse.
 //
 // So a page's list state — filter, page number, sort, tab — belongs in path
 // params or in the session, never in the query string:
@@ -987,15 +910,14 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 
 // writeActionAttr writes the data-on:<event>="@post('PATH')" binding for a
 // claimed action slot. Written raw, not via h.Data: the value is a Datastar
-// expression whose single quotes must survive verbatim, and every byte of it is
-// via-generated or checked (fixed template, an event name bind and bindArg hold to
-// render.ValidEventKey, hashed id, url-encoded arg), so no attribute-breaking byte
-// reaches it. The colon spelling is
-// mandatory — see h.Data.
+// expression whose single quotes must survive verbatim, and every byte of it
+// is via-generated or checked (fixed template, an event name bind and bindArg
+// hold to render.ValidEventKey, hashed id, url-encoded arg), so no
+// attribute-breaking byte reaches it. The colon spelling is mandatory — see
+// h.Data.
 //
-// The query (?u= for a child, ?a= for an arg) goes in a data-via-q-<event>
-// attribute the expression reads off el, so the expression text is one per
-// action and event. Datastar in nonce mode compiles each distinct expression
+// The ?a= arg query goes in a data-via-q-<event> attribute the expression
+// reads off el, so the expression text is one per action and event. Datastar in nonce mode compiles each distinct expression
 // into a script it never evicts, so a query inline would leave one per row for
 // the document's life. Datastar ignores data-* names with no plugin, and the
 // event suffix keeps two bindings on one element apart.
@@ -1008,17 +930,13 @@ func (u unrenderedArg) body(log *slog.Logger) string {
 // header would cost 33 bytes on every binding.
 func writeActionAttr(r *render.Renderer, ctx *Ctx, event, idx, arg string) {
 	// Mount prefix: a page at /profile posts to /profile/_via/a/{child}/{id}.
-	path, query, _ := strings.Cut(actionPath(ctx, idx), "?")
-	if arg != "" && query != "" {
-		query += "&"
-	}
-	query += arg
-	if query == "" {
+	path := actionPath(ctx, idx)
+	if arg == "" {
 		r.WriteString(` data-on:` + event + `="@post('` + render.EscapeString(path) + `')"`)
 		return
 	}
 	qAttr := "data-via-q-" + event
-	r.WriteString(` ` + qAttr + `="` + render.EscapeString("?"+query) + `" data-on:` + event + `="@post('` +
+	r.WriteString(` ` + qAttr + `="` + render.EscapeString("?"+arg) + `" data-on:` + event + `="@post('` +
 		render.EscapeString(path) + `' + (el.getAttribute('` + qAttr + `') ?? ''))"`)
 }
 

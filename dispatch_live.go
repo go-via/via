@@ -116,7 +116,7 @@ func (a *liveAction) apply() actionResult {
 	// at render time, so acting against an older unit attributes the write
 	// to a Ctx nothing downstream reads, silently dropping the patch.
 	u := a.lc.unit(a.ar.child)
-	if u == nil || u.unitV.ident != a.ar.req.URL.Query().Get(unitIdentParam) {
+	if u == nil {
 		return actionResult{fail: failGone("no such child")}
 	}
 	act, ok := u.actions[a.ar.act]

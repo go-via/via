@@ -40,7 +40,7 @@ func (p *Landing) View() h.H {
 		snippet.Region("counter/main.go", "teaser"),
 		demo.Card(d.H3("Running"),
 			h.P(h.Str("The same counter on this page. Nothing in its View is live, so a click is one POST and its response is the patch.")),
-			via.Child(p.Counter), "landing_counter.go", demo.WireOpen(),
+			via.Child(&p.Counter), "landing_counter.go", demo.WireOpen(),
 			demo.Try(h.Str("Click + and read the Wire pane: the POST, its status, the patched element."))),
 		h.P(h.A(h.Class("btn"), h.Href(d.Href("/start#program")), h.Str("See the full program →"))),
 

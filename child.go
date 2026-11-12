@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"log/slog"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,21 +13,22 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
-// Child renders a child composition — a plain struct field of the parent,
-// seeded at the parent's literal — into its own positional container. The child
-// gets its own OnInit (before its View, on every request-scoped render and, for
-// a plain child of a live root, every pushed frame) and may
-// be plain or live; liveness is what the child does, never a separate type. One
-// live child anywhere makes the page stream.
+// Child renders a child composition — a struct field of the parent, passed by
+// address — into its own container. The child gets its own OnInit (once per
+// request, or once per connection on a live page, before its first View) and
+// may be plain or live; liveness is what the child does, never a separate
+// type. One live child anywhere makes the page stream.
 //
 //	type Page struct{ Chat ChatRoom; Ticker Clock }
-//	func (p *Page) View() h.H { return h.Div(via.Child(p.Chat), via.Child(p.Ticker)) }
+//	func (p *Page) View() h.H { return h.Div(via.Child(&p.Chat), via.Child(&p.Ticker)) }
 //
-// The child is taken by value: value state stays isolated per connection while
-// pointer deps (a shared room) are intentionally shared. The argument must be a
-// field selector (p.Chat) — a composite literal would re-seed on every render.
-// An optional region is via.When, not an empty child; a generic layout
-// (type Shell[C any] struct{ Body C }) composes for free.
+// The child's state lives in the parent's field: an action on the child, its
+// Ticks and its OnInit all mutate that field, and the parent sees the result.
+// A child's key is its field path in the root ("Chat", "Stats-A", "Rows-1" for
+// an array element), so the container id, signal prefix and action URLs stay
+// put whatever a via.When around a sibling does. An optional region is
+// via.When, not an empty child; a generic layout (type Shell[C any] struct{
+// Body C }) composes for free.
 //
 // The liveness rule:
 //
@@ -39,142 +39,161 @@ import (
 // ancestor on the path is plain. Only the last clause limits: a live child's own
 // View may not call Child either. Violations panic at render.
 //
-// trap: a Child's key is its position among its parent's Child calls, composed
-// with the parent's ("0", "0-0"), and the container id, signal prefix and
-// dispatch address all read it. A child's key must be identical on every render
-// for the life of a connection, and a When wrapped around a Child shifts its
-// later siblings' ordinals — so such a When may depend only on data fixed by
-// OnInit or the field literal, never on time, a client signal, or shared state
-// that changes while the page is open. A stale action URL whose key now holds
-// a child of another type answers 410. One of the same type answers 410 when
-// the two were reached through different calls during the render: separate
-// via.Child expressions in a View or a When branch, or one helper called from
-// separate places there. Otherwise it still runs on the child now at the key:
-// one expression that renders either copy (a loop, a closure built per copy,
-// c := p.A; if swap { c = p.B }; via.Child(c)), and any Child built outside
-// the render, such as markup OnInit or OnReload stores in a field. A row is
-// markup with on.Bind, not a Child.
-//
-// It panics if the child has no View() method.
-func Child[C any](child C) h.H {
-	v, isView := any(&child).(viewer)
+// It panics if *C has no View() h.H method, if child is not a field (or array
+// element) of the composition whose View renders it — a local variable, a
+// package var or a slice element has no key — and if one View renders the
+// same field twice. A row of a slice is markup with on.Bind, not a Child.
+func Child[C any](child *C) h.H {
+	typ := reflect.TypeFor[C]()
+	v, isView := any(child).(viewer)
 	if !isView {
-		panic(render.Miswired("via: via.Child(child) requires child to have a View() method"))
+		panic(render.Miswired("via: via.Child(&x) requires *" + typ.String() + " to have a View() h.H method"))
 	}
-	typ := reflect.TypeOf(child)
 	checkViewReceiver(typ)
-	// &child, not the parent's field: the copy is what the child's View binds
-	// against for the life of this render (and, for a live child, for the life
-	// of the connection), so its address is the base its signals offset from.
-	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
-	var site childSite
-	runtime.Callers(2, site[:])
-	return render.Dyn(&childNode{inst: inst, site: site})
+	inst := instance{v: v, base: unsafe.Pointer(child), size: unsafe.Sizeof(*child), typ: typ, sig: signalsOf(typ)}
+	return render.Dyn(&childNode{inst: inst})
 }
 
-type childNode struct {
-	inst instance
-	site childSite
+type childNode struct{ inst instance }
+
+func (n *childNode) RenderTo(r *render.Renderer) { childViewer(r, n.inst) }
+
+type childPathKey struct {
+	parent, child reflect.Type
+	off           uintptr
 }
 
-func (n *childNode) RenderTo(r *render.Renderer) { childViewer(r, n.inst, n.site) }
+var childPaths sync.Map // childPathKey -> string
 
-// childSite is the call stack above a via.Child call. It is what tells apart
-// two children the parent holds in fields of one type: the copy Child gets
-// carries no trace of its field, but the calls that rendered each one differ.
-type childSite [8]uintptr
-
-var (
-	childSiteIDs sync.Map // childSite -> string
-	viaPkg       = reflect.TypeOf(instance{}).PkgPath() + "."
-	renderPkg    = reflect.TypeOf((*render.Renderer)(nil)).Elem().PkgPath() + "."
-)
-
-// id hashes the user frames of the site, from the Child call up to the first
-// frame inside via: the frames above that differ between a GET, an action
-// and a push, and must not change the id. Names and offsets into them rather
-// than raw PCs, so a rebuild of unchanged code keeps every shipped action URL
-// valid; an edit to a function that renders such a child 410s the URLs open
-// tabs hold for it, once.
-//
-// Only a Child called while rendering (from a View, or a When branch) gets a
-// site of its own. One built elsewhere and rendered later, such as markup a
-// load helper builds in both OnInit and OnReload, is reached through
-// different frames on the GET and on the action's re-render, so its site
-// would change under a click that is still valid. Those all share the empty
-// site: no worse than a positional key, and never a false 410.
-func (s childSite) id() string {
-	if v, ok := childSiteIDs.Load(s); ok {
+// childLocalKey is the field path of inst inside parent's composition: "Chat",
+// "Stats-A", "Rows-1". It panics when inst is not a field of parent, since
+// only a field shares the parent's lifetime and has a name to address it by.
+func childLocalKey(parent *Ctx, inst instance) string {
+	// An address outside the parent wraps off past its size, where no field is.
+	k := childPathKey{parent: parent.unitV.typ, child: inst.typ, off: uintptr(inst.base) - uintptr(parent.unitV.base)}
+	if v, ok := childPaths.Load(k); ok {
 		return v.(string)
 	}
-	n := 0
-	for n < len(s) && s[n] != 0 {
-		n++
+	path, ok := "", false
+	if k.parent != nil {
+		path, ok = childPath(k.parent, k.off, k.child)
 	}
-	var key strings.Builder
-	rendering := false
-	frames := runtime.CallersFrames(s[:n])
-	for {
-		f, more := frames.Next()
-		if strings.HasPrefix(f.Function, viaPkg) || strings.HasPrefix(f.Function, renderPkg) {
-			rendering = renderCaller(f.Function)
-			break
-		}
-		// The offset, not just the line: via.Child(p.A), via.Child(p.B) on one
-		// line are two sites.
-		key.WriteString(f.Function + "+" + strconv.FormatUint(uint64(f.PC-f.Entry), 10) + "\n")
-		if !more {
-			break
-		}
+	if !ok {
+		panic(render.Miswired("via: via.Child(&x) needs x to be a field of " + unitTypeName(k.parent) +
+			", the composition whose View renders it; the " + inst.typ.String() + " passed is not one of its " +
+			"fields. Hold the child as a struct field (or an element of an array field) and pass its address."))
 	}
-	id := ""
-	if rendering {
-		id = hashID(key.String())
-	}
-	childSiteIDs.Store(s, id)
-	return id
+	checkChildPrefix(k.parent, childSlotName(path))
+	childPaths.Store(k, path)
+	return path
 }
 
-// renderCaller reports whether fn is a via frame that calls user code during
-// a render: the two View callers and via.When's branch. A rename here that
-// this list misses degrades to the shared site, which the twin tests catch.
-func renderCaller(fn string) bool {
-	for _, name := range []string{"renderRootWith", "renderChildInner", "whenNode.RenderTo"} {
-		if strings.HasPrefix(fn, viaPkg+name) {
-			return true
+// childSlotName is the signal-slot segment for a child at path. '-' is no JS
+// identifier character, and Ref() hands slot names straight to Datastar
+// expressions.
+func childSlotName(path string) string { return lowerFirst(strings.ReplaceAll(path, "-", "_")) }
+
+func unitTypeName(t reflect.Type) string {
+	if t == nil {
+		return "the parent"
+	}
+	return t.String()
+}
+
+// childPath names the field of t at byte offset off that holds a target, with
+// '-' between struct fields and array indexes. It walks struct fields and array
+// elements only: memory behind a pointer, slice or map is not t's. An embedded
+// struct keeps its name ("page-Search" for a promoted p.Search): an outer field
+// may shadow the promoted one, and the two must not share a key.
+func childPath(t reflect.Type, off uintptr, target reflect.Type) (string, bool) {
+	var segs []string
+	for off != 0 || t != target {
+		switch t.Kind() {
+		case reflect.Struct:
+			f, ok := fieldHolding(t, off, target)
+			if !ok {
+				return "", false
+			}
+			segs = append(segs, f.Name)
+			off -= f.Offset
+			t = f.Type
+		case reflect.Array:
+			size := t.Elem().Size()
+			if size == 0 {
+				return "", false
+			}
+			i := off / size
+			if i >= uintptr(t.Len()) {
+				return "", false
+			}
+			segs = append(segs, strconv.FormatUint(uint64(i), 10))
+			off -= i * size
+			t = t.Elem()
+		default:
+			return "", false
 		}
 	}
-	return false
+	if len(segs) == 0 {
+		return "", false // x is the parent itself
+	}
+	return strings.Join(segs, "-"), true
+}
+
+// fieldHolding is the field of struct t whose bytes contain off. A zero-sized
+// field contains no byte, so one at off is chosen only when it is a target.
+func fieldHolding(t reflect.Type, off uintptr, target reflect.Type) (reflect.StructField, bool) {
+	for i := range t.NumField() {
+		f := t.Field(i)
+		size := f.Type.Size()
+		if size == 0 && f.Offset == off && f.Type == target {
+			return f, true
+		}
+		if f.Offset <= off && off < f.Offset+size {
+			return f, true
+		}
+	}
+	return reflect.StructField{}, false
 }
 
 // childViewer renders the child into <div id="via-i{key}">, binds its
 // signals/actions into a child-scoped Ctx, and appends it to the parent's
 // children so a push or action patches exactly this one. A non-Ctx binder is a
 // bare render with no parent to attach to, so it writes nothing.
-func childViewer(r *render.Renderer, inst instance, site childSite) {
+func childViewer(r *render.Renderer, inst instance) {
 	parent := ctxOf(r.Binder())
 	if parent == nil {
 		return
 	}
 	checkChildHooks(parent, inst)
 
-	key := parent.keyOf(len(parent.children))
-	name, ident := childIdentity(parent, inst, site)
-	inst, acted, prior := adoptActedOrPrior(parent, inst, key, ident)
-
+	local := childLocalKey(parent, inst)
+	key := local
+	if parent.isChild {
+		key = parent.childKey + "-" + local
+	}
+	// Keys are field paths from the root, so an equal key anywhere in the tree
+	// is the same field: the root's Child(&p.Stats.A) and Stats' Child(&s.A).
+	root := parent
+	for root.parent != nil {
+		root = root.parent
+	}
+	if dup, _ := findUnit(root, key, false); dup != nil {
+		panic(render.Miswired("via: " + unitTypeName(root.unitV.typ) + "." + strings.ReplaceAll(key, "-", ".") +
+			" is passed to via.Child twice; a child has one container, so render it once"))
+	}
 	// Stamped onto the instance because a live child's push re-renders with
 	// no parent in scope.
-	inst.ident = ident
-	inst.slotPrefix = childSlotPrefix(parent, name, key)
-	child := newChildCtx(parent, key, inst, prior)
+	inst.slotPrefix = parent.scopePrefix() + childSlotName(local) + "__"
+	child, first := newChildCtx(parent, key, inst)
 	parent.children = append(parent.children, child)
 
-	// Only a request-scoped render inits. A live root's push inherits the
-	// connect's scope, so a plain child's OnInit runs on every pushed frame;
-	// unitPusher.from says why.
+	// Only a request-scoped render inits, and only once per key: the child's
+	// state lives in the parent's field, so a second OnInit in the same request
+	// (a hydration pass, an action's response) or connection (a live root's
+	// push) would run on state the first one already loaded.
 	if parent.doInit {
 		child.doInit = true
-		if !acted && prior == nil {
+		if first {
 			prebindSignals(child, inst)
 			initChild(child, inst.v)
 		}
@@ -217,86 +236,23 @@ func checkChildHooks(parent *Ctx, inst instance) {
 	}
 }
 
-// childIdentity returns the child's field name in the parent, or "" when the
-// parent holds several fields of its type, and the ident its slots and action
-// URLs carry.
-func childIdentity(parent *Ctx, inst instance, site childSite) (name, ident string) {
-	// The key is positional, so a When that closes ahead of a child moves a
-	// sibling onto its key, and only adoptActedOrPrior's type guards catch that. A
-	// child named by its field is the one field of its type, so a matching
-	// type is the same child. Two fields of one type need more: the render's
-	// call stack into via.Child (see childSite.id), composed down the tree
-	// because a shifted parent moves its children too. Child takes a copy, so
-	// the field itself is out of reach.
-	// The ident rides on every action URL the child renders (see actionPath).
-	name = childFieldName(parent.unitV.typ, inst.typ)
-	ident = parent.unitV.ident
-	if name == "" {
-		ident = hashID(ident + "/" + site.id())
-	}
-	return name, ident
-}
-
-// adoptActedOrPrior swaps the fresh copy for the instance an earlier render of
-// this key already holds. acted reports the action's instance; prior is the
-// earlier hydration pass's Ctx when that supplied it.
-func adoptActedOrPrior(parent *Ctx, inst instance, key, ident string) (_ instance, acted bool, prior *Ctx) {
-	// An action's response re-render substitutes the instance the handler
-	// mutated for this fresh copy (see inheritRequestScope); re-running its
-	// OnInit would undo the very change the handler just made — re-reading
-	// mutated data is OnReload's job, and dispatch has already run it.
-	//
-	// The type guard is not paranoia: a root View whose Child order shifts
-	// between the discovery render and the response re-render leaves the acted
-	// key pointing at a slot a different type now occupies, and splicing the
-	// instance in there renders the wrong View under the wrong slot prefix.
-	// Fall back to the fresh copy rather than render a lie.
-	acted = parent.actedKey != "" && parent.actedKey == key && inst.typ == parent.actedInst.typ &&
-		ident == parent.actedInst.ident
-	if acted {
-		return parent.actedInst, true, nil
-	}
-	// Same substitution for a hydration pass >= 2, and the same type guard. Its
-	// OnInit already ran on this copy in the first pass; running it again would
-	// overwrite what the pass before hydrated.
-	if parent.passUnits != nil {
-		if p, ok := parent.passUnits[key]; ok && p.unitV.typ == inst.typ && p.unitV.ident == ident {
-			return p.unitV, false, p
-		}
-	}
-	return inst, false, nil
-}
-
-// childSlotPrefix is the prefix a child's signal slots carry under its parent.
-// The double underscore marks the scope boundary; a plain nested struct joins
-// with a single one.
-func childSlotPrefix(parent *Ctx, name, key string) string {
-	if name != "" {
-		return parent.scopePrefix() + name + "__"
-	}
-	// Ambiguous field: fall back to the positional key, always right if
-	// opaque. Its depth separator '-' is not a JS identifier character and
-	// Ref() hands these names straight to Datastar expressions, so it
-	// becomes '_' here. Only the slot name is respelled; the key still
-	// addresses the container and the dispatch URL with '-'.
-	return parent.scopePrefix() + "i" + strings.ReplaceAll(key, "-", "_") + "__"
-}
-
-// newChildCtx builds the child's Ctx from the parent's request scope. prior is
-// the earlier hydration pass's Ctx for this key, or nil.
-func newChildCtx(parent *Ctx, key string, inst instance, prior *Ctx) *Ctx {
+// newChildCtx builds the child's Ctx from the parent's request scope, and
+// reports whether it is the key's first in the request or connection (see
+// reqScope.inited).
+func newChildCtx(parent *Ctx, key string, inst instance) (*Ctx, bool) {
 	child := newCtx()
 	child.rev = parent.rev                         // a hydrated child must be revertable with its parent (see livePush)
 	child.badDecodeLogged = parent.badDecodeLogged // one flag per tree: a malformed post hits every child's hydrator
-	child.actedKey, child.actedInst = parent.actedKey, parent.actedInst
-	child.passUnits = parent.passUnits
-	if prior != nil {
-		// That OnInit is also what registered the Tick or Listen making the unit
-		// live, and a later pass may not lower the first pass's verdict (I5).
+	first := true
+	if prior := parent.inited[key]; prior != nil {
+		// prior's OnInit is also what registered the Tick or Listen making the
+		// unit live, and a later render may not lower its verdict (I5).
 		child.live = prior.live
-	} else if parent.passUnits != nil {
-		parent.passUnits[key] = child
+		first = false
+	} else if parent.inited != nil {
+		parent.inited[key] = child
 	}
+	child.parent = parent
 	child.isChild = true
 	child.childKey = key
 	child.unitV = inst
@@ -306,7 +262,7 @@ func newChildCtx(parent *Ctx, key string, inst instance, prior *Ctx) *Ctx {
 	child.declare = parent.declare
 	child.reqScope = parent.reqScope
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
-	return child
+	return child, first
 }
 
 // initOutcome is the sentinel initChild panics with: the render is already deep
@@ -349,9 +305,8 @@ func renderChildInner(child *Ctx, v viewer) []byte {
 // renderChildBind re-renders the child at key (no hydration, so it reflects
 // post-action state) and returns its bind Ctx alongside the inner HTML. The Ctx
 // is what lets a plain action's response ship a Signal.Set it wrote. Seeding it
-// with the child's own key keeps a plain child's own Child calls numbered
-// exactly as the full-page walk numbered them, instead of restarting at the
-// root's key and aliasing onto it.
+// with the child's own key keeps a plain child's own Child keys composed
+// exactly as the full-page walk composed them.
 //
 // underLive says whether c itself sits under a live ancestor in the real
 // tree — false for a live child's own push (its ancestor chain was already
