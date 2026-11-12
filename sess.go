@@ -453,13 +453,13 @@ func (m *sessionManager) loadLive(ctx context.Context, cas VersionedSessionStore
 	if err != nil {
 		return b, ver, false, err
 	}
-	// Deliberately no b.Vals != nil clause: get accepts a nil value map as
-	// an empty session, and a store that normalises {} to null would
-	// otherwise yield a session that reads fine and retires on first write.
 	if !ok {
 		return b, ver, false, nil
 	}
 	b, st := session.Decode(raw)
+	// Deliberately no b.Vals != nil clause: get accepts a nil value map as
+	// an empty session, and a store that normalises {} to null would
+	// otherwise yield a session that reads fine and retires on first write.
 	return b, ver, st == session.Live && b.SID == sid, nil
 }
 
@@ -472,10 +472,8 @@ func (m *sessionManager) snapshot(d *sessionData) (sid string, own, dirty map[st
 		d.dropLogged = true
 		d.mu.Unlock()
 		if first {
-			// Every other drop in save() logs its own cause; this branch is the
-			// short-circuit for a handle already known to be retired, and was
-			// the one path that lost a user's Put in silence. Session.Put
-			// returns nothing, so the log is the only place the drop surfaces.
+			// Session.Put returns nothing, so this log is the only place a
+			// write through an already-retired handle surfaces.
 			m.logger().Warn("via: session write dropped — this handle's session id was already retired " +
 				"(rotated away, expired, or refused by the store), so the value is NOT persisted")
 		}

@@ -144,9 +144,9 @@ type Preload struct {
 
 // pageMetaer lets the root page composition describe its own document: title,
 // description, social cards, the assets the page needs, lang, and <html> and
-// <body> attributes. It is a method
-// rather than a struct field because real metadata is data-dependent, and it
-// is read after OnInit, so the data is already loaded.
+// <body> attributes. It is a method rather than a struct field because real
+// metadata is data-dependent, and it is read after OnInit, so the data is
+// already loaded.
 //
 // Assets is the exception and is checked as one: it is read at Mount from the
 // literal you mounted, before any request, because the CSP is built there — one

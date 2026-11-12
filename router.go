@@ -179,10 +179,8 @@ func answerHookError(log *slog.Logger, w http.ResponseWriter, err error, failed 
 
 // checkViewReceiver panics on a composition whose View has a value receiver
 // while it holds Signals. View is then called on a copy, so every Signal it
-// binds offsets from a stack address the render throws away — which used to
-// surface as a per-request 500 forever, once per request, with the process
-// serving happily. This makes it a Mount/Child-time panic instead: fail at
-// boot, not per request.
+// binds offsets from a stack address the render throws away. Panicking at
+// Mount/Child time fails at boot instead of answering 500 on every request.
 func checkViewReceiver(t reflect.Type) {
 	if _, done := valueReceiverChecked.Load(t); done {
 		return
@@ -659,9 +657,8 @@ func (m *mount) writeHTMLPage(w http.ResponseWriter, body []byte, base string, t
 		// body before the id is in the store. The delay covers the same walk
 		// one level down: it reaches <body> before any nested data-signals,
 		// and an undelayed @post snapshots the store there, sending viatab
-		// alone. Attribute-escaped here,
-		// path-escaped in concreteBase — both layers are needed; see
-		// concreteBase.
+		// alone. Attribute-escaped here, path-escaped in concreteBase; see
+		// concreteBase for why both layers are needed.
 		bodyOpen += ` data-init__delay.1ms="@post('` + render.EscapeString(base+streamRoute) + `')"`
 	}
 	htmlAttrs := mergeAttrs(m.cfg.head.HTMLAttrs, pageAttrs(m.cfg.log, root, "HTMLAttrs", meta.HTMLAttrs))

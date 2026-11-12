@@ -20,9 +20,8 @@ import (
 // pageBG matches site.css's <pre>; the style's own dark shows as a seam.
 const pageBG = "#1b1e24"
 
-// The v0.7 docs' one-dark palette. chroma's own onedark colours every
-// identifier red; v0.7 leaves names in the text colour, and its comments are
-// italic.
+// A one-dark palette. chroma's own onedark colours every identifier red; this
+// one leaves names in the text colour and sets comments italic.
 var _ = styles.Register(chroma.MustNewStyle(snippet.ChromaStyle, chroma.StyleEntries{
 	chroma.Background:          "#abb2bf bg:#282c34",
 	chroma.Keyword:             "#c678dd",

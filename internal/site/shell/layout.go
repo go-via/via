@@ -17,6 +17,11 @@ func ExtLink(href string, kids ...h.H) h.H {
 }
 
 func (d *Doc) layout(main []h.H, foot, rail h.H) h.H {
+	// 73×28 is the SVG's own 317.64:122 viewBox at the header's height; both
+	// are set so the header does not reflow once the file arrives.
+	wordmark := h.A(h.Href(d.Href("/")), h.Class("wordmark"),
+		h.Img(h.Src(d.site.Asset("/static/brand/wordmark-amber-dark.svg")), h.Alt("via"), h.Width(73), h.Height(28)),
+	)
 	return h.Div(h.Class("shell"),
 		h.A(h.Href("#main"), h.Class("skip"), h.Str("Skip to content")),
 		// A checkbox, not a <details>: CSS cannot force a closed <details> open
@@ -25,11 +30,7 @@ func (d *Doc) layout(main []h.H, foot, rail h.H) h.H {
 		h.Header(h.Class("top"),
 			h.Div(h.Class("top-brand"),
 				h.Label(h.Class("menu-btn"), h.For("nav-toggle"), icon.Menu(), h.Span(h.Class("sr-only"), h.Str("Menu"))),
-				h.A(h.Href(d.Href("/")), h.Class("wordmark"),
-					// 73×28 is the SVG's own 317.64:122 viewBox at the header's height; both
-					// are set so the header does not reflow once the file arrives.
-					h.Img(h.Src(d.site.Asset("/static/brand/wordmark-amber-dark.svg")), h.Alt("via"), h.Width(73), h.Height(28)),
-				),
+				wordmark,
 			),
 		),
 		// Under 50rem this is the slide-in drawer, tools above the nav; from
@@ -38,9 +39,7 @@ func (d *Doc) layout(main []h.H, foot, rail h.H) h.H {
 		// input id.
 		h.Div(h.ID("drawer"), h.Class("drawer"),
 			h.Div(h.Class("drawer-head"),
-				h.A(h.Href(d.Href("/")), h.Class("wordmark"),
-					h.Img(h.Src(d.site.Asset("/static/brand/wordmark-amber-dark.svg")), h.Alt("via"), h.Width(73), h.Height(28)),
-				),
+				wordmark,
 				h.Label(h.Class("drawer-close"), h.For("nav-toggle"), h.Aria("label", "Close menu"), icon.Close()),
 			),
 			h.Div(h.Class("top-tools"),

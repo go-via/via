@@ -18,7 +18,7 @@ import (
 // Islands is the page on handing a subtree to a JS library.
 type Islands struct {
 	page
-	// Assets decides the mount's CSP and via reads it at Mount, so it is built
+	// assets decides the mount's CSP and via reads it at Mount, so it is built
 	// once in NewIslands and never per request. via.Assets is a foreign struct,
 	// which the Mount probe does not fill, so the probe reads it as set.
 	assets via.Assets

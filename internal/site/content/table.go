@@ -2,10 +2,7 @@ package content
 
 import "github.com/go-via/via/h"
 
-func table(heads []string, rows ...[]h.H) h.H { return captionedTable("", heads, rows...) }
-
-// captionedTable is table with a <caption>; "" leaves it out.
-func captionedTable(caption string, heads []string, rows ...[]h.H) h.H {
+func table(heads []string, rows ...[]h.H) h.H {
 	head := make([]h.H, 0, len(heads))
 	for _, t := range heads {
 		head = append(head, h.Th(h.RawAttr("scope", "col"), h.Str(t)))
@@ -25,11 +22,7 @@ func captionedTable(caption string, heads []string, rows ...[]h.H) h.H {
 		}
 		body = append(body, h.Tr(cells...))
 	}
-	out := []h.H{h.Class("ref-table")}
-	if caption != "" {
-		out = append(out, h.Caption(h.Str(caption)))
-	}
-	return h.Table(append(out, h.Thead(h.Tr(head...)), h.Tbody(body...))...)
+	return h.Table(h.Class("ref-table"), h.Thead(h.Tr(head...)), h.Tbody(body...))
 }
 
 func refTable(head string, rows []row) h.H {

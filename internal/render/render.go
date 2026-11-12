@@ -158,11 +158,10 @@ func (e element) render(r *Renderer) {
 			a.render(r)
 		}
 	}
+	r.WriteString(">")
 	if voidElements[strings.ToLower(e.tag)] {
-		r.WriteString(">")
 		return
 	}
-	r.WriteString(">")
 	body := r.buf.Len()
 	for _, k := range e.kids {
 		// A nil child is the documented "renders as nothing" (h.H's godoc), and

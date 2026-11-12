@@ -66,12 +66,6 @@ const reconnectCSS = `:where(#via-reconnect-banner){position:fixed;top:0;left:0;
 // stays down can't pin the tab in a reload loop. One IIFE, so a double injection
 // is a no-op via the window guard.
 //
-// The give-up used to be a single blind location.reload() on a 500-2000ms
-// timer. A deploy's gap is seconds, not milliseconds, so that reload landed on
-// chrome-error://chromewebdata with no script left to retry — a permanently
-// dead tab on every rolling restart. It now probes the page URL with capped
-// exponential backoff and reloads only once the server answers.
-//
 // A give-up reads "Disconnected." next to a Reconnect button: a manual retry
 // that clears the reload cap (a person clicking is not a reload loop) and
 // probes without waiting out the backoff.

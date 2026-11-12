@@ -104,18 +104,9 @@ type MemorySessionStore struct {
 
 // Load implements [SessionStore]. An entry past its TTL is deleted on sight
 // and reported absent.
-func (s *MemorySessionStore) Load(_ context.Context, id string) ([]byte, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	e, ok := s.m[id]
-	if !ok {
-		return nil, false, nil
-	}
-	if !e.exp.IsZero() && time.Now().After(e.exp) {
-		delete(s.m, id)
-		return nil, false, nil
-	}
-	return e.data, true, nil
+func (s *MemorySessionStore) Load(ctx context.Context, id string) ([]byte, bool, error) {
+	data, _, ok, err := s.LoadVersion(ctx, id)
+	return data, ok, err
 }
 
 // LoadVersion implements [VersionedSessionStore]. The revision is a

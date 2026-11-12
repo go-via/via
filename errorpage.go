@@ -81,8 +81,8 @@ type PageError struct {
 
 // WithErrorPage renders via's failures as HTML documents instead of plain text.
 //
-// It applies only to document responses. It applies to a response the browser will render as
-// a page: a GET of a mounted page, a route that matches no mount, and a native
+// It applies only to document responses, the ones the browser renders as a
+// page: a GET of a mounted page, a route that matches no mount, and a native
 // <form> submit (which navigates). It deliberately does not apply to a Datastar
 // @post or to the SSE connect — those bodies are consumed by the client, which
 // already surfaces a failure itself, so an HTML document there is dead weight
@@ -155,8 +155,6 @@ func reasonFor(status int) Reason {
 		return ReasonTooLarge
 	case http.StatusServiceUnavailable:
 		return ReasonUnavailable
-	case http.StatusInternalServerError:
-		return ReasonInternal
 	}
 	if status >= 500 {
 		return ReasonInternal

@@ -179,8 +179,8 @@ func Region(name, region string, opts ...Option) h.H {
 	return cached(name, region, opts)
 }
 
-// Sources is the shown text of every file, which snippet/gen scans for the token
-// classes static/chroma.css must style.
+// Sources is the shown text of every file, which snippet/gen/chromagen scans
+// for the token classes static/chroma.css must style.
 func Sources() []string {
 	out := make([]string, 0, len(files))
 	for _, f := range files {

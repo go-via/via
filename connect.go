@@ -24,11 +24,11 @@ func liveUnits(bind *Ctx) []*Ctx {
 // appendLiveChildren recurses: a live grandchild gets no stream wiring unless
 // discovery descends past its (live or plain) parent too.
 func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
-	for _, isl := range ctx.children {
-		if isl.live {
-			*out = append(*out, isl)
+	for _, child := range ctx.children {
+		if child.live {
+			*out = append(*out, child)
 		}
-		appendLiveChildren(isl, out)
+		appendLiveChildren(child, out)
 	}
 }
 
@@ -48,10 +48,9 @@ func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPus
 	return p
 }
 
-// livePush renders one live unit under the same two-phase rule dispatchPlain
-// has always used (I1/I2) and the live path had no version of at all: the
-// authority render is the one the client's posted signals did not touch, and it
-// alone decides what is dispatchable.
+// livePush renders one live unit under dispatchPlain's two-phase rule (I1/I2):
+// the authority render is the one the client's posted signals did not touch,
+// and it alone decides what is dispatchable.
 //
 // Phase 1 puts the server-authored signal values back — undoing the previous
 // cycle's application of lc.client, which otherwise became the server's own
@@ -156,9 +155,9 @@ func (p *unitPusher) rerender(rev *revertSet) rerender {
 // It is element patches only. flushDirty runs first and on its own comparison
 // (the dirty set), so a signal change with an unchanged DOM still ships its
 // patch-signals frame, and a DOM change with no signal change still ships its
-// element patch. declareOpened's seed frame for newly declared slots likewise
-// ships ahead of this check. The connect handshake's signals frame and the keepalive are
-// likewise untouched, so a half-open peer is still detected on the beat.
+// element patch. declareOpened's seed frame for newly declared slots ships
+// ahead of this check too. The connect handshake's signals frame and the
+// keepalive are untouched, so a half-open peer is still detected on the beat.
 func (p *unitPusher) push() {
 	p.lc.flushDirty(p.last)
 	defer p.recoverFatal()
@@ -305,17 +304,15 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 
 	// Subscriptions are started before any OnConnect runs, and their queued
 	// values are drained by runStream below. A unit whose OnConnect publishes
-	// (the "join a room" pattern the hook's doc names) would otherwise miss its
-	// own join: subscriptions used to start inside runStream, i.e. after every
-	// OnConnect, so the join was published into a topic this unit had not
-	// subscribed to yet and the first frame showed the pre-join world. The
-	// subscriptions stay off the plain-GET path — this is the SSE handler, and
+	// (the "join a room" pattern the hook's doc names) would otherwise publish its
+	// join into a topic it had not subscribed to yet, and the first frame would
+	// show the pre-join world. The subscriptions stay off the plain-GET path — this is the SSE handler, and
 	// Ctx.Listen only records one at OnInit time.
 	//
-	// One wake channel shared by every subscription: a Listen used to cost a
-	// goroutine per subscription per connection purely to bridge its Ready
-	// channel onto runStream's select. Capacity 1 and coalescing, so a
-	// publisher never blocks and N pending values still cost one sweep.
+	// One wake channel shared by every subscription, so a Listen costs no
+	// goroutine of its own to reach runStream's select. Capacity 1 and
+	// coalescing, so a publisher never blocks and N pending values still cost
+	// one sweep.
 	wake := make(chan struct{}, 1)
 	listeners := startListeners(units, streamCtx, wake)
 	runOnConnect(units, stream, base, lc)
@@ -472,11 +469,10 @@ func (m *mount) newTabStream(id, sid string, bind *Ctx, connectSig map[string]js
 // OnInit runs on the very Ctx that render binds, so a Tick/Listen it registers
 // is what makes the root a live unit.
 //
-// Un-hydrated, unlike every earlier version of this step: the connect body is
-// the client's, and this render is what decides the connection's action table
-// and its liveness (I1). The body is kept as lc.client and applied to the
-// display render of every push instead (livePush) — which is the only place it
-// was ever visible, since connect frames no elements of its own.
+// Un-hydrated: the connect body is the client's, and this render decides the
+// connection's action table and its liveness (I1). The body is kept as
+// lc.client and applied to the display render of every push instead
+// (livePush); connect frames no elements of its own.
 func (m *mount) discover(w http.ResponseWriter, req *http.Request, base, sessID string, sessDat *sessionData) (*Ctx, bool) {
 	pv := m.newInst()
 	bind := newRootCtx(false, base)

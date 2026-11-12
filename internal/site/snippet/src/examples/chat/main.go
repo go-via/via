@@ -19,7 +19,7 @@ import (
 	"github.com/go-via/via/topic"
 )
 
-// Message is one chat line. Plain app data.
+// Message is one chat line.
 type Message struct{ Who, Text string }
 
 // Room is the shared, process-wide hub — app-land, not framework. One topic fans
@@ -109,8 +109,8 @@ func main() {
 	defer stop()
 
 	room := NewRoom()
-	// via.Handler returns the *Router, so the live half is reachable: every
-	// open tab is a goroutine of its own, and only Close drains them.
+	// via.Handler returns the *Router so main can Close it: every open tab is
+	// a goroutine of its own, and only Close or Shutdown drains them.
 	r := via.Handler(Chat{room: room})
 	srv := &http.Server{Addr: cmp.Or(os.Getenv("VIA_ADDR"), ":8080"), Handler: r}
 

@@ -911,8 +911,8 @@ func TestPostForm_liveSubmitRunsOnInitOnTheReturnedPage(t *testing.T) {
 		"the fresh page's OnInit must see the session value the live action just Put")
 }
 
-// initChild loads a field in its own OnInit — the hook a child never
-// used to get at all; only the root's ran.
+// initChild loads a field in its own OnInit, which must run for a child as
+// well as for the root.
 type childIniter struct {
 	label string
 	hits  *int

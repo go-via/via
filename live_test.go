@@ -327,8 +327,8 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 
 		// Fire before the first tick pushes, while the connection's unit is
 		// still the exact Ctx OnInit handed to Tick. Waiting for a push first
-		// (the old version of this test) replaces the unit with a fresh
-		// render Ctx, hiding the corruption this test exists to catch.
+		// replaces the unit with a fresh render Ctx, hiding the corruption this
+		// test exists to catch.
 		status, _ := app.Action(0).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n: 1") // the action landed
@@ -407,8 +407,8 @@ func TestLive_listenCalledAfterConnectIsALoudNoOp(t *testing.T) {
 }
 
 // lateRegistrar's beat calls OnConnect and OnDispose on the already-connected
-// Ctx. Both used to append silently to a snapshot nobody reads again — the fn
-// never ran — while the sibling Tick/Listen calls warned.
+// Ctx. Both must warn like the sibling Tick/Listen calls, not append silently
+// to a snapshot nobody reads again.
 type lateRegistrar struct{ n via.State[int] }
 
 func (r *lateRegistrar) OnInit(ctx *via.Ctx) error {
@@ -924,9 +924,8 @@ func BenchmarkListen_burstFrames(b *testing.B) {
 	b.ReportMetric(float64(got.Load())/float64(total)*100, "%delivered")
 }
 
-// orderUnit registers two Listens on one topic. Each used to own a reader
-// goroutine, so which handler saw a value first was a scheduler race; both now
-// run from the connection's single select loop, in registration order.
+// orderUnit registers two Listens on one topic. Both run from the connection's
+// single select loop, so handlers see each value in registration order.
 type orderUnit struct {
 	bus  *topic.Topic[int]
 	mu   *sync.Mutex
@@ -1086,11 +1085,10 @@ func TestLive_panicInOneListenHandlerDoesNotDropTheBatch(t *testing.T) {
 // A unit must observe its own OnConnect publish.
 //
 // OnConnect's doc names "join a room" as the pattern, and a room's own join is
-// the first thing its viewer count has to reflect. The Listen starters used to
-// run inside runStream — i.e. after every OnConnect — so the join was published
-// into a topic this unit had not subscribed to yet: a fresh tab showed the
-// pre-join count until some other tab joined or left. The chat example's presence
-// count had exactly this defect.
+// the first thing its viewer count has to reflect. Listen subscriptions must
+// start before OnConnect runs; started after, the join goes to a topic this
+// unit has not subscribed to yet, and a fresh tab shows the pre-join count
+// until another tab joins or leaves.
 
 type connectPublisher struct {
 	bus *topic.Topic[int]
@@ -1197,10 +1195,9 @@ func TestConnect_anOnConnectThatChangesNothingShipsNoFrame(t *testing.T) {
 // A push whose render is byte-identical to the last one ships no frame.
 //
 // The plain action path answers 204 on an unchanged render that wrote or
-// opened no signals; the live path used to push a byte-identical element
-// patch on every single tick.
-// An idle page on a 2s tick sent ~160 identical frames in five minutes, which
-// is the CPU and bandwidth floor of every idle connection at scale.
+// opened no signals; the live path must skip it too. Otherwise an idle page on
+// a 2s tick sends ~160 identical frames in five minutes, the CPU and bandwidth
+// floor of every idle connection at scale.
 
 type unchangedTick struct {
 	want *atomic.Int64

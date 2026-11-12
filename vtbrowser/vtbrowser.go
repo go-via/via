@@ -96,10 +96,10 @@ func OpenURL(t testing.TB, rawURL string) *Session {
 
 func launch(t testing.TB, exe string, srv *httptest.Server, base, first string) *Session {
 	t.Helper()
+	output := &launchOutput{}
 	// no-sandbox: runners commonly run as root, where Chrome's sandbox refuses
 	// to start. disable-dev-shm-usage: a small container /dev/shm crashes the
 	// renderer.
-	output := &launchOutput{}
 	alloc, cancelAlloc := chromedp.NewExecAllocator(context.Background(),
 		append(chromedp.DefaultExecAllocatorOptions[:],
 			chromedp.ExecPath(exe),
@@ -271,7 +271,9 @@ func (s *Session) Type(selector, text string) {
 // (empty string if none).
 func (s *Session) Text(selector string) string {
 	s.t.Helper()
-	return strings.TrimSpace(s.text(selector))
+	var txt string
+	s.eval(textJS(selector), &txt)
+	return strings.TrimSpace(txt)
 }
 
 // Value returns the value of the first input matching the selector.
@@ -457,12 +459,6 @@ func textJS(selector string) string {
 	return fmt.Sprintf(`(document.querySelector(%q)||{}).textContent||""`, selector)
 }
 
-func (s *Session) text(selector string) string {
-	var txt string
-	s.eval(textJS(selector), &txt)
-	return txt
-}
-
 // tryEval decodes the raw JSON itself so a JS null leaves out unchanged;
 // chromedp's typed Evaluate would fail with ErrJSNull instead.
 func (s *Session) tryEval(js string, out any) error {
@@ -495,7 +491,7 @@ func (s *Session) run(what string, actions ...chromedp.Action[chromedp.Void]) {
 
 // collectConsole runs on its own goroutine for the tab's life, so it only
 // records under the mutex — it must never touch testing.TB. Browser log
-// entries (Source set) were never collected and stay out.
+// entries (Source set) are not page output and are skipped.
 func (s *Session) collectConsole(msgs iter.Seq2[chromedp.ConsoleMessage, error]) {
 	for m, err := range msgs {
 		switch {
