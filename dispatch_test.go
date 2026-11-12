@@ -896,7 +896,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 }
 
 // fixKid is a plain child whose OnInit seeds the state its handler
-// reads — the state a later discovery pass used to skip.
+// reads — the state a later discovery pass must not skip.
 type fixKid struct {
 	loaded string
 	seen   string
@@ -1312,9 +1312,9 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 	require.Equal(t, http.StatusBadRequest, status)
 
 	// Drained rather than counted: the 5ms tick keeps frames in the pipe that
-	// were rendered before the dispatch, and under load there are more than the
-	// two this used to assume — so "the second frame" was sometimes a stale one
-	// that had never seen the posted value. The invariant under test holds on
+	// were rendered before the dispatch, and under load their count varies — so
+	// "the second frame" can be a stale one that never saw the posted value.
+	// The invariant under test holds on
 	// every frame regardless; only the display value needs the first
 	// post-dispatch frame.
 	var frame string
@@ -1486,7 +1486,7 @@ func (p *livePriv) OnInit(ctx *via.Ctx) error {
 }
 
 // Safe counts its calls and the View renders the count: an action whose render
-// is byte-identical to the last frame now ships no frame at all (see
+// is byte-identical to the last frame ships no frame at all (see
 // skipUnchanged), so a test that reads its assertions off the next frame has to
 // give the render something that actually moves.
 func (p *livePriv) Safe(ctx *via.Ctx)            { p.safeN++ }

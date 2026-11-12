@@ -16,8 +16,8 @@ import (
 const maxActionBody = 1 << 20
 
 // maxUploadBytes caps a PostForm's multipart body — every native form, not just
-// ones with a file input, since the parser can't tell in advance. Only
-// maxActionBody of it is kept in RAM regardless. The default for WithMaxUpload.
+// ones with a file input, since the parser can't tell in advance. File parts
+// past WithMaxBody spill to a temp file. The default for WithMaxUpload.
 const maxUploadBytes = 8 << 20
 
 // setContentType is the only way via types a response: a type via sets is

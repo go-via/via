@@ -284,9 +284,8 @@ func (m *mount) recoverRequest(w http.ResponseWriter, req *http.Request, what st
 }
 
 // dispatch is the single entry point for every action POST on a mount, at
-// {base}/_via/a/{child}/{act}. One origin floor, one OnInit, one body decode:
-// the six transports this replaced each re-implemented them and drifted (OnInit
-// never ran on a child action; a live/child action dropped ctx.Redirect).
+// {base}/_via/a/{child}/{act}: one origin floor, one OnInit and one body decode
+// for root, child, live and native actions, so they cannot drift apart.
 func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	defer m.recoverRequest(w, req, "action")
 	ar, ok := m.readAction(w, req)
@@ -564,10 +563,9 @@ func (d *idDedupe) add(key string) (fresh, filled bool) {
 	return true, false
 }
 
-// noStream explains a live unit's action arriving on the plain path. The ways
-// to get here are different failures, and the old single message ("the page was
-// served plain") asserted the one that is usually false — what actually went
-// missing is the tab id that routes the POST back to its connection.
+// noStream explains a live unit's action arriving on the plain path. The page
+// was rarely served plain: what usually went missing is the tab id that routes
+// the POST back to its connection, so the message names that.
 func noStream(mode actionMode, tab string) string {
 	if tab != "" {
 		return "this tab id has no open stream for this page: the connection closed, " +
@@ -583,10 +581,9 @@ func noStream(mode actionMode, tab string) string {
 
 // writePage writes the full HTML document ctx rendered — the GET, and the
 // full-page re-render a native <form> submit answers with. Liveness is read off
-// this render rather than assumed: a plain root may carry a live child, and
-// hard-coding "not live" shipped that page with no data-init, leaving the child
-// dead after the first form submit. A nil ctx means the render already
-// answered.
+// this render rather than assumed: a plain root may carry a live child, which
+// needs the page's data-init to reconnect after a form submit. A nil ctx means
+// the render already answered.
 func (m *mount) writePage(w http.ResponseWriter, req *http.Request, ctx *Ctx, body []byte) {
 	if ctx == nil {
 		return

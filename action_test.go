@@ -447,7 +447,7 @@ type valHit struct {
 func (v valHit) Hit(ctx *via.Ctx) {}
 
 // X and Y share their first word (the label's data pointer), which is the
-// shape that used to collapse both buttons onto Y's handler.
+// shape that must not collapse both buttons onto Y's handler.
 type valFieldsAlike struct{ X, Y valHit }
 
 func (p *valFieldsAlike) OnInit(ctx *via.Ctx) error {

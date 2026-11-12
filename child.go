@@ -61,11 +61,11 @@ func Child[C any](child C) h.H {
 	if !isView {
 		panic(render.Miswired("via: via.Child(child) requires child to have a View() method"))
 	}
+	typ := reflect.TypeOf(child)
+	checkViewReceiver(typ)
 	// &child, not the parent's field: the copy is what the child's View binds
 	// against for the life of this render (and, for a live child, for the life
 	// of the connection), so its address is the base its signals offset from.
-	typ := reflect.TypeOf(child)
-	checkViewReceiver(typ)
 	inst := instance{v: v, base: unsafe.Pointer(&child), size: unsafe.Sizeof(child), typ: typ, sig: signalsOf(typ)}
 	var site childSite
 	runtime.Callers(2, site[:])

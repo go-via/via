@@ -356,9 +356,8 @@ func checkSlotName(t reflect.Type, field, name string, minted map[string]bool) {
 // checkSignalReachable panics when a field hides a Signal behind an indirection.
 // A Signal is found by its byte offset in the composition, so one reached
 // through a pointer, slice, array or map cannot be found at all: its writes land on
-// memory the render discards. That used to surface only when the View first
-// rendered it — a per-request 500 for the life of the process — so it is caught
-// here instead, on the type walk Mount and Child do once.
+// memory the render discards. Caught here, on the type walk Mount and Child do
+// once, rather than as a per-request 500 the first time the View renders it.
 //
 // An interface-held Signal cannot be seen from the type, so that one case stays
 // a render-time panic.
@@ -679,7 +678,7 @@ func newUnitPass() unitPass {
 	}
 }
 
-// dirtyAll gathers every signal this pass wrote, page-wide: a Set inside an
+// dirtyAll gathers every signal this pass wrote, page-wide: a Set inside a
 // child lands on that child's binder, so the root map alone would silently
 // drop it.
 func (c *Ctx) dirtyAll() map[string]any {
@@ -688,8 +687,8 @@ func (c *Ctx) dirtyAll() map[string]any {
 	}
 	all := make(map[string]any, len(c.dirty))
 	maps.Copy(all, c.dirty)
-	for _, isl := range c.children {
-		maps.Copy(all, isl.dirtyAll())
+	for _, ch := range c.children {
+		maps.Copy(all, ch.dirtyAll())
 	}
 	return all
 }
@@ -765,8 +764,8 @@ func (c *Ctx) collectSlots(dst map[string]bool) {
 	for _, slot := range c.order {
 		dst[slot] = true
 	}
-	for _, isl := range c.children {
-		isl.collectSlots(dst)
+	for _, ch := range c.children {
+		ch.collectSlots(dst)
 	}
 }
 
@@ -952,6 +951,7 @@ func (c *Ctx) bindArg(r *render.Renderer, event string, fn, arg any, call render
 	writeActionAttr(r, c, event, idx, "a="+url.QueryEscape(string(data)))
 }
 
+// mustActionEvent panics on an event name that is not render.ValidEventKey:
 // writeActionAttr splices event into an attribute name raw, so a quote, space
 // or '=' would open an attribute of the caller's choosing.
 func mustActionEvent(fn, event string) {

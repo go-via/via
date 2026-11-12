@@ -10,7 +10,7 @@ import (
 	"github.com/go-via/via/internal/render"
 )
 
-// hookSpecs are via's optional, duck-typed hooks. Opting in is having the
+// hookSpec describes one of via's optional, duck-typed hooks. Opting in is having the
 // method; the cost of that is that a typo or a signature drift opts you
 // silently out — the composition still compiles and the hook never runs.
 // rootOnly marks the ones only a mounted page's own methods are read from.
@@ -124,9 +124,8 @@ var hookSigChecked sync.Map // reflect.Type -> true (only on a clean pass)
 // also only warns.
 //
 // root says whether t is being mounted. Only the root's PageMeta is read, so a
-// correctly-shaped one on a child is reported: it is a warning and
-// not a panic because the very same type may legitimately be a mounted page
-// elsewhere in the app, and panicking would outlaw that.
+// correctly-shaped one on a child is reported. It warns rather than panics
+// because the same type may be a mounted page elsewhere in the app.
 func checkHooks(log *slog.Logger, t reflect.Type, warned *sync.Map, root bool) {
 	if t == nil {
 		return
@@ -226,8 +225,8 @@ func metaShaped(mt reflect.Type) bool {
 		!mt.IsVariadic()
 }
 
-// typeName names the composition behind a root pointer for a panic message,
-// without reflect: every root reaches here as *T from Mount's own PT.
+// withoutReceiver formats a method's signature without its receiver, for the
+// misshaped-hook panic.
 func withoutReceiver(mt reflect.Type) string {
 	in := make([]string, 0, mt.NumIn()-1)
 	for i := 1; i < mt.NumIn(); i++ {

@@ -9,9 +9,9 @@ import (
 )
 
 // dispatchOverStream runs act against a connected live unit on its
-// connection's serialized goroutine and waits for the result — synchronous,
-// unlike the old fire-and-forget child dispatch, so a Redirect, the session
-// cookie, and a panic all resolve on this response like a plain action. The
+// connection's serialized goroutine and waits for the result, so a Redirect,
+// the session cookie and a panic all resolve on this response like a plain
+// action. The
 // wait for the goroutine to pick the action up is bounded by req.Context(), the
 // connection closing and the pinned deadline; an action already running is
 // waited for, since it writes this response.
@@ -92,10 +92,9 @@ func (a *liveAction) apply() actionResult {
 	// dispatch that passed a pre-queue check while the connection was
 	// unbound could be applied after a concurrent live login bound it. Here
 	// the compare and the run are atomic on one serialized goroutine.
-	// Resolved once, here, for both the binding check and the action. The
-	// store error is kept, not discarded: a store that could not answer
-	// yields a nil session, which used to read as "wrong session" (or "no
-	// prior session") rather than an outage.
+	// Resolved once for both the binding check and the action. The store
+	// error is kept: a store that could not answer yields a nil session, which
+	// would otherwise read as "wrong session" rather than an outage.
 	sessID, sess, err := a.m.sessions.resolve(a.ar.req)
 	if err != nil {
 		// 503, not 403: the request is well-formed and the tab is live, so a
@@ -135,19 +134,18 @@ func (a *liveAction) apply() actionResult {
 //
 // The re-render + SSE push rides back in res.pushWork instead of running here:
 // run sends the result to the waiting POST first, so a stalled peer's write
-// delays only the next push item, never this response. A detached goroutine
-// doing the enqueue used to race other actions' goroutines and reorder their
-// pushes; returning it as data keeps everything on the one goroutine, in order.
+// delays only the next push item, never this response. Returning it as data,
+// not enqueuing it from a goroutine, keeps every push on the one goroutine, in
+// action order.
 func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *sessionData) (res actionResult) {
 	lc, w, req := a.lc, a.ar.w, a.ar.req
 	defer lc.recoverAction(unit, act, &res)
 	// Registered before the hydrate loop so every exit unwinds it, not just the
-	// one that reaches a push: a malformed or unrendered arg returns without
-	// pushWork, and livePush's restore is the only other one — so without this
-	// the client's posted values stayed on the instance for the next
-	// Tick/Listen handler to read. Deferred rather than inline so the handler and reloadUnit still see
-	// the hydrated values; a Set inside the handler drops its own slot, so a
-	// server write still survives.
+	// one that reaches a push (livePush's restore): a malformed or unrendered
+	// arg returns without pushWork, and the client's posted values would stay on
+	// the instance for the next Tick/Listen handler to read. Deferred so the
+	// handler and reloadUnit still see the hydrated values; a Set inside the
+	// handler drops its own slot, so a server write survives.
 	defer lc.rev.restore()
 	// beforeSession is resolved before the action runs, not inferred from the
 	// handle afterwards: a request already carrying a cookie and one whose
@@ -170,11 +168,9 @@ func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *
 	rc := &Ctx{reqScope: reqScope{req: req, sessions: a.m.sessions, policy: a.m.policy, sessW: w}, streamCtx: unit.streamCtx}
 	rc.adoptSession(sessID, beforeSession, nil)
 	rc.session.stream = lc
-	// unit.dirty is not reset here: clearDirty (via flushDirty, in the actual
-	// push) is the only place that owns clearing it. Resetting unconditionally
-	// on every dispatch dropped an earlier action's Set the moment it panicked
-	// or reloadUnit errored — no push ran to flush it, and this line wiped it
-	// before the next action's push ever saw it.
+	// unit.dirty is not reset here: clearDirty (via flushDirty, in the push) owns
+	// that. An earlier action that panicked or whose reloadUnit errored ran no
+	// push, and its Set must still reach the next one.
 	act.run(rc)
 
 	// Re-load the unit the same way the plain path does: the handler mutated

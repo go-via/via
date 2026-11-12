@@ -828,7 +828,7 @@ func TestDispatch_tabSignalIsIgnoredWithoutTheDatastarRequestHeader(t *testing.T
 
 // liveBoundRoot is tabGuard with a Bind()ed slot, so a POST carrying that
 // signal takes a second discovery pass — the pass whose bind Ctx never ran the
-// root's OnInit and so used to read live=false.
+// root's OnInit, so liveness must come from the auth render, not this pass.
 type liveBoundRoot struct {
 	Q    via.Signal[string]
 	hits *int

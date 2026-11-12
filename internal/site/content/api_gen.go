@@ -34,7 +34,7 @@ var apiSymbols = []apiSymbol{
 	{"via", "ListOf", "func", "func ListOf[E any](v ...E) List[E]", "ListOf seeds a List with the given elements — the StateOf of lists, and the same choice against a zero List filled in OnInit.", ""},
 	{"via", "MemorySessionStore", "type", "type MemorySessionStore struct{ … }", "MemorySessionStore is the process-local default store — a map guarded by a mutex, with CAS support (VersionedSessionStore).", ""},
 	{"via", "MemorySessionStore.Delete", "method", "func (s *MemorySessionStore) Delete(_ context.Context, id string) error", "Delete implements SessionStore.", ""},
-	{"via", "MemorySessionStore.Load", "method", "func (s *MemorySessionStore) Load(_ context.Context, id string) ([]byte, bool, error)", "Load implements SessionStore.", ""},
+	{"via", "MemorySessionStore.Load", "method", "func (s *MemorySessionStore) Load(ctx context.Context, id string) ([]byte, bool, error)", "Load implements SessionStore.", ""},
 	{"via", "MemorySessionStore.LoadVersion", "method", "func (s *MemorySessionStore) LoadVersion(_ context.Context, id string) ([]byte, uint64, bool, error)", "LoadVersion implements VersionedSessionStore.", ""},
 	{"via", "MemorySessionStore.Save", "method", "func (s *MemorySessionStore) Save(_ context.Context, id string, data []byte, ttl time.Duration) error", "Save implements SessionStore.", ""},
 	{"via", "MemorySessionStore.SaveIf", "method", "func (s *MemorySessionStore) SaveIf(_ context.Context, id string, data []byte, ttl time.Duration, version uint64) (bool, error)", "SaveIf implements VersionedSessionStore.", ""},

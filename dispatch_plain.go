@@ -135,8 +135,7 @@ func (m *mount) discoverPlain(ar *actionReq) (*discovered, bool) {
 	// it alone decides what is dispatchable (see on.Bind). Then the body is
 	// applied to the slots that render made client-writable and the tree is
 	// re-rendered, so a Bind()ed signal opening a lazy branch gets the slots
-	// inside it hydrated too — without this their posted values were silently
-	// dropped. The action must be present in both, so the executed render is an
+	// inside it hydrated too. The action must be present in both, so the executed render is an
 	// intersection with auth, never a superset.
 	auth := newRootCtx(false, ar.base)
 	// One flag for the whole discovery+hydrate+rebind tree, so a POST carrying
@@ -191,12 +190,9 @@ func actedViewer(inst instance, u *Ctx) any {
 }
 
 // rebindFrom builds the Ctx for hydration pass >= 2: a clone of the auth
-// render with only the per-render tables reset. Three separate defect rounds
-// were one field set on auth and forgotten here (req/sessions/sessW/doInit,
-// then session, then live), each patched by hand-copying one more
-// field — so the default is inverted: a new Ctx field rides along unless it
-// belongs to unitPass, and forgetting one can no longer silently drop a request
-// scope.
+// render with only the per-render tables reset. Copying the whole Ctx is the
+// default so a new request-scope field rides along without being listed here;
+// only what belongs to unitPass is reset.
 //
 // unitPass holds exactly what a render produces and the next render must
 // produce again, plus the root's OnInit registrations — OnInit does not re-run
@@ -225,8 +221,8 @@ func rebindFrom(auth *Ctx) *Ctx {
 // dispatchPlain's signal that another render may uncover more.
 //
 // Deliberately not done during the render, which is what decides what is
-// dispatchable (see on.Bind): hydrating from the body let a client flip a Signal
-// OnInit set from the session — via.When(p.Admin.Get(), …) opened by posting
+// dispatchable (see on.Bind): hydrating from the body would let a client flip a
+// Signal OnInit set from the session — via.When(p.Admin.Get(), …) opened by posting
 // {"admin":true} — and mint its own authorization. Later passes do see hydrated
 // values, but only to widen the set of hydratable slots; the action table they
 // may dispatch from stays auth's.
@@ -283,8 +279,8 @@ func (m *mount) rerenderPlain(ar *actionReq, d *discovered, u *Ctx) (markup []by
 		}
 		return after, signals
 	}
-	// u is always plain here (assertRenderInvariantLiveness below would already
-	// have fired otherwise), but the real page can still hold it beneath an
+	// u is always plain here (dispatchPlain answers 410 for a live one), but the
+	// real page can still hold it beneath an
 	// already-live root — liveAncestor reads that off the discovery tree, since
 	// this re-render's own synthetic root has no ancestor Ctx to walk from.
 	// auth, not bind (I1): liveness is the un-hydrated render's verdict.

@@ -1196,7 +1196,7 @@ func (s *gapStore) Save(ctx context.Context, id string, data []byte, ttl time.Du
 func (s *gapStore) Delete(ctx context.Context, id string) error { return s.inner.Delete(ctx, id) }
 
 // casGapStore is gapStore with the conditional-write half, so via takes the CAS
-// path; plainGapStore (a gapStore alone) is the store that has no such path.
+// path; newPlainGap's bare gapStore is the store that has no such path.
 type casGapStore struct{ *gapStore }
 
 func (s *casGapStore) LoadVersion(ctx context.Context, id string) ([]byte, uint64, bool, error) {

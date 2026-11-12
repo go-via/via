@@ -61,7 +61,7 @@ func New(opts Options) (*via.Router, http.Handler) {
 	s := &shell.Site{Base: opts.Base, Origin: opts.Origin, Versions: opts.Versions}
 	if len(s.Versions) > 0 {
 		if _, ok := s.Current(); !ok {
-			panic("site: no version entry has Base " + `"` + opts.Base + `"`)
+			panic("site: no version entry has Base " + strconv.Quote(opts.Base))
 		}
 	}
 	idx := &search.Index{}

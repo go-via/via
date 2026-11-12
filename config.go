@@ -478,14 +478,14 @@ func (o pageCompressionOption) apply(c *config) {
 // brotli window (LGWin) or the gzip level for that. It panics like
 // WithPageCompression.
 func WithSSECompression(encs ...Encoder) Option {
-	return sSECompressionOption{encs}
+	return sseCompressionOption{encs}
 }
 
-type sSECompressionOption struct {
+type sseCompressionOption struct {
 	encs []Encoder
 }
 
-func (o sSECompressionOption) apply(c *config) {
+func (o sseCompressionOption) apply(c *config) {
 	setEncoders(&c.sseEnc, "WithSSECompression", o.encs)
 }
 

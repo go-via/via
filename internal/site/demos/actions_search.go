@@ -32,8 +32,11 @@ type Search struct {
 func (s *Search) Run(ctx *via.Ctx) {
 	q := strings.ToLower(strings.TrimSpace(s.Query.Get()))
 	s.asked, s.hits = q != "", nil
+	if !s.asked {
+		return
+	}
 	for _, p := range stdlib {
-		if q != "" && strings.Contains(p, q) {
+		if strings.Contains(p, q) {
 			s.hits = append(s.hits, p)
 		}
 	}

@@ -16,10 +16,9 @@ import (
 )
 
 // encodeSlots writes want as one JSON object, n slots in it. Marshalled one
-// slot at a time, not as one map: a single unmarshalable value used to fail the
-// whole object and emit an empty data-signals, wiping the client store for every
-// signal on the page with nothing in the log. Drop the offender, keep the rest
-// — the same treatment an unmarshalable on.Bind arg gets.
+// slot at a time, not as one map, so one unmarshalable value is logged and
+// dropped instead of emptying data-signals and wiping every signal in the
+// client store — the same treatment an unmarshalable on.Bind arg gets.
 func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw []byte, n int) {
 	var obj bytes.Buffer
 	obj.WriteByte('{')
@@ -84,10 +83,10 @@ func writeSignalsAttr(log *slog.Logger, buf *bytes.Buffer, initial map[string]an
 // render that applied the client's posted values on top of it.
 //
 // It exists because a live unit outlives the request: hydration writes straight
-// into the instance's field, so without an undo the client's value became the
-// server's own state and every later push re-rendered from it — which is how a
-// posted signal used to open a gated branch and leave its action dispatchable
-// for the life of the connection. livePush reverts, renders the authority, then
+// into the instance's field, so without an undo the client's value would become
+// the server's own state and every later push would re-render from it, letting
+// a posted signal open a gated branch and keep its action dispatchable for the
+// life of the connection. livePush reverts, renders the authority, then
 // re-applies for display, so the client can still steer what it sees and never
 // what it may call.
 //

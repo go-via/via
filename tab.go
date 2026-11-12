@@ -171,10 +171,10 @@ func (s *Session) sid() string {
 
 // flushDirty ships the signals u's handlers wrote since its last push and
 // stops the client's stale copies from coming back. Every server-driven change
-// on a live connection goes through it — a live action's, and a Tick/Listen
-// handler's, which used to Set into nothing: the display render in livePush
-// re-hydrates lc.client over the instance, so without the delete the client's
-// old value would be painted back over the Set on the very next frame.
+// on a live connection goes through it, a live action's and a Tick/Listen
+// handler's alike. The display render in livePush re-hydrates lc.client over
+// the instance, so without the delete the client's old value would be painted
+// back over the Set on the very next frame.
 //
 // It runs before the push's renders so the patch-signals frame precedes the
 // element patch, and so the display render no longer sees the superseded slots.
@@ -259,11 +259,10 @@ func (c *tabStream) replace(u *Ctx) {
 	c.units[unitAddr(u)] = u
 }
 
-// runOutcome says why a dispatch did not produce a result. One 410 for three
-// unrelated causes was the whole defect: a closed tab, a client that hung up,
-// and a stream goroutine pinned by a blocking Tick/Listen/action handler are
-// three different operational problems and only the first is the client's to
-// fix.
+// runOutcome says why a dispatch did not produce a result. A closed tab, a
+// client that hung up, and a stream goroutine pinned by a blocking
+// Tick/Listen/action handler are different operational problems, and only the
+// first is the client's to fix, so each gets its own answer.
 type runOutcome int
 
 const (
@@ -276,8 +275,7 @@ const (
 // pinnedDeadline is how long a dispatch waits for the stream goroutine to reach
 // it before declaring the goroutine pinned (see WithPinnedDeadline). Well past
 // any sane handler, and short enough to answer before a load balancer or client
-// deadline does — the old code waited on req.Context() alone, so the pinned
-// case was invisible and arrived as a 410 that blamed the client.
+// deadline does.
 func (c *tabStream) pinnedDeadline() time.Duration { return c.mount.cfg.pinnedDeadline }
 
 // run posts fn onto the stream goroutine and waits for its actionResult, so a

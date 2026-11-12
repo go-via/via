@@ -176,9 +176,9 @@ func (a *App) Get(path string) (int, string) {
 // first Fire fetched, not constructed: the wire id is a hash of the handler's
 // func name and any ?a= row datum rides along with it, so a hand-built path
 // would be wrong. That page is cached, so an action that only appears after a
-// change needs Raw with a URL read off a fresh Get. By default it carries Sec-Fetch-Site: same-origin,
-// modelling a same-origin browser fetch; the builder methods override that
-// to exercise the origin floor.
+// change needs Raw with a URL read off a fresh Get. By default it carries
+// Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch; the
+// builder methods override that to exercise the origin floor.
 func (a *App) Action(n int) *Action { return a.ChildAction("r", n) }
 
 // ChildAction builds a POST to the n-th action a child renders,
@@ -270,9 +270,8 @@ func (a *Action) NoOrigin() *Action { a.noOrigin = true; return a }
 // Body sets the raw JSON signal body (defaults to "{}").
 func (a *Action) Body(json string) *Action { a.body = json; return a }
 
-// signalBody splices the tab id into the JSON signal body the way the browser
-// would — the tab id is a signal now, not a header. A body Tab was never set
-// on, or one that is not a JSON object (a test feeding deliberate garbage), is
+// signalBody splices the tab id signal into the JSON signal body the way the
+// browser would. A body Tab was never set on, or one that is not a JSON object (a test feeding deliberate garbage), is
 // posted verbatim.
 func (a *Action) signalBody() string {
 	if !a.tabSet {
@@ -387,9 +386,9 @@ func (c *Conn) endEvent() {
 		return
 	}
 	c.events++
-	line := strings.Join(c.pending, " | ")
+	line := c.pending[0]
 	if len(c.pending) > 1 {
-		line = c.pending[0] + ": " + strings.Join(c.pending[1:], " | ")
+		line += ": " + strings.Join(c.pending[1:], " | ")
 	}
 	c.recent = append(c.recent, clip(line))
 	if len(c.recent) > recentKept {
@@ -543,10 +542,9 @@ func (c *Conn) TabID() string { return c.tabID }
 // ActionURL returns the currently-rendered URL of child's n-th action, in
 // document order — read off the latest datastar-patch-elements frame that
 // carries one, the same markup a browser's DOM would hold at this point, not a
-// separate plain GET's render. Before any push has touched this child
-// (e.g. the very first action after Connect), nothing has been pushed yet
-// either, so this falls back to the page's own initial GET — exactly what a
-// real browser would still be showing.
+// separate plain GET's render. Until a push carries the child (the first
+// action after Connect, say), it falls back to the page's initial GET, which
+// is what a browser would still show.
 func (c *Conn) ActionURL(child string, n int) string {
 	c.t.Helper()
 	c.mu.Lock()

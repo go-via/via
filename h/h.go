@@ -49,9 +49,8 @@
 //
 //	h.Div(h.DataShow(p.Open.Ref()), ...)   // renders data-show="$open"
 //
-// [Data] covers anything they miss. It validates the key the same
-// way RawAttr does and escapes the expression.
-// Datastar splits a key on ":", so data-attr-value must be written as
+// [Data] covers anything they miss. It validates the key the same way RawAttr
+// does and escapes the expression. Datastar splits a key on ":", so data-attr-value must be written as
 // h.Data("attr:value", …) — and no Go test can catch the difference.
 //
 // # Guarantees
@@ -103,7 +102,7 @@ type Attr = render.Attr
 // and an invalid one panics, as does script in any case: Datastar gives a
 // <script> that arrives in a live patch the page's nonce, so it would run.
 // Declare scripts in via.Meta.Assets. A void tag (br, img, input…), in any
-// case, renders without a closing tag.
+// letter case, renders without a closing tag.
 func El(tag string, kids ...H) H { return render.El(tag, kids...) }
 
 // Stringish is what [Str] accepts: ~string plus every built-in integer and

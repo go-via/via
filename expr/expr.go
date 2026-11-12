@@ -166,8 +166,8 @@ func closingQuote(s string, i int) int {
 func Do(es ...Expr) Expr { return Expr(strings.Join(sources(es), "; ")) }
 
 // Val encodes v as a JavaScript literal; an Expr is parenthesized unless it is
-// already one group or a bare name or literal. An @
-// is escaped so Datastar does not read an @name( in a string as an action call.
+// already one group or a bare name or literal. An @ is escaped so Datastar
+// does not read an @name( in a string as an action call.
 func Val(v any) Expr { return Expr(operand(v)) }
 
 var callName = regexp.MustCompile(`^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$`)

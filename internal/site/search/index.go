@@ -85,7 +85,7 @@ const (
 // characters finds nothing.
 func (x *Index) Find(q string, n int) []Hit {
 	q = strings.ToLower(strings.TrimSpace(q))
-	if len([]rune(q)) < 2 {
+	if len([]rune(q)) < minLength {
 		return nil
 	}
 	terms := chunks(q)
@@ -235,7 +235,8 @@ func camel(s string) []string {
 
 // snippet is about snippetRunes of text around the first word it contains,
 // cut on whitespace. lower is text lower-cased; offsets are in runes because
-// lower-casing can change a string's byte length.
+// lower-casing can change a string's byte length. When it changes the rune
+// count too, offsets come from text as is and the match may be missed.
 func snippet(text, lower string, words []string) string {
 	rt, rl := []rune(text), []rune(lower)
 	if len(rt) != len(rl) {

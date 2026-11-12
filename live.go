@@ -64,7 +64,7 @@ func (l *listenSub[T]) deliver() {
 }
 
 // callHandler recovers per call, so a panicking handler does not tear down
-// the connection's push goroutine.
+// the tab's stream goroutine.
 func (l *listenSub[T]) callHandler(v T) {
 	defer l.c.recoverListener()
 	l.handler(l.c, v)
