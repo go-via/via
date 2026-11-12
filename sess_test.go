@@ -980,11 +980,11 @@ func (s *hangingStore) Delete(ctx context.Context, _ string) error { return s.bl
 
 type sessWritePage struct{}
 
-func (sessWritePage) OnInit(ctx *via.Ctx) error {
+func (*sessWritePage) OnInit(ctx *via.Ctx) error {
 	ctx.Session().Put(acct{Name: "alice"})
 	return nil
 }
-func (sessWritePage) View() h.H { return h.P(h.Str("ok")) }
+func (*sessWritePage) View() h.H { return h.P(h.Str("ok")) }
 
 func TestSessionStoreTimeout_freesARequestAHungStoreWouldPin(t *testing.T) {
 	t.Parallel()
@@ -2089,8 +2089,8 @@ func TestSession_aLiveNativeSubmitsPageSeesTheSessionItsActionWrote(t *testing.T
 
 type rotateOnInit struct{}
 
-func (rotateOnInit) OnInit(ctx *via.Ctx) error { ctx.Session().Rotate(); return nil }
-func (rotateOnInit) View() h.H                 { return h.Div() }
+func (*rotateOnInit) OnInit(ctx *via.Ctx) error { ctx.Session().Rotate(); return nil }
+func (*rotateOnInit) View() h.H                 { return h.Div() }
 
 func TestSession_anAnonymousRotateWarnsLikeAnyMint(t *testing.T) {
 	t.Parallel()

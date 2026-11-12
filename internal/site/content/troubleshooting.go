@@ -44,7 +44,7 @@ const tsMisnamed = `level=WARN msg="via: main.Room.Oninit looks like a mis-named
 const tsV07Connect = `level=WARN msg="via: main.Room.OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls. Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and ctx.Tick or ctx.Listen makes the unit live."`
 
 const tsMountPanics = `panic: via: main.Room.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run
-panic: via: main.Search.View has a VALUE receiver and the composition holds Signals — View must take a POINTER receiver (func (p *Search) View() h.H), or every rendered Signal binds against a discarded copy
+panic: via: main.Search.View has a value receiver; give it a pointer receiver (func (p *Search) View() h.H). via renders and acts on the composition in place, and a value receiver's View reads a copy: its Signals bind to the copy and its actions run on it.
 panic: via: Mount path "/files/{path...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`
 
 const tsTooLarge = `413 request body too large`
@@ -176,12 +176,12 @@ func (p *Troubleshooting) View() h.H {
 		d.H2("Mount panics at startup"),
 		snippet.Text("panic", tsMountPanics),
 		h.P(h.Str("Registration mistakes panic when the router is built, before it serves: a hook with the wrong signature, a "),
-			Code("View"), h.Str(" with a value receiver on a type holding Signals, a "), Code("{name...}"),
+			Code("View"), h.Str(" with a value receiver, a "), Code("{name...}"),
 			h.Str(" wildcard or a reserved path segment, a session key under 16 bytes, two mounts on one path. The message "+
 				"names the type or the pattern; fix that and restart.")),
 		h.P(API("via.Mount"), h.Str(" also renders the mounted value once, without running "), Code("OnInit"),
 			h.Str(", and panics on a wiring mistake that render reaches: a func literal bound once per row, a method taken "+
-				"through an interface field or an ambiguous value receiver, "), Code(`h.El("script")`),
+				"through an interface field or with a value receiver, "), Code(`h.El("script")`),
 			h.Str(", a Signal with no slot, a child without a View. Those messages start "), Code("found at Mount"),
 			h.Str(". Any other panic in that render is ignored, since the page has no data yet. A mistake behind a branch "+
 				"the empty value does not take panics at the first render that takes it.")),

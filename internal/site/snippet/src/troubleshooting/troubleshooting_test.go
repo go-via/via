@@ -266,8 +266,9 @@ func TestMount_panicsAtStartup(t *testing.T) {
 	t.Parallel()
 	assert.PanicsWithError(t, "via: troubleshooting_test.NoErrInit.OnInit has signature func(*via.Ctx), not func(*via.Ctx) error — so the hook will never run",
 		func() { via.Handler(NoErrInit{}) })
-	assert.PanicsWithError(t, "via: troubleshooting_test.ValueView.View has a VALUE receiver and the composition holds Signals — "+
-		"View must take a POINTER receiver (func (p *ValueView) View() h.H), or every rendered Signal binds against a discarded copy",
+	assert.PanicsWithError(t, "via: troubleshooting_test.ValueView.View has a value receiver; give it a pointer receiver "+
+		"(func (p *ValueView) View() h.H). via renders and acts on the composition in place, and a value receiver's View "+
+		"reads a copy: its Signals bind to the copy and its actions run on it.",
 		func() { via.Handler(ValueView{}) })
 	assert.PanicsWithValue(t, `via: Mount path "/files/{path...}": a {name...} wildcard is not supported — a page's action and stream routes live under its path`,
 		func() { via.Mount(via.NewRouter(), "/files/{path...}", NoErrInit{}) })

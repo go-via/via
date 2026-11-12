@@ -112,7 +112,7 @@ type P struct {
 
 type C struct{}
 
-func (C) View() h.H                  { return nil }
+func (*C) View() h.H                 { return nil }
 func (p *P) View() h.H               { return nil }
 func (p *P) Inc(*via.Ctx)            {}
 func (p *P) Pick(*via.Ctx, *int)     {}
@@ -353,10 +353,8 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 			"reflect.TypeOf", "reflect.Uint8"},
 		// action.go resolves a handler's Go name off its code pointer and its
 		// receiver's field path off the unit type, once per (unit type, fn,
-		// receiver offset) and memoized — see actionID. A value-receiver
-		// handler's type walk is memoized per (unit type, fn) — see
-		// valueMethodID.
-		"action.go": {"reflect.Array", "reflect.Interface", "reflect.Struct",
+		// receiver offset) and memoized — see actionID.
+		"action.go": {"reflect.Array", "reflect.Struct",
 			"reflect.StructField", "reflect.Type", "reflect.ValueOf"},
 		"child.go": {"reflect.Array", "reflect.Struct", "reflect.StructField", "reflect.Type", "reflect.TypeFor"},
 		// hooks.go checks each composition type's hook methods once — see

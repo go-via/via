@@ -397,8 +397,6 @@ func TestActionID_indistinguishableHandlersPanicNamingTheFix(t *testing.T) {
 			"Mount", []string{"func literal", "on.Bind"}},
 		{"receivers behind pointer fields", func(r *via.Router) { via.Mount(r, "/", ptrCells{}) },
 			"render", []string{"pointer", "via.Child"}},
-		{"value copies keyed to the one field of their type", func(r *via.Router) { via.Mount(r, "/", valHeldOnce{}) },
-			"render", []string{"slice", "on.Bind"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -419,17 +417,6 @@ type ifaceCounter struct{ n int }
 
 func (c *ifaceCounter) Inc(ctx *via.Ctx) { c.n++ }
 
-type ifaceFields struct{ A, B ifaceIncer }
-
-func (p *ifaceFields) OnInit(ctx *via.Ctx) error {
-	p.A, p.B = &ifaceCounter{}, &ifaceCounter{}
-	return nil
-}
-
-func (p *ifaceFields) View() h.H {
-	return h.Div(h.Button(on.Click(p.A.Inc)), h.Button(on.Click(p.B.Inc)))
-}
-
 type ifaceField struct{ A ifaceIncer }
 
 func (p *ifaceField) OnInit(ctx *via.Ctx) error {
@@ -446,19 +433,6 @@ type valHit struct {
 
 func (v valHit) Hit(ctx *via.Ctx) {}
 
-// X and Y share their first word (the label's data pointer), which is the
-// shape that must not collapse both buttons onto Y's handler.
-type valFieldsAlike struct{ X, Y valHit }
-
-func (p *valFieldsAlike) OnInit(ctx *via.Ctx) error {
-	p.X, p.Y = valHit{"same", 1}, valHit{"same", 2}
-	return nil
-}
-
-func (p *valFieldsAlike) View() h.H {
-	return h.Div(h.Button(on.Click(p.X.Hit)), h.Button(on.Click(p.Y.Hit)))
-}
-
 type valRows struct{ rows []valHit }
 
 func (p *valRows) OnInit(ctx *via.Ctx) error {
@@ -469,44 +443,20 @@ func (p *valRows) OnInit(ctx *via.Ctx) error {
 func (p *valRows) row(v valHit) h.H { return h.Button(on.Click(v.Hit)) }
 func (p *valRows) View() h.H        { return h.Div(via.Each(p.rows, p.row)) }
 
-// valHeldOnce holds valHit at one path, X, so X.Hit has an id; the rows bind
-// copies of the same type that are not X, and must not borrow X's id.
-type valHeldOnce struct {
-	X    valHit
-	rows []valHit
-}
+// valField holds valHit at one field: X.Hit still runs on a copy, so it panics.
+type valField struct{ X valHit }
 
-func (p *valHeldOnce) OnInit(ctx *via.Ctx) error {
-	p.X, p.rows = valHit{"x", 0}, []valHit{{"a", 1}, {"b", 2}}
-	return nil
-}
-
-func (p *valHeldOnce) row(v valHit) h.H { return h.Button(on.Click(v.Hit)) }
-func (p *valHeldOnce) View() h.H {
-	return h.Div(h.Button(on.Click(p.X.Hit)), via.Each(p.rows, p.row))
-}
+func (p *valField) View() h.H { return h.Div(h.Button(on.Click(p.X.Hit))) }
 
 type gv[T any] struct{ v T }
 
 func (g gv[T]) Hit(ctx *via.Ctx) { _ = g.v }
 
-type genMixed struct {
-	A gv[int]
-	B gv[string]
-}
+type genVal struct{ A gv[int] }
 
-func (p *genMixed) View() h.H { return h.Div(h.Button(on.Click(p.A.Hit))) }
+func (p *genVal) View() h.H { return h.Div(h.Button(on.Click(p.A.Hit))) }
 
-// *int and *string share one GC shape, so the two instantiations run the same
-// compiled body.
-type genPtrShaped struct {
-	A gv[*int]
-	B gv[*string]
-}
-
-func (p *genPtrShaped) View() h.H { return h.Div(h.Button(on.Click(p.B.Hit))) }
-
-func TestActionID_methodValueWithoutAReceiverAddressPanicsNamingTheField(t *testing.T) {
+func TestActionID_methodValueWithoutAReceiverAddressPanicsNamingTheFix(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -514,24 +464,20 @@ func TestActionID_methodValueWithoutAReceiverAddressPanicsNamingTheField(t *test
 		where string
 		want  []string
 	}{
-		{"two interface fields", func(r *via.Router) { via.Mount(r, "/", ifaceFields{}) },
-			"render", []string{"interface", "fields A, B", "pointer receiver"}},
-		{"one interface field", func(r *via.Router) { via.Mount(r, "/", ifaceField{}) },
-			"render", []string{"interface", "field A", "pointer receiver"}},
-		{"two value receivers alike", func(r *via.Router) { via.Mount(r, "/", valFieldsAlike{}) },
-			"Mount", []string{"value receiver", "fields X, Y", "func (*valHit) Hit"}},
+		{"interface field", func(r *via.Router) { via.Mount(r, "/", ifaceField{}) },
+			"render", []string{"interface", "concrete type"}},
+		{"value receiver on a field", func(r *via.Router) { via.Mount(r, "/", valField{}) },
+			"Mount", []string{"value receiver", "func (*valHit) Hit"}},
 		{"value receiver off a slice row", func(r *via.Router) { via.Mount(r, "/", valRows{}) },
-			"render", []string{"value receiver", "not a field", "func (*valHit) Hit"}},
-		{"generic value receiver, int and string", func(r *via.Router) { via.Mount(r, "/", genMixed{}) },
-			"Mount", []string{"generic", "fields A, B", "func (*gv[T]) Hit"}},
-		{"generic value receiver, two pointer shapes", func(r *via.Router) { via.Mount(r, "/", genPtrShaped{}) },
-			"Mount", []string{"generic", "fields A, B", "func (*gv[T]) Hit"}},
+			"render", []string{"value receiver", "func (*valHit) Hit"}},
+		{"generic value receiver", func(r *via.Router) { via.Mount(r, "/", genVal{}) },
+			"Mount", []string{"value receiver", "func (*gv[T]) Hit"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			where, text := failLog(t, tt.mount)
-			require.Equal(t, tt.where, where, "a click could run another field's handler")
+			require.Equal(t, tt.where, where, "the panic site")
 			for _, want := range tt.want {
 				assert.Contains(t, text, want)
 			}
@@ -927,50 +873,6 @@ func TestBind_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing
 	assert.Less(t, status, 300, "row c moved but still exists")
 
 	assert.Equal(t, []string{"a", "a", "c"}, store.picks())
-}
-
-type valRoot struct{ count *store }
-
-func (v valRoot) Inc(ctx *via.Ctx) { v.count.Add(1) }
-func (v *valRoot) View() h.H {
-	return h.Div(h.H1(h.Str(v.count.Value())), h.Button(on.Click(v.Inc)))
-}
-
-type valCounter struct{ count *store }
-
-func (c valCounter) Inc(ctx *via.Ctx) { c.count.Add(1) }
-
-type valHolder struct {
-	N int
-	X valCounter
-}
-
-func (p *valHolder) View() h.H {
-	return h.Div(h.H1(h.Str(p.X.count.Value())), h.Button(on.Click(p.X.Inc)))
-}
-
-func TestActionID_valueReceiverHeldAtOnePathDispatches(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		handler func(*store) http.Handler
-	}{
-		{"on the unit itself", func(s *store) http.Handler { return via.Handler(valRoot{count: s}) }},
-		{"on a type held by exactly one field", func(s *store) http.Handler {
-			return via.Handler(valHolder{X: valCounter{count: s}})
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			app := tt.handler(&store{})
-			urls := actionURLs(t, app)
-			require.Len(t, urls, 1)
-			rec := postAction(t, app, urls[0])
-			require.Equal(t, http.StatusOK, rec.Code)
-			assert.Contains(t, rec.Body.String(), "<h1>1</h1>")
-		})
-	}
 }
 
 type nilArgPage struct{}

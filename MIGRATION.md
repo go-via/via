@@ -647,7 +647,7 @@ an upgrade in code that compiled fine before.
   `A__b`. Rename one of them.
 - `Mount` renders the mounted value once, without running `OnInit`, and
   panics on a wiring mistake that render reaches: a func literal bound once
-  per row, a method taken through an interface field or an ambiguous value
+  per row, a method taken through an interface field or with a value
   receiver, `h.El("script")`, a Signal with no slot, a signal named `viatab`,
   a child without a `View` or with a wrong hook signature. The message starts
   `via: found at Mount`. Any other panic there (a nil dereference of data
@@ -996,3 +996,11 @@ spelling outright.
 - **The `?u=` call-site query on a child's action URL is gone.** A tab open
   across the upgrade posts old URLs; its first click answers 410 and the page
   reloads.
+- **Every `View` and every action takes a pointer receiver.**
+  `func (p Page) View() h.H` → `func (p *Page) View() h.H`;
+  `func (c Counter) Inc(ctx *via.Ctx)` →
+  `func (c *Counter) Inc(ctx *via.Ctx)`. A value-receiver `View`
+  panics at Mount even when the type holds no Signals, and a value-receiver
+  action panics at Mount (or at the first render that binds it) even where its
+  type sits at one field. A value receiver ran on a copy, so its changes were
+  lost.

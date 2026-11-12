@@ -14,7 +14,7 @@ var Shell = via.WithHead(via.Head{
 
 type Settings struct{}
 
-func (Settings) PageMeta() via.Meta {
+func (*Settings) PageMeta() via.Meta {
 	return via.Meta{
 		Title:     "Settings",
 		HTMLAttrs: []via.Attr{{Name: "data-theme", Value: "light"}},
@@ -24,7 +24,7 @@ func (Settings) PageMeta() via.Meta {
 
 // snippet:end
 
-func (Settings) View() h.H { return h.Div(h.Str("settings")) }
+func (*Settings) View() h.H { return h.Div(h.Str("settings")) }
 
 const ShellHTML = `<html lang="en" data-nonce="…" data-theme="light">
 <body data-signals='{"viatab":""}' class="app narrow">`

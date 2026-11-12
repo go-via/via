@@ -501,7 +501,7 @@ func TestPostForm_nativeSubmitFromLiveUnitReturns200(t *testing.T) {
 // only from a stylesheet, so "did the sheet load" is directly observable.
 type styledPage struct{}
 
-func (styledPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
+func (*styledPage) View() h.H { return h.Div(h.RawAttr("id", "styled"), h.Str("styled")) }
 
 // cdn serves one off-origin stylesheet. A second httptest server is a genuinely
 // different origin (different port), so this exercises the real cross-origin
@@ -702,14 +702,14 @@ func TestClick_beforeTheStreamConnectsIsApplied(t *testing.T) {
 // 'unsafe-eval' makes, next to a Datastar expression.
 type evalProbe struct{}
 
-func (evalProbe) PageMeta() via.Meta {
+func (*evalProbe) PageMeta() via.Meta {
 	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{
 		Inline: `try{eval('1');window.__eval='ran'}catch(_){window.__eval='blocked'}` +
 			`try{Function('window.__fn="ran"')()}catch(_){window.__fn='blocked'}`,
 	}}}}
 }
 
-func (evalProbe) View() h.H {
+func (*evalProbe) View() h.H {
 	return h.Div(h.Span(h.ID("out"), h.DataText(expr.Rawf(`'datastar ' + 'ran'`))))
 }
 
@@ -1124,7 +1124,7 @@ const (
 // Val must hand it the string so the handler still parses and yields the text.
 type bAtLiteral struct{}
 
-func (bAtLiteral) View() h.H {
+func (*bAtLiteral) View() h.H {
 	return h.Div(
 		h.Span(h.ID("out"), h.Str("-")),
 		h.Button(h.ID("send"), on.ClickCS(expr.Rawf(`document.getElementById('out').textContent = %s + "|" + %s`,
@@ -1242,11 +1242,11 @@ func TestConsole_errorsAndUncaughtExceptionsAreCollected(t *testing.T) {
 
 type homePage struct{}
 
-func (homePage) View() h.H { return h.Div(h.P(h.Str("home"))) }
+func (*homePage) View() h.H { return h.Div(h.P(h.Str("home"))) }
 
 type invitePage struct{}
 
-func (invitePage) View() h.H { return h.Div(h.P(h.Str("invite"))) }
+func (*invitePage) View() h.H { return h.Div(h.P(h.Str("invite"))) }
 
 func twoPages() *via.Router {
 	r := via.NewRouter()

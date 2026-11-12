@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -39,8 +38,7 @@ type action struct {
 // struct (a closure, a child behind a pointer or slice field) has no path and
 // falls back to the name alone; two such handlers that hash alike would
 // last-wins misroute, so claimSlot panics instead. A value-receiver or
-// interface method value has no receiver address: valueMethodID keys it by its
-// type's one path in the unit, or refuses it.
+// interface method value has no receiver address and is refused.
 func (c *Ctx) actionSlot(run func(*Ctx)) string {
 	id, a := c.claimSlot(run)
 	a.fn = run
@@ -128,7 +126,6 @@ func sharedID(id, prev, name string) string {
 type actionHandle struct {
 	code uintptr
 	self unsafe.Pointer
-	copy uint64 // a value receiver's copy, which has no address to compare (see valueMethodID)
 }
 
 // eface is the runtime layout of an interface value; for a func in an any,
@@ -146,7 +143,7 @@ type eface struct{ typ, data unsafe.Pointer }
 func funcSelf(fn any) unsafe.Pointer { return (*eface)(unsafe.Pointer(&fn)).data }
 
 // methodRecv reads the captured receiver. Valid only for a pointer-receiver
-// "-fm" func value — see funcSelf and valueMethodID.
+// "-fm" func value — see funcSelf and noReceiverAddress.
 func methodRecv(self unsafe.Pointer) unsafe.Pointer {
 	if self == nil {
 		return nil
@@ -157,10 +154,6 @@ func methodRecv(self unsafe.Pointer) unsafe.Pointer {
 type trampolineCanary struct{}
 
 func (*trampolineCanary) probe() {}
-
-type valueCanary struct{ a, b uintptr }
-
-func (valueCanary) probe() {}
 
 var trampolineVerified sync.Once
 
@@ -186,23 +179,13 @@ func checkMethodTrampoline() {
 			"change broke that assumption. File a bug.",
 			runtime.Version(), meta.name, recv, c))
 	}
-	v := valueCanary{a: 0x5a5a, b: 0xa5a5}
-	vfn := v.probe
-	vmeta := funcName(reflect.ValueOf(vfn).Pointer())
-	held := (*valueCanary)(unsafe.Add(funcSelf(vfn), unsafe.Sizeof(uintptr(0))))
-	if !vmeta.method || vmeta.ptr || vmeta.recvType != "valueCanary" || *held != v {
-		panic(fmt.Sprintf("via: value-receiver method-value canary failed on %s — got name %q; "+
-			"via's action identity depends on a value receiver's copy sitting right after the "+
-			"code pointer. A Go toolchain change broke that assumption. File a bug.",
-			runtime.Version(), vmeta.name))
-	}
 }
 
 // actionID content-addresses a handler by its Go name ("main.(*Poll).Vote-fm")
 // plus, when the receiver lies inside this unit's composition, that receiver's
 // field path — the name alone drops the receiver, so two instances of one type
 // would collapse onto a single action. A method value with no receiver address
-// is keyed by valueMethodID instead.
+// panics (see noReceiverAddress).
 func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	pc := reflect.ValueOf(fn).Pointer()
 	meta := funcName(pc)
@@ -210,11 +193,7 @@ func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	ah = actionHandle{code: pc, self: self}
 	off, scoped := uintptr(0), false
 	if meta.method && !meta.ptr {
-		v := valueMethodID(c.unitV.typ, pc, meta)
-		if v.refusal != "" {
-			panic(render.Miswired(v.refusal))
-		}
-		return v.id, meta.name, actionHandle{code: pc, copy: v.copyDigest(self)}
+		panic(render.Miswired(noReceiverAddress(meta)))
 	}
 	if meta.method {
 		recv := methodRecv(self)
@@ -230,111 +209,22 @@ func (c *Ctx) actionID(fn any) (id, name string, ah actionHandle) {
 	return actionIDFor(c.unitV.typ, pc, meta, off, scoped), meta.name, ah
 }
 
-// valueID is the memoized verdict on a value-receiver or interface method
-// value within one unit type: its id, or why it has none.
-type valueID struct {
-	id      string
-	refusal string
-	off     uintptr // where the funcval holds the receiver copy
-	size    uintptr
-}
-
-type valueIDKey struct {
-	unit reflect.Type
-	pc   uintptr
-}
-
-var valueIDs sync.Map // valueIDKey -> valueID
-
-// valueMethodID keys a method value named "pkg.T.M-fm". That name is either a
-// value receiver, whose funcval captures a copy of T with no address, or an
-// interface T, whose funcval captures the itab and data words; neither's first
-// word is a receiver address.
-//
-// With no address, the type is all there is to go on. An interface is refused:
-// the value behind it is not a field of the unit, so there is no path to key
-// by. A value receiver whose type the unit holds at exactly one path (the unit
-// itself, or one field) is keyed by that path. Held at two paths, or at none
-// (a slice element, a local), via cannot say which copy a click meant, so it
-// is refused too.
-func valueMethodID(unit reflect.Type, pc uintptr, meta funcMeta) valueID {
-	k := valueIDKey{unit: unit, pc: pc}
-	if v, ok := valueIDs.Load(k); ok {
-		return v.(valueID)
-	}
-	paths, t, mixed := typePaths(unit, meta.recvPkg, meta.recvType)
-	var v valueID
-	switch {
-	case t != nil && t.Kind() == reflect.Interface, len(paths) != 1:
-		v.refusal = noReceiverAddress(meta, paths, t, mixed)
-	default:
-		path := paths[0]
-		if path == "" {
-			path = "0" // the same key a pointer receiver on the unit gets
-		}
-		v.id = hashID(meta.name + "@" + path)
-		ptr := unsafe.Sizeof(uintptr(0))
-		align := uintptr(t.Align())
-		v.off, v.size = (ptr+align-1)/align*align, t.Size()
-	}
-	valueIDs.Store(k, v)
-	return v
-}
-
-// copyDigest fingerprints the receiver copy a value-receiver funcval holds.
-// The path proves which field the type sits at, not that this copy came from
-// it: a copy taken off a slice row keys the same. Two copies that differ are
-// two handlers via cannot tell apart, and claimSlot sees different handles.
-func (v valueID) copyDigest(self unsafe.Pointer) uint64 {
-	if self == nil || v.size == 0 {
-		return 0
-	}
-	h := fnv.New64a()
-	h.Write(unsafe.Slice((*byte)(unsafe.Add(self, v.off)), v.size))
-	return h.Sum64()
-}
-
-// noReceiverAddress says why a method value has no id. mixed means the paths
-// hold different instantiations of one generic type: the runtime names every
-// instantiation's method "T[...].M-fm", and instantiations that share a GC
-// shape share one compiled body, so neither the name nor the code tells which
-// one a method value came from.
-func noReceiverAddress(meta funcMeta, paths []string, t reflect.Type, mixed bool) string {
-	name, typ := meta.name, meta.recvType
-	trimmed := strings.TrimSuffix(name, "-fm")
+// noReceiverAddress says why a method value named "pkg.T.M-fm" has no id. That
+// name is either a value receiver, whose funcval captures a copy of T, or an
+// interface T, whose funcval captures the itab and data words; neither holds a
+// receiver address to key the action by, and a value receiver's changes would
+// land on the copy.
+func noReceiverAddress(meta funcMeta) string {
+	trimmed := strings.TrimSuffix(meta.name, "-fm")
 	method := trimmed[strings.LastIndexByte(trimmed, '.')+1:]
-	where := ""
-	switch len(paths) {
-	case 0:
-	case 1:
-		where = " (field " + paths[0] + ")"
-	default:
-		where = " (fields " + strings.Join(paths, ", ") + ")"
-	}
-	recv := typ
-	if strings.Contains(name, "[...]") {
+	recv := meta.recvType
+	if strings.Contains(meta.name, "[...]") {
 		recv += "[T]"
 	}
-	fix := "Give it a pointer receiver: func (*" + recv + ") " + method + "."
-	switch {
-	case t != nil && t.Kind() == reflect.Interface:
-		return "via: action handler " + name + " is a method taken through an interface" + where +
-			": it carries no receiver address, and the value behind the interface is not a field of " +
-			"this unit, so via has nothing to key it by and a click could run another field's handler. " +
-			"Declare the field with its concrete type and bind a method with a pointer receiver on it."
-	case len(paths) > 1 && mixed:
-		return "via: action handler " + name + " has a value receiver on generic type " + typ +
-			", and this unit holds instantiations of it" + where + ": they cannot be told apart by name, " +
-			"so via cannot tell which field a click meant and could run the other one. " + fix
-	case len(paths) > 1:
-		return "via: action handler " + name + " has a value receiver and this unit holds " + typ + where +
-			": the method runs on a copy with no address, so via cannot tell which field a click " +
-			"meant and could run the other one. " + fix
-	}
-	return "via: action handler " + name + " has a value receiver or is taken through an interface, " +
-		"and its receiver is not a field of this unit (a pointer, slice or map element, or a local): " +
-		"it carries no receiver address, so via cannot tell such copies apart. " + fix +
-		" Hold the receiver as a struct field."
+	return "via: action handler " + meta.name + " has a value receiver or is taken through an interface: " +
+		"it carries no receiver address, so via cannot tell which field a click meant, and a value " +
+		"receiver's changes land on a copy. Give it a pointer receiver (func (*" + recv + ") " + method +
+		"), and hold an interface field by its concrete type."
 }
 
 // splitMethodName splits "pkg/path.T.M-fm" or "pkg/path.(*T[...]).M-fm" into
@@ -367,50 +257,6 @@ func baseTypeName(n string) string {
 
 func isType(t reflect.Type, pkg, typ string) bool {
 	return t.PkgPath() == pkg && baseTypeName(t.Name()) == typ
-}
-
-// typePaths lists where unit's own memory holds a pkg.typ, walking struct
-// fields and array elements as fieldPath does, never through a pointer: ""
-// for the unit itself, "A", "Stats.A", "Rows[0]". t is the matched type, and
-// mixed reports that the matches are different instantiations of a generic
-// typ. An array is walked for at most two elements, which is enough to tell
-// one holder from several.
-func typePaths(unit reflect.Type, pkg, typ string) (paths []string, t reflect.Type, mixed bool) {
-	w := typePathWalk{pkg: pkg, typ: typ}
-	if unit != nil {
-		w.walk(unit, "")
-	}
-	return w.paths, w.t, w.mixed
-}
-
-type typePathWalk struct {
-	pkg, typ string
-	paths    []string
-	t        reflect.Type
-	mixed    bool
-}
-
-func (w *typePathWalk) walk(cur reflect.Type, path string) {
-	if isType(cur, w.pkg, w.typ) {
-		w.mixed = w.mixed || w.t != nil && w.t != cur
-		w.paths, w.t = append(w.paths, path), cur
-		return
-	}
-	switch cur.Kind() {
-	case reflect.Struct:
-		for i := range cur.NumField() {
-			f := cur.Field(i)
-			p := f.Name
-			if path != "" {
-				p = path + "." + f.Name
-			}
-			w.walk(f.Type, p)
-		}
-	case reflect.Array:
-		for i := range min(cur.Len(), 2) {
-			w.walk(cur.Elem(), path+"["+strconv.Itoa(i)+"]")
-		}
-	}
 }
 
 // funcMeta is the per-code-pointer half of the actionID memo; all of it is

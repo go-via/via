@@ -570,12 +570,21 @@ func TestSignal_behindAMapFieldPanicsAtMount(t *testing.T) {
 
 func TestSignal_valueReceiverViewPanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertMountPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverView{}) })
+	assertMountPanic(t, "View has a value receiver", func() { via.Handler(valueReceiverView{}) })
+}
+
+type valueViewNoSignals struct{}
+
+func (valueViewNoSignals) View() h.H { return h.Div() }
+
+func TestMount_valueReceiverViewPanicsEvenWithoutSignals(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "func (p *valueViewNoSignals) View() h.H", func() { via.Handler(valueViewNoSignals{}) })
 }
 
 func TestSignal_valueReceiverChildPanicsAtMount(t *testing.T) {
 	t.Parallel()
-	assertSlotPanic(t, "View has a VALUE receiver", func() { via.Handler(valueReceiverChildParent{}) })
+	assertSlotPanic(t, "View has a value receiver", func() { via.Handler(valueReceiverChildParent{}) })
 }
 
 func TestSignal_slotCollidingWithAChildPrefixPanics(t *testing.T) {

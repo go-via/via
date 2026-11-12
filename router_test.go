@@ -1589,45 +1589,45 @@ type (
 	connectAction      struct{}
 )
 
-func (hookOnRelaod) View() h.H                          { return h.Div() }
+func (*hookOnRelaod) View() h.H                         { return h.Div() }
 func (*hookOnRelaod) OnRelaod(*via.Ctx) error           { return nil }
-func (hookOnInti) View() h.H                            { return h.Div() }
+func (*hookOnInti) View() h.H                           { return h.Div() }
 func (*hookOnInti) OnInti(*via.Ctx) error               { return nil }
-func (hookPgaeMeta) View() h.H                          { return h.Div() }
+func (*hookPgaeMeta) View() h.H                         { return h.Div() }
 func (*hookPgaeMeta) PgaeMeta() via.Meta                { return via.Meta{} }
-func (hookOnReloda) View() h.H                          { return h.Div() }
+func (*hookOnReloda) View() h.H                         { return h.Div() }
 func (*hookOnReloda) OnReloda(*via.Ctx) error           { return nil }
-func (hookOnRelod) View() h.H                           { return h.Div() }
+func (*hookOnRelod) View() h.H                          { return h.Div() }
 func (*hookOnRelod) OnRelod(*via.Ctx) error             { return nil }
-func (hookOnInitt) View() h.H                           { return h.Div() }
+func (*hookOnInitt) View() h.H                          { return h.Div() }
 func (*hookOnInitt) OnInitt(*via.Ctx) error             { return nil }
-func (hookOnReluad) View() h.H                          { return h.Div() }
+func (*hookOnReluad) View() h.H                         { return h.Div() }
 func (*hookOnReluad) OnReluad(*via.Ctx) error           { return nil }
-func (hookONINIT) View() h.H                            { return h.Div() }
+func (*hookONINIT) View() h.H                           { return h.Div() }
 func (*hookONINIT) ONINIT(*via.Ctx) error               { return nil }
-func (hookOnRelay) View() h.H                           { return h.Div() }
+func (*hookOnRelay) View() h.H                          { return h.Div() }
 func (*hookOnRelay) OnRelay(*via.Ctx) error             { return nil }
-func (hookOnInput) View() h.H                           { return h.Div() }
+func (*hookOnInput) View() h.H                          { return h.Div() }
 func (*hookOnInput) OnInput(*via.Ctx) error             { return nil }
-func (hookOnEdit) View() h.H                            { return h.Div() }
+func (*hookOnEdit) View() h.H                           { return h.Div() }
 func (*hookOnEdit) OnEdit(*via.Ctx) error               { return nil }
-func (hookOnExit) View() h.H                            { return h.Div() }
+func (*hookOnExit) View() h.H                           { return h.Div() }
 func (*hookOnExit) OnExit(*via.Ctx) error               { return nil }
-func (hookOnLoad) View() h.H                            { return h.Div() }
+func (*hookOnLoad) View() h.H                           { return h.Div() }
 func (*hookOnLoad) OnLoad(*via.Ctx) error               { return nil }
-func (hookPreload) View() h.H                           { return h.Div() }
+func (*hookPreload) View() h.H                          { return h.Div() }
 func (*hookPreload) Preload(*via.Ctx) error             { return nil }
-func (hookOnUnload) View() h.H                          { return h.Div() }
+func (*hookOnUnload) View() h.H                         { return h.Div() }
 func (*hookOnUnload) OnUnload(*via.Ctx) error           { return nil }
-func (hookOnline) View() h.H                            { return h.Div() }
+func (*hookOnline) View() h.H                           { return h.Div() }
 func (*hookOnline) Online(*via.Ctx) error               { return nil }
-func (hookOnInitialized) View() h.H                     { return h.Div() }
+func (*hookOnInitialized) View() h.H                    { return h.Div() }
 func (*hookOnInitialized) OnInitialized(*via.Ctx) error { return nil }
-func (hookInitialized) View() h.H                       { return h.Div() }
+func (*hookInitialized) View() h.H                      { return h.Div() }
 func (*hookInitialized) Initialized(*via.Ctx) error     { return nil }
-func (hookOnReloadAll) View() h.H                       { return h.Div() }
+func (*hookOnReloadAll) View() h.H                      { return h.Div() }
 func (*hookOnReloadAll) OnReloadAll(*via.Ctx) error     { return nil }
-func (hookPageMetaFor) View() h.H                       { return h.Div() }
+func (*hookPageMetaFor) View() h.H                      { return h.Div() }
 func (*hookPageMetaFor) PageMetaFor() via.Meta          { return via.Meta{} }
 
 func TestMount_warnsOnHookNamesOneEditAwayAndNoFurther(t *testing.T) {
@@ -1675,12 +1675,12 @@ func TestMount_warnsOnHookNamesOneEditAwayAndNoFurther(t *testing.T) {
 	}
 }
 
-func (v07ConnectWithInit) View() h.H                 { return h.Div() }
+func (*v07ConnectWithInit) View() h.H                { return h.Div() }
 func (*v07ConnectWithInit) OnInit(*via.Ctx) error    { return nil }
 func (*v07ConnectWithInit) OnConnect(*via.Ctx) error { return nil }
-func (v07ConnectAlone) View() h.H                    { return h.Div() }
+func (*v07ConnectAlone) View() h.H                   { return h.Div() }
 func (*v07ConnectAlone) OnConnect(*via.Ctx) error    { return nil }
-func (connectAction) View() h.H                      { return h.Div() }
+func (*connectAction) View() h.H                     { return h.Div() }
 func (*connectAction) OnConnect(*via.Ctx)            {}
 
 func TestMount_warnsOnAV07OnConnectEvenNextToOnInit(t *testing.T) {
@@ -1920,7 +1920,7 @@ type bootPtrChild struct{ Kid bootNoViewKid }
 
 func (p *bootPtrChild) View() h.H { return h.Div(via.Child(&p.Kid)) }
 
-type bootValKid struct{ S via.Signal[int] }
+type bootValKid struct{}
 
 func (k bootValKid) View() h.H { return h.Div() }
 
@@ -1949,12 +1949,12 @@ func TestMount_panicsOnAViewWiredWrongInItsZeroValue(t *testing.T) {
 		want  string
 	}{
 		{"shared action id", func(r *via.Router) { via.Mount(r, "/", bootSharedID{}) }, "share the action id"},
-		{"ambiguous value receiver", func(r *via.Router) { via.Mount(r, "/", genMixed{}) }, "fields A, B"},
+		{"value receiver action", func(r *via.Router) { via.Mount(r, "/", genVal{}) }, "value receiver"},
 		{"interface method value", func(r *via.Router) { via.Mount(r, "/", bootIface{A: &ifaceCounter{}}) }, "interface"},
 		{"El script", func(r *via.Router) { via.Mount(r, "/", bootScript{}) }, `El("script") is refused`},
 		{"unreachable signal", func(r *via.Router) { via.Mount(r, "/", bootLocalSignal{}) }, "has no slot in its unit"},
 		{"Child without a View", func(r *via.Router) { via.Mount(r, "/", bootPtrChild{}) }, "to have a View() h.H method"},
-		{"child with a value View and signals", func(r *via.Router) { via.Mount(r, "/", bootValViewChild{}) }, "VALUE receiver"},
+		{"child with a value View", func(r *via.Router) { via.Mount(r, "/", bootValViewChild{}) }, "View has a value receiver"},
 		{"child hook with the wrong signature", func(r *via.Router) { via.Mount(r, "/", bootBadHookChild{}) }, "OnInit has signature"},
 		{"signal named like the tab id", func(r *via.Router) { via.Mount(r, "/", bootTabSignal{}) }, "collides with via's own tab-id signal"},
 	}

@@ -745,7 +745,7 @@ func TestChild_childShapeFlipDoesNotStaleTheParentsOwnAction(t *testing.T) {
 // trigger the reuse lookup on the root's own first push.
 type childRootChild struct{}
 
-func (childRootChild) View() h.H { return h.Div(h.Str("child")) }
+func (*childRootChild) View() h.H { return h.Div(h.Str("child")) }
 
 type liveRootWithChild struct {
 	n     via.State[int]

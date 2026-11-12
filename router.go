@@ -177,18 +177,18 @@ func answerHookError(log *slog.Logger, w http.ResponseWriter, err error, failed 
 	}
 }
 
-// checkViewReceiver panics on a composition whose View has a value receiver
-// while it holds Signals. View is then called on a copy, so every Signal it
-// binds offsets from a stack address the render throws away. Panicking at
-// Mount/Child time fails at boot instead of answering 500 on every request.
+// checkViewReceiver panics on a composition whose View has a value receiver.
+// View is then called on a copy, so every Signal it binds offsets from a stack
+// address the render throws away and every action it binds runs on that copy.
+// One rule, pointer receivers everywhere, fails at boot instead of on a click.
 func checkViewReceiver(t reflect.Type) {
 	if _, done := valueReceiverChecked.Load(t); done {
 		return
 	}
-	if t != nil && t.Implements(viewerType) && len(signalsOf(t).fields) > 0 {
-		panic(render.Miswired("via: " + t.String() + ".View has a VALUE receiver and the composition holds Signals — " +
-			"View must take a POINTER receiver (func (p *" + t.Name() + ") View() h.H), or every " +
-			"rendered Signal binds against a discarded copy"))
+	if t != nil && t.Implements(viewerType) {
+		panic(render.Miswired("via: " + t.String() + ".View has a value receiver; give it a pointer receiver " +
+			"(func (p *" + t.Name() + ") View() h.H). via renders and acts on the composition in place, and a " +
+			"value receiver's View reads a copy: its Signals bind to the copy and its actions run on it."))
 	}
 	valueReceiverChecked.Store(t, true)
 }
@@ -497,7 +497,7 @@ func (r *Router) Close() {
 //
 // Mount renders root's View once, as mounted and without OnInit, and panics
 // on a wiring mistake that render reaches (two actions sharing an id, an
-// interface or ambiguous value-receiver method, h.El("script"), a Signal with
+// interface or value-receiver method, h.El("script"), a Signal with
 // no slot, a child without a View), rather than answering 500 on the first
 // request. Any other panic in that render is ignored. The check is
 // best-effort: a mistake behind a branch the zero value skips still panics on

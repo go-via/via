@@ -613,7 +613,7 @@ type litTrackKid struct {
 	Hits via.State[int64]
 }
 
-func (c litTrackKid) View() h.H { return h.P(h.Str("kid: "), c.Hits.Display()) }
+func (c *litTrackKid) View() h.H { return h.P(h.Str("kid: "), c.Hits.Display()) }
 
 type litTrackParent struct {
 	Kid litTrackKid

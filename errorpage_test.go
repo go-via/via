@@ -25,28 +25,28 @@ import (
 
 type errOK struct{}
 
-func (errOK) View() h.H { return h.Div(h.Str("ok")) }
+func (*errOK) View() h.H { return h.Div(h.Str("ok")) }
 
 type errMissing struct{}
 
-func (errMissing) OnInit(*via.Ctx) error { return via.ErrNotFound }
-func (errMissing) View() h.H             { return h.Div(h.Str("never")) }
+func (*errMissing) OnInit(*via.Ctx) error { return via.ErrNotFound }
+func (*errMissing) View() h.H             { return h.Div(h.Str("never")) }
 
 type errDenied struct{}
 
-func (errDenied) OnInit(*via.Ctx) error { return via.ErrForbidden }
-func (errDenied) View() h.H             { return h.Div(h.Str("never")) }
+func (*errDenied) OnInit(*via.Ctx) error { return via.ErrForbidden }
+func (*errDenied) View() h.H             { return h.Div(h.Str("never")) }
 
 type errBoom struct{}
 
-func (errBoom) View() h.H { panic("boom in View") }
+func (*errBoom) View() h.H { panic("boom in View") }
 
 type errAsset struct{}
 
-func (errAsset) PageMeta() via.Meta {
+func (*errAsset) PageMeta() via.Meta {
 	return via.Meta{Assets: via.Assets{Styles: []via.Style{{Href: "https://page.example/p.css"}}}}
 }
-func (errAsset) View() h.H { return h.Div(h.Str("asset")) }
+func (*errAsset) View() h.H { return h.Div(h.Str("asset")) }
 
 func errPage(ctx *via.Ctx, e via.PageError) h.H {
 	return h.Div(
@@ -278,8 +278,8 @@ func TestWithErrorPage_panicsOnConflict(t *testing.T) {
 
 type errParams struct{}
 
-func (errParams) OnInit(ctx *via.Ctx) error { ctx.Param[int]("id"); return nil }
-func (errParams) View() h.H                 { return h.Div(h.Str("params")) }
+func (*errParams) OnInit(ctx *via.Ctx) error { ctx.Param[int]("id"); return nil }
+func (*errParams) View() h.H                 { return h.Div(h.Str("params")) }
 
 type errLive struct {
 	n via.State[int]
@@ -574,8 +574,8 @@ func TestErrorPage_carriesALiveActionsPanic(t *testing.T) {
 
 type errActParam struct{}
 
-func (errActParam) Go(ctx *via.Ctx) { ctx.Param[int]("id") }
-func (p errActParam) View() h.H     { return h.Div(h.Button(on.Click(p.Go), h.Str("go"))) }
+func (*errActParam) Go(ctx *via.Ctx) { ctx.Param[int]("id") }
+func (p *errActParam) View() h.H     { return h.Div(h.Button(on.Click(p.Go), h.Str("go"))) }
 
 func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T) {
 	t.Parallel()
@@ -598,8 +598,8 @@ func TestErrorPage_carriesErrNotFoundForAParamAnActionCannotDecode(t *testing.T)
 
 type errClick struct{}
 
-func (errClick) Go(*via.Ctx) {}
-func (p errClick) View() h.H { return h.Div(h.Button(on.Click(p.Go))) }
+func (*errClick) Go(*via.Ctx) {}
+func (p *errClick) View() h.H { return h.Div(h.Button(on.Click(p.Go))) }
 
 func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
 	t.Parallel()
@@ -616,8 +616,8 @@ func TestNativeSubmit_anOversizeTextFieldAnswers413(t *testing.T) {
 
 type relRedirect struct{}
 
-func (relRedirect) Go(ctx *via.Ctx) { ctx.Redirect("?step=2") }
-func (p relRedirect) View() h.H     { return h.Div(h.Button(on.Click(p.Go))) }
+func (*relRedirect) Go(ctx *via.Ctx) { ctx.Redirect("?step=2") }
+func (p *relRedirect) View() h.H     { return h.Div(h.Button(on.Click(p.Go))) }
 
 func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
 	t.Parallel()
@@ -639,8 +639,8 @@ func TestNativeSubmit_aRelativeRedirectResolvesAgainstThePage(t *testing.T) {
 
 type errRotate struct{}
 
-func (errRotate) Out(ctx *via.Ctx) { ctx.Session().Rotate() }
-func (p errRotate) View() h.H      { return h.Button(on.Click(p.Out), h.Str("out")) }
+func (*errRotate) Out(ctx *via.Ctx) { ctx.Session().Rotate() }
+func (p *errRotate) View() h.H      { return h.Button(on.Click(p.Out), h.Str("out")) }
 
 func TestErrorPage_carriesErrStaleTabOnANativeSubmitToAnEndedStream(t *testing.T) {
 	t.Parallel()

@@ -206,7 +206,7 @@ func (p *Migrate) View() h.H {
 				"slice, array or map, or held by a type whose `View` has a value receiver, panics at `Mount` or `Child`.")...),
 			h.Li(inline("Two fields that mint the same slot name panic: a nested `A.B` (`a_b`) next to a field `A_b`.")...),
 			h.Li(inline("`Mount` renders the mounted value once, without `OnInit`, and panics on a wiring mistake it "+
-				"reaches: a func literal bound per row, an interface or ambiguous value-receiver method, "+
+				"reaches: a func literal bound per row, an interface or value-receiver method, "+
 				"`h.El(\"script\")`, a Signal with no slot, a signal named `viatab`, a child without a `View`. One behind a branch the "+
 				"empty value skips panics at the first render that takes it.")...),
 			h.Li(inline("A `Mount` path with a `{name...}` or `{$}` wildcard, or one named `{child}` or `{act}`, "+

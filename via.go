@@ -653,7 +653,7 @@ func ctxOf(b render.Binder) *Ctx {
 // so a signal's wire identity is independent of where the View renders it.
 //
 // Anything else panics. A Signal behind a pointer, slice, array, map or interface field,
-// or bound off a value receiver's stack copy, has no field offset: its writes
+// or bound off a stack copy, has no field offset: its writes
 // land on memory the render discards, and any invented name is positional, so
 // a conditional Bind hands one signal's slot to another and the next post
 // writes the wrong field. The subtraction is unsigned, so a field below the

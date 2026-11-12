@@ -156,7 +156,7 @@ func TestLogger_dropsARecordLoggedAfterTheTestEnded(t *testing.T) {
 
 type misnamed struct{}
 
-func (misnamed) View() h.H              { return h.Div() }
+func (*misnamed) View() h.H             { return h.Div() }
 func (*misnamed) Oninit(*via.Ctx) error { return nil }
 
 func TestConnAwait_findsAFrameLargerThanAScannerToken(t *testing.T) {

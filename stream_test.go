@@ -580,7 +580,7 @@ func TestLive_streamsElementPatchFramesThatMorphRoot(t *testing.T) {
 // header has gone out on the response.
 type boomOnDiscovery struct{}
 
-func (boomOnDiscovery) View() h.H { panic("via_test: discovery render exploded") }
+func (*boomOnDiscovery) View() h.H { panic("via_test: discovery render exploded") }
 
 func TestLive_connectPanicBeforeHeadersAnswers500(t *testing.T) {
 	t.Parallel()

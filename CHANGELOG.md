@@ -16,6 +16,10 @@
 - **Breaking:** a child's state lives in its parent's field, and its `OnInit`
   runs once per request, or once per connection on a live page. A plain child
   of a live root no longer re-runs `OnInit` on every pushed frame.
+- **Breaking:** every `View` and every action takes a pointer receiver. A
+  value-receiver `View` panics at Mount even on a type with no Signals, and a
+  value-receiver action panics even where its type sits at one field: the
+  method ran on a copy, so its changes were lost.
 - The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
   longer panics on its first Subscribe or Publish. `topic.New` still works.
 

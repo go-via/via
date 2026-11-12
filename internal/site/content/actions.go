@@ -63,7 +63,7 @@ func (p *Actions) View() h.H {
 			[]h.H{Code("func (t *T) M(ctx *via.Ctx, v V)"), h.Span(h.Str("Bind with "), Code("on.Click(on.Bind(t.M, v))"), h.Str("; see Arguments below."))},
 			[]h.H{h.Str("A return value, no Ctx, a second argument without on.Bind"), h.Span(h.Str("Does not compile: the binders accept "), Code("func(*via.Ctx)"), h.Str(" or an "), API("on.Bound"), h.Str(" only."))},
 			[]h.H{h.Str("A func literal in a loop or an Each row"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value has no rows: every copy has the same Go name, so via cannot tell them apart. Use a method and on.Bind.")},
-			[]h.H{h.Str("A method taken through an interface field, or a value receiver whose type sits at two fields or at none"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value does not reach it: via cannot tell which value the method belongs to. Give the method a pointer receiver and hold the concrete type in the field; a value receiver on the page, or on a type only one field holds, works.")},
+			[]h.H{h.Str("A method with a value receiver, or taken through an interface field"), h.Str("Compiles, then panics at Mount, or at the first render if the empty value does not reach it: the method carries no receiver address, so via cannot tell which field it belongs to, and a value receiver's changes land on a copy. Give the method a pointer receiver and hold the concrete type in the field.")},
 		),
 		h.P(h.Str("An action returns nothing. Report a failure the user can fix by setting state, such as an error Signal; a panic is a 500. "+
 			"Mount checks the lifecycle hooks' signatures, not actions': the two rows above are the only action checks, and a render has to reach the binding to run them.")),

@@ -11,12 +11,11 @@
 // An action is a pointer-receiver method of the composition or of one of its
 // struct fields (c.Inc, c.Stats.Reset). Its id is the method's name plus that
 // field's path, so it survives a rebuild and a field reorder. A value-receiver
-// method has no address, so it works only where its type sits at one path: on
-// the composition itself, or on a type exactly one field holds. Bound where
-// the type sits at several fields or at none, or taken through an interface
-// field, it panics at Mount, or on the first render if the zero value does not
-// reach it, since via could not tell the buttons apart. A func literal bound
-// once per row does the same; bind a method with [Bind] instead.
+// method, or one taken through an interface field, has no receiver address: it
+// panics at Mount, or on the first render if the zero value does not reach it,
+// since via cannot tell which field it belongs to, and a value receiver's
+// changes land on a copy. A func literal bound once per row does the same;
+// bind a method with [Bind] instead.
 package on
 
 import (

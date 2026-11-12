@@ -17,7 +17,7 @@ import (
 
 type headPage struct{}
 
-func (headPage) View() h.H { return h.Div(h.Str("hi")) }
+func (*headPage) View() h.H { return h.Div(h.Str("hi")) }
 
 func headResp(t *testing.T, head via.Head) (*http.Response, string) {
 	t.Helper()
@@ -257,7 +257,7 @@ func TestPageMeta_writesEveryInertSlot(t *testing.T) {
 
 type inertPage struct{}
 
-func (inertPage) PageMeta() via.Meta {
+func (*inertPage) PageMeta() via.Meta {
 	return via.Meta{
 		Title: "Ticket #7", Description: "A printer is on fire",
 		Canonical: "https://example.com/t/7", Robots: "noindex",
@@ -265,7 +265,7 @@ func (inertPage) PageMeta() via.Meta {
 		Twitter: map[string]string{"card": "summary"},
 	}
 }
-func (inertPage) View() h.H { return h.Div(h.Str("hi")) }
+func (*inertPage) View() h.H { return h.Div(h.Str("hi")) }
 
 func TestPageMeta_readsDataLoadedByOnInit(t *testing.T) {
 	t.Parallel()
@@ -288,14 +288,14 @@ func TestPageMeta_escapesEveryInertSlot(t *testing.T) {
 
 type escapingPage struct{}
 
-func (escapingPage) PageMeta() via.Meta {
+func (*escapingPage) PageMeta() via.Meta {
 	return via.Meta{
 		Title:       `</title><script>x()</script>`,
 		Description: `" onload="x`,
 		OG:          map[string]string{"title": `" onload="x`},
 	}
 }
-func (escapingPage) View() h.H { return h.Div(h.Str("hi")) }
+func (*escapingPage) View() h.H { return h.Div(h.Str("hi")) }
 
 func TestPageMeta_anEmbeddedUnitCannotRenameThePage(t *testing.T) {
 	t.Parallel()
@@ -344,18 +344,18 @@ func TestPageMeta_inertFieldsDoNotTouchTheCSP(t *testing.T) {
 
 type assetPage struct{}
 
-func (assetPage) PageMeta() via.Meta {
+func (*assetPage) PageMeta() via.Meta {
 	return via.Meta{Title: "charts", Assets: via.Assets{
 		Scripts: []via.Script{{Src: "https://cdn.charts.example/c.js", Module: true}},
 		Styles:  []via.Style{{Inline: "svg{display:block}"}},
 	}}
 }
-func (assetPage) View() h.H { return h.Div(h.Str("chart")) }
+func (*assetPage) View() h.H { return h.Div(h.Str("chart")) }
 
 type plainPage struct{}
 
-func (plainPage) PageMeta() via.Meta { return via.Meta{Title: "plain"} }
-func (plainPage) View() h.H          { return h.Div(h.Str("plain")) }
+func (*plainPage) PageMeta() via.Meta { return via.Meta{Title: "plain"} }
+func (*plainPage) View() h.H          { return h.Div(h.Str("plain")) }
 
 func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 	t.Parallel()
@@ -377,7 +377,7 @@ func TestPageMeta_assetsWidenOnlyTheirOwnMount(t *testing.T) {
 
 type assetCounter struct{ n int }
 
-func (*assetCounter) PageMeta() via.Meta { return assetPage{}.PageMeta() }
+func (*assetCounter) PageMeta() via.Meta { return (&assetPage{}).PageMeta() }
 func (c *assetCounter) Inc(*via.Ctx)     { c.n++ }
 func (c *assetCounter) View() h.H {
 	return h.Div(h.Str(c.n), h.Button(on.Click(c.Inc), h.Str("+")))
@@ -476,10 +476,10 @@ func TestPageMeta_validatesItsAssetsAtMount(t *testing.T) {
 
 type badAssetPage struct{}
 
-func (badAssetPage) PageMeta() via.Meta {
+func (*badAssetPage) PageMeta() via.Meta {
 	return via.Meta{Assets: via.Assets{Scripts: []via.Script{{Src: "javascript:alert(1)"}}}}
 }
-func (badAssetPage) View() h.H { return h.Div(h.Str("x")) }
+func (*badAssetPage) View() h.H { return h.Div(h.Str("x")) }
 
 // The boot probe writes into a copy of the mounted literal, and a sync.Mutex's
 // zero state is an invariant: perturbing it makes the next Lock a runtime throw
@@ -576,26 +576,26 @@ func TestMount_logsWhenTheAssetProbeIsRefused(t *testing.T) {
 
 type ogDefaultsPage struct{}
 
-func (ogDefaultsPage) PageMeta() via.Meta {
+func (*ogDefaultsPage) PageMeta() via.Meta {
 	return via.Meta{
 		Title: "Ticket #7", Description: "A printer is on fire",
 		Canonical: "https://example.com/t/7",
 		OG:        map[string]string{"type": "article"},
 	}
 }
-func (ogDefaultsPage) View() h.H { return h.Div(h.Str("x")) }
+func (*ogDefaultsPage) View() h.H { return h.Div(h.Str("x")) }
 
 type ogExplicitPage struct{}
 
-func (ogExplicitPage) PageMeta() via.Meta {
+func (*ogExplicitPage) PageMeta() via.Meta {
 	return via.Meta{Title: "y", OG: map[string]string{"title": "x"}}
 }
-func (ogExplicitPage) View() h.H { return h.Div(h.Str("x")) }
+func (*ogExplicitPage) View() h.H { return h.Div(h.Str("x")) }
 
 type ogAbsentPage struct{}
 
-func (ogAbsentPage) PageMeta() via.Meta { return via.Meta{Title: "Ticket #7"} }
-func (ogAbsentPage) View() h.H          { return h.Div(h.Str("x")) }
+func (*ogAbsentPage) PageMeta() via.Meta { return via.Meta{Title: "Ticket #7"} }
+func (*ogAbsentPage) View() h.H          { return h.Div(h.Str("x")) }
 
 func TestPageMeta_defaultsOpenGraphFromTitleDescriptionAndCanonical(t *testing.T) {
 	t.Parallel()
@@ -639,8 +639,8 @@ func TestDocumentHead_writesHTMLAndBodyAttrsAfterViasOwn(t *testing.T) {
 
 type attrPage struct{ meta via.Meta }
 
-func (p attrPage) PageMeta() via.Meta { return p.meta }
-func (attrPage) View() h.H            { return h.Div(h.Str("hi")) }
+func (p *attrPage) PageMeta() via.Meta { return p.meta }
+func (*attrPage) View() h.H            { return h.Div(h.Str("hi")) }
 
 func TestPageMeta_attrsOverrideTheRoutersByNameAndJoinClasses(t *testing.T) {
 	t.Parallel()
