@@ -13,7 +13,7 @@ import (
 // Prices is an island fed by one producer that every open tab shares. The
 // stream opening claims it; the stream closing releases it.
 type Prices struct {
-	Series via.Signal[[]int] `via:"init=[]"`
+	Series via.Signal[[]int]
 }
 
 func (p *Prices) OnInit(ctx *via.Ctx) error {

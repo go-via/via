@@ -160,3 +160,16 @@ func TestSub_stopSignalsTheWakeChannel(t *testing.T) {
 	s.Stop()
 	assert.Len(t, ch, 1)
 }
+
+func TestTopic_zeroValueIsUsable(t *testing.T) {
+	t.Parallel()
+	var tp topic.Topic[string]
+	tp.Publish("before any subscriber")
+	s := tp.Subscribe()
+	tp.Publish("hi")
+	<-s.Ready()
+	v, ok := s.Drain()
+	assert.Equal(t, []string{"hi"}, v)
+	assert.True(t, ok)
+	assert.Equal(t, 1, tp.NumSubs())
+}

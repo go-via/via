@@ -17,7 +17,7 @@ const maxSamples = 40
 // the island without a Bind or a Display. The tag starts it at an empty array,
 // so the effect never sees the null a nil slice would marshal to.
 type Sparkline struct {
-	Load via.Signal[[]int] `via:"init=[]"`
+	Load via.Signal[[]int]
 	load []int
 }
 

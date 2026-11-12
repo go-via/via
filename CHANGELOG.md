@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
+  longer panics on its first Subscribe or Publish. `topic.New` still works.
+
 ## v0.10.0 — SignalCS.Set, Meta.Lang, plain-action signal frames (2026-10-24)
 
 ### New

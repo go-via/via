@@ -92,7 +92,7 @@ func (p *Live) View() h.H {
 		d.H2("Topics"),
 		demo.Card(d.H3("Broadcast feed"),
 			h.P(h.Str("A "), API("topic.Topic"), h.Str(" is built with "), API("topic.New"),
-				h.Str(" and held for the life of the process; the zero Topic is not usable. "), API("via.Ctx.Listen"),
+				h.Str(" (or declared as a zero value) and held for the life of the process. "), API("via.Ctx.Listen"),
 				h.Str(" subscribes this unit, runs the handler on its tab's stream goroutine for every value, and "+
 					"unsubscribes when the tab goes away. The list is this tab's own and keeps the newest 50; "+
 					"posting is capped at 20 a minute per client IP.")),

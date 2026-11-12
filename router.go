@@ -502,6 +502,10 @@ func (r *Router) Close() {
 // request. Any other panic in that render is ignored. The check is
 // best-effort: a mistake behind a branch the zero value skips still panics on
 // the first render that takes it.
+//
+// Each request or tab gets a shallow copy of root, so a non-nil map or slice in
+// it is shared by all of them. Mount logs a WARN naming each one; hold it
+// behind a pointer to say the sharing is meant.
 func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
 	verifyMethodTrampoline()
@@ -520,6 +524,13 @@ func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...Mount
 	checkViewReceiver(rootType)
 	checkHooks(r.cfg.log, rootType, &r.hookWarned, true)
 	signalsOf(rootType) // walk the type at Mount, so a mis-held Signal fails at boot and not per request
+	if shared := sharedFields(reflect.ValueOf(root), rootType.String(), 0); len(shared) > 0 {
+		r.cfg.log.Warn("via: the mounted "+rootType.String()+" holds a map or slice that every request and tab "+
+			"shares, because each copy of the page is a shallow copy of this literal. A write to it (a map "+
+			"assignment, an element set, an append within capacity) is a data race and leaks between users. "+
+			"Build it in OnInit, or hold it behind a pointer if the sharing is meant.",
+			"fields", shared)
+	}
 	m := &mount{
 		routerShared: &r.routerShared, root: rootOf[T, PT]{root: root, typ: rootType},
 		patternBase: patternBase, pageSuffix: pageSuffix, names: names,
@@ -782,6 +793,33 @@ func foreignStruct(t reflect.Type, pkg string) bool {
 	// An anonymous struct (PkgPath "") is written in the page's own source, so
 	// it is the author's to perturb.
 	return t.PkgPath() != ""
+}
+
+// sharedFields lists the non-nil maps and slices in v, through nested
+// struct fields. Pointers are skipped: they say the sharing is meant. via's
+// own types are skipped: their contents are per-copy by construction.
+func sharedFields(v reflect.Value, path string, depth int) []string {
+	if depth > 8 || v.Kind() != reflect.Struct || inVia(v.Type().PkgPath()) {
+		return nil
+	}
+	var out []string
+	for i := range v.NumField() {
+		f, name := v.Field(i), path+"."+v.Type().Field(i).Name
+		switch f.Kind() {
+		case reflect.Map, reflect.Slice:
+			if !f.IsNil() {
+				out = append(out, name)
+			}
+		case reflect.Struct:
+			out = append(out, sharedFields(f, name, depth+1)...)
+		}
+	}
+	return out
+}
+
+func inVia(pkg string) bool {
+	root := strings.TrimSuffix(viaPkg, ".")
+	return pkg == root || strings.HasPrefix(pkg, root+"/")
 }
 
 // rootOf gives every non-generic internal a fresh, correctly-typed root

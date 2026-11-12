@@ -351,7 +351,7 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 	allowed := map[string][]string{
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.New", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
-			"reflect.TypeOf"},
+			"reflect.TypeOf", "reflect.Uint8"},
 		// action.go resolves a handler's Go name off its code pointer and its
 		// receiver's field path off the unit type, once per (unit type, fn,
 		// receiver offset) and memoized — see actionID. A value-receiver
@@ -363,11 +363,11 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 		// hooks.go checks each composition type's hook methods once — see
 		// checkHooks.
 		"hooks.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
-		// router.go's kind switch is the Assets constancy probe, which runs once
-		// per Mount and never again.
+		// router.go's kind switches are the Assets constancy probe and the
+		// shared map/slice check, which run once per Mount and never again.
 		"router.go": {"reflect.Bool", "reflect.Float32", "reflect.Float64", "reflect.Int",
-			"reflect.Int16", "reflect.Int32", "reflect.Int64", "reflect.Int8", "reflect.NewAt",
-			"reflect.PointerTo", "reflect.String", "reflect.Struct", "reflect.Type",
+			"reflect.Int16", "reflect.Int32", "reflect.Int64", "reflect.Int8", "reflect.Map", "reflect.NewAt",
+			"reflect.PointerTo", "reflect.Slice", "reflect.String", "reflect.Struct", "reflect.Type",
 			"reflect.TypeOf", "reflect.Uint", "reflect.Uint16", "reflect.Uint32",
 			"reflect.Uint64", "reflect.Uint8", "reflect.Value", "reflect.ValueOf"},
 	}

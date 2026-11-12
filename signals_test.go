@@ -1181,7 +1181,7 @@ func (p *csSetSlice) View() h.H {
 	return h.Div(h.Button(on.Click(p.Fill)), h.Button(on.Click(p.Clear)))
 }
 
-func TestPlainSignalCS_setSendsASliceWholeAndANilAsNull(t *testing.T) {
+func TestPlainSignalCS_setSendsASliceWholeAndANilAsEmpty(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(csSetSlice{}))
 
@@ -1189,7 +1189,7 @@ func TestPlainSignalCS_setSendsASliceWholeAndANilAsNull(t *testing.T) {
 	assert.Contains(t, frag, "data: signals {\"_rows\":[1,2]}")
 
 	_, frag = app.Action(1).Fire()
-	assert.Contains(t, frag, "data: signals {\"_rows\":null}", "a nil slice deletes the signal on the client")
+	assert.Contains(t, frag, "data: signals {\"_rows\":[]}", "a nil slice must not delete the signal on the client")
 }
 
 type editLeaf struct {
@@ -1261,4 +1261,25 @@ func TestPlainAction_signalOnlyAnswerDoesNotWarnItChangedNothing(t *testing.T) {
 
 	require.Equal(t, http.StatusOK, status)
 	assert.NotContains(t, buf.String(), "changed nothing")
+}
+
+type nilColl struct {
+	tags  via.Signal[[]string]
+	attrs via.Signal[map[string]int]
+	reset via.Signal[[]int]
+}
+
+func (c *nilColl) OnInit(*via.Ctx) error { c.reset.Set(nil); return nil }
+func (c *nilColl) View() h.H {
+	return h.Div(c.tags.Display(), c.attrs.Display(), c.reset.Display())
+}
+
+func TestDataSignals_nilSliceOrMapReachesTheClientEmptyNotNull(t *testing.T) {
+	t.Parallel()
+	_, body := vt.Serve(t, via.Handler(nilColl{})).Get("/")
+
+	assert.Contains(t, body, `"tags":[]`, "a zero slice signal must not be sent as null")
+	assert.Contains(t, body, `"attrs":{}`, "a zero map signal must not be sent as null")
+	assert.Contains(t, body, `"reset":[]`, "Set(nil) must not delete the client signal")
+	assert.NotContains(t, body, "null")
 }

@@ -85,7 +85,7 @@ var changes = []change{
 	{"`StateApp[T]`", "your own store, injected; a `topic.Topic[T]` and `via.StateTrack` to push its changes", byCompiler},
 	{"`app.Broadcast`, `BroadcastSignals`, `BroadcastNotify`, `via.BroadcastSignal`", "`topic.New[T]()`, subscribed with `ctx.Listen` in `OnInit`", byCompiler},
 	{"`OnConnect(ctx) error`", "`ctx.Tick` or `ctx.Listen` in `OnInit`; `ctx.OnConnect(fn)` for work on stream open", byWarn},
-	{"`OnDispose(ctx)`", "`ctx.OnDispose(fn)`, registered in `OnInit`", bySilent},
+	{"`OnDispose(ctx)`", "`ctx.OnDispose(fn)`, registered in `OnInit`", byWarn},
 	{"`via.Stream(ctx, d, fn)`", "`ctx.Tick(d, fn)` in `OnInit`", byCompiler},
 	{"`ctx.Notify`, `ctx.ExecScript`, `ctx.Reload`, `ctx.SyncNow`, `ctx.Patch`", "gone", byCompiler},
 	{"`ctx.Cookie`, `ctx.SetCookie`, `ctx.Writer()`", "`ctx.Request().Cookie(name)`; there is no response access, so keep the value in the session", byCompiler},
@@ -171,7 +171,7 @@ func (p *Migrate) View() h.H {
 		h.P(h.Str("These compile and start. The first sign is behaviour:")),
 		h.Ul(silentRows()...),
 		h.P(inline("A leftover `OnConnect(ctx) error` is warned about, with or without an `OnInit` next to it: at `Mount` on the page, on a child's first render. "+
-			"A leftover `OnDispose(ctx)` has an action's shape, so nothing reports it.")...),
+			"A leftover `OnDispose(ctx)` is warned about too, though it has an action's shape.")...),
 
 		d.H2("Removed outright"),
 		h.Ul(

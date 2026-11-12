@@ -242,7 +242,7 @@ func TestHooks_leftoverMethodsNeverRun(t *testing.T) {
 	vt.Serve(t, via.Handler(V07{}, logTo(buf))).Get("/")
 	assert.Contains(t, buf.String(), "via: troubleshooting_test.V07.OnConnect is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
 		"Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and ctx.Tick or ctx.Listen makes the unit live.")
-	assert.NotContains(t, buf.String(), "V07.OnDispose", "a v0.7 OnDispose has an action's shape, so it is silent")
+	assert.Contains(t, buf.String(), "via: troubleshooting_test.V07.OnDispose is shaped like the v0.7 OnDispose hook, which v0.8 never calls.")
 
 	buf = &syncBuf{}
 	vt.Serve(t, via.Handler(Misnamed{}, logTo(buf))).Get("/")

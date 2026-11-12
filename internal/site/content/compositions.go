@@ -58,7 +58,8 @@ func (p *Compositions) View() h.H {
 		h.P(APIText("via.Child", "via.Child(p.Chat)"), h.Str(" renders a field as its own unit, with its own container, "),
 			Code("OnInit"), h.Str(" and actions. The argument must be a field selector: Child copies the child at every render, "+
 				"and a composite literal there would re-seed it each time. Value fields are copied, so each connection has its own; "+
-				"pointer fields are shared, which is how two children reach one store.")),
+				"pointer fields are shared, which is how two children reach one store. A map or slice is a reference too, so a non-nil one "+
+				"in the mounted literal is shared by every request; Mount warns about it.")),
 		h.P(h.Str("A child's "), d.Link("/glossary#positional-child-key", "key"), h.Str(" is its position among its parent's Child calls, joined to the parent's key: "), Code("0"),
 			h.Str(", "), Code("0-1"), h.Str(". The key is the container id ("), Code("#via-i0-1"),
 			h.Str(") and the address in the child's action URLs. Signal names come from the field path instead: the child's field name "+

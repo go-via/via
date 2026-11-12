@@ -124,11 +124,12 @@ It catches two of the three ways to get this wrong:
   `Metadata`, `PageMetadata`, `GetPageMeta`, `DocumentMeta`, `PageInfo` for
   `PageMeta`. A v0.7 `OnConnect(ctx *via.Ctx) error` is warned about with or
   without an `OnInit` next to it, and the warning names what replaced it.
-  Each warning is logged once per type.
-- **Silent**: everything else. A v0.7 `OnDispose(ctx *via.Ctx)` has an
-  action's shape, so it is an ordinary method nothing calls, and the type walk
-  says nothing. A `Signal` behind an interface field is likewise invisible to
-  the walk and only panics on the first render that binds it.
+  So is a v0.7 `OnDispose(ctx *via.Ctx)` (since the release after v0.10.0;
+  it has an action's shape, so it warns rather than panics). Each warning is
+  logged once per type.
+- **Silent**: everything else. A `Signal` behind an interface field is
+  invisible to the type walk and only panics on the first render that binds
+  it.
 
 `OnInit` runs per request: on the GET, on every
 plain action, and on the SSE connect, but not on a live action over an
@@ -305,7 +306,7 @@ child's warning waits for its first render), or nothing.
 - `OnConnect(ctx) error` → `ctx.Tick` or `ctx.Listen` in `OnInit`;
   `ctx.OnConnect(fn)` for work on stream open. Caught by: warning.
 - `OnDispose(ctx)` → `ctx.OnDispose(fn)`, registered in `OnInit`. Caught by:
-  silent.
+  warning.
 - `via.Stream(ctx, d, fn)` → `ctx.Tick(d, fn)` in `OnInit`. Caught by: compiler.
 - `ctx.Notify`, `ctx.ExecScript`, `ctx.Reload`, `ctx.SyncNow`, `ctx.Patch` →
   gone. Caught by: compiler.

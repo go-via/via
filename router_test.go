@@ -1512,6 +1512,43 @@ func TestMount_warnsOnAOneLetterSlipOfTheV07OnConnect(t *testing.T) {
 	assert.Contains(t, logged, "droppedLetterConnect.OnConect is shaped like the v0.7 OnConnect hook")
 }
 
+type v07Dispose struct{ N via.Signal[int] }
+
+func (v *v07Dispose) OnDispose(*via.Ctx) {}
+func (v *v07Dispose) View() h.H          { return h.Div(v.N.Display()) }
+
+func TestMount_warnsOnTheV07OnDisposeMethod(t *testing.T) {
+	// sequential: swaps the global log writer
+	logged := captureLog(t, func() { via.Mount(via.NewRouter(), "/", v07Dispose{}) })
+	assert.Contains(t, logged, "v07Dispose.OnDispose is shaped like the v0.7 OnDispose hook")
+}
+
+type sharedInner struct{ Seen map[string]bool }
+
+type sharedFields struct {
+	Tags  []string
+	Inner sharedInner
+	Store *map[string]int // a pointer says the sharing is meant
+	Empty map[string]int
+	N     via.Signal[int]
+}
+
+func (s *sharedFields) View() h.H { return h.Div(s.N.Display()) }
+
+func TestMount_warnsOnAMapOrSliceEveryRequestWouldShare(t *testing.T) {
+	// sequential: swaps the global log writer
+	store := map[string]int{}
+	logged := captureLog(t, func() {
+		via.Mount(via.NewRouter(), "/", sharedFields{
+			Tags: []string{"a"}, Inner: sharedInner{Seen: map[string]bool{}}, Store: &store,
+		})
+	})
+	assert.Contains(t, logged, "sharedFields.Tags")
+	assert.Contains(t, logged, "sharedFields.Inner.Seen")
+	assert.NotContains(t, logged, "sharedFields.Store")
+	assert.NotContains(t, logged, "sharedFields.Empty")
+}
+
 // The near-miss check must not fire for an ordinary method that merely shares a
 // hook's signature — being one keystroke off a hook name is the whole trigger.
 type unrelatedHookShapedMethod struct{ N via.Signal[int] }

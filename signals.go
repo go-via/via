@@ -24,6 +24,9 @@ func encodeSlots(log *slog.Logger, want []string, initial map[string]any) (raw [
 	obj.WriteByte('{')
 	for _, slot := range want {
 		val, err := json.Marshal(initial[slot])
+		if err == nil && string(val) == "null" {
+			val = emptyForNil(initial[slot], val)
+		}
 		if err != nil {
 			log.Warn("via: a signal holds a value encoding/json cannot marshal; it is left out of "+
 				"the signals sent to the client and the client store has no value for it — make the type JSON-round-trippable",
@@ -243,9 +246,8 @@ func (s *Signal[T]) Get() T { return s.val }
 // keys the new value omits keep their old client value, and a null deletes.
 // To drop a key, Set a slice instead, or a value that marks the entry gone.
 //
-// A nil slice or map marshals as JSON null, which deletes the signal on the
-// client, and a client-side forEach or index then faults. Start such a signal
-// at an empty one with a field tag: `via:"init=[]"`.
+// A nil slice or map reaches the client as [] or {}, never as null, which
+// would delete the signal there.
 func (s *Signal[T]) Set(v T) {
 	s.val = v
 	s.set(v)
@@ -398,7 +400,7 @@ func (s *SignalCS[T]) Ref() expr.Expr { return s.ref("SignalCS") }
 // Set: the client may have changed it since, and the server never sees that.
 //
 // Map, struct and nil values reach the client as for [Signal.Set]: a JSON
-// merge patch, and a nil slice or map deletes the signal.
+// merge patch, and a nil slice or map arrives as [] or {}.
 //
 // Not safe for concurrent use; call it from the same via callbacks as
 // [Signal.Set].

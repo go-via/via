@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// Topic is a typed fan-out broker. Its zero value is not usable; call New.
+// Topic is a typed fan-out broker. Its zero value is ready to use.
 type Topic[T any] struct {
 	mu    sync.Mutex
 	subs  map[*Sub[T]]struct{}
@@ -22,12 +22,7 @@ type Topic[T any] struct {
 // and is meant to live for the process: declare it as a package-level var and
 // let children subscribe to it with ctx.Listen. It has no Close; a Topic with no
 // subscribers costs one lock per publish.
-func New[T any]() *Topic[T] {
-	return &Topic[T]{
-		subs:  make(map[*Sub[T]]struct{}),
-		wakes: make(map[chan<- struct{}]struct{}),
-	}
-}
+func New[T any]() *Topic[T] { return &Topic[T]{} }
 
 // DefaultLimit bounds how many undelivered values one subscriber may hold. It
 // is a runaway guard, not a rate limit: a consumer drains its whole backlog in
@@ -60,6 +55,9 @@ func (t *Topic[T]) SubscribeLimit(limit int) *Sub[T] {
 	}
 	s := &Sub[T]{topic: t, ready: make(chan struct{}, 1), limit: limit}
 	t.mu.Lock()
+	if t.subs == nil {
+		t.subs = make(map[*Sub[T]]struct{})
+	}
 	t.subs[s] = struct{}{}
 	t.mu.Unlock()
 	return s
@@ -96,6 +94,9 @@ func (t *Topic[T]) Publish(v T) {
 	// frame, not a split delivery.
 	for s := range t.subs {
 		if wake, ok := s.enqueue(v); ok && wake != nil {
+			if t.wakes == nil {
+				t.wakes = make(map[chan<- struct{}]struct{})
+			}
 			t.wakes[wake] = struct{}{}
 		}
 	}

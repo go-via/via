@@ -181,7 +181,8 @@ func warnLeftoverTitle(log *slog.Logger, t, pt reflect.Type) {
 }
 
 // warnMisnamedMethods warns on a method with a hook's exact signature under a
-// name via never calls: the v0.7 OnConnect, or a near-miss of a current hook.
+// name via never calls: the v0.7 OnConnect or OnDispose, or a near-miss of a
+// current hook.
 func warnMisnamedMethods(log *slog.Logger, t, pt reflect.Type) {
 	for i := range pt.NumMethod() {
 		m := pt.Method(i)
@@ -189,6 +190,14 @@ func warnMisnamedMethods(log *slog.Logger, t, pt reflect.Type) {
 			log.Warn(fmt.Sprintf("via: %s.%s is shaped like the v0.7 OnConnect hook, which v0.8 never calls. "+
 				"Move its work into OnInit: ctx.OnConnect(fn) runs fn once when the stream opens, and "+
 				"ctx.Tick or ctx.Listen makes the unit live.", t.String(), m.Name))
+			continue
+		}
+		if oneSlip(strings.ToLower(m.Name), "ondispose") && ctxShaped(m.Type) {
+			// Warn, not panic: this is also an action's shape, and an action may
+			// carry the name.
+			log.Warn(fmt.Sprintf("via: %s.%s is shaped like the v0.7 OnDispose hook, which v0.8 never calls. "+
+				"Register the release from OnInit instead: ctx.OnDispose(fn) runs fn when the stream closes.",
+				t.String(), m.Name))
 			continue
 		}
 		name, aliased := aliasFor(m.Name)
@@ -211,6 +220,12 @@ func ctxErrShaped(mt reflect.Type) bool {
 	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) &&
 		mt.NumOut() == 1 && mt.Out(0) == reflect.TypeOf((*error)(nil)).Elem() &&
 		!mt.IsVariadic()
+}
+
+// ctxShaped reports whether a method type is func(*Ctx): an action, or a
+// leftover v0.7 OnDispose.
+func ctxShaped(mt reflect.Type) bool {
+	return mt.NumIn() == 2 && mt.In(1) == reflect.TypeOf((*Ctx)(nil)) && mt.NumOut() == 0 && !mt.IsVariadic()
 }
 
 // stringShaped reports whether a method type is func() string — the retired

@@ -14,7 +14,7 @@ import (
 // the plain action answers a patch-signals frame carrying the one signal the
 // handler wrote, and the effect re-runs on it.
 type Chart struct {
-	Series via.Signal[[]int] `via:"init=[]"`
+	Series via.Signal[[]int]
 }
 
 func (c *Chart) OnInit(ctx *via.Ctx) error {

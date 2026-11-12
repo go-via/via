@@ -163,8 +163,7 @@ func (p *Troubleshooting) View() h.H {
 		snippet.Region("troubleshooting/hooks.go", "hooks", snippet.Title("room.go"), snippet.Mark("ctx.OnConnect", "ctx.OnDispose")),
 		h.P(h.Str("Besides "), Code("View"), h.Str(" and "), Code("PageMeta"), h.Str(", v0.8 calls two methods: "),
 			Code("OnInit"), h.Str(" and "), Code("OnReload"), h.Str(". A v0.7 "), Code("OnConnect(ctx *via.Ctx) error"), h.Str(" or "), Code("OnDispose(ctx *via.Ctx)"),
-			h.Str(" method still compiles and is never called. Mount warns once about the OnConnect; the OnDispose has an "+
-				"action's shape, so via says nothing. Register both from "), Code("OnInit"), h.Str(" with "), API("via.Ctx.OnConnect"),
+			h.Str(" method still compiles and is never called. Mount warns once about each. Register both from "), Code("OnInit"), h.Str(" with "), API("via.Ctx.OnConnect"),
 			h.Str(" and "), API("via.Ctx.OnDispose"), h.Str(". They run only on a unit something else made live; on a plain "+
 				"unit there is no connection to open or close.")),
 		snippet.Text("log", tsV07Connect),

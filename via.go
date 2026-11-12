@@ -1044,3 +1044,20 @@ func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) *Router {
 	Mount[T, PT](r, "/", root)
 	return r
 }
+
+// emptyForNil sends a nil slice or map as [] or {}: JSON null deletes the
+// client signal, and a forEach or index on it then faults in the browser.
+// Only a value that already marshalled to null reaches it, so the render path
+// stays reflection-free.
+func emptyForNil(v any, null []byte) []byte {
+	switch t := reflect.TypeOf(v); t.Kind() {
+	case reflect.Slice:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return []byte(`""`) // encoding/json sends a non-nil []byte as a base64 string
+		}
+		return []byte("[]")
+	case reflect.Map:
+		return []byte("{}")
+	}
+	return null
+}
