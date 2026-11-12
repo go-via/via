@@ -20,7 +20,7 @@ trap 'rm -rf "$out"' EXIT
 json="$out/root.json"
 
 # Built, not go run: go run reports the tool's exit 10 (under the floor) as 1.
-GOBIN="$out" $GO install github.com/gomutants/gomutants@v0.7.2
+GOBIN="$out" $GO install github.com/gomutants/gomutants@v0.7.4-rc0
 
 # --integration runs the tests of every package that imports the mutated one;
 # without it a package counts only its own tests. --cache=off keeps
