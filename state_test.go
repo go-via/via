@@ -66,7 +66,7 @@ func TestState_rendersEscapedValueOnALiveChild(t *testing.T) {
 	app := vt.Serve(t, via.Handler(stateEcho{}))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *stateEcho) func(*via.Ctx) { return p.Set }).Over(conn).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the render ships over the SSE")
 
 	frame := conn.Await("&lt;b&gt;Ada&lt;/b&gt;")
@@ -155,7 +155,7 @@ func TestList_removeReachesTheBrowser(t *testing.T) {
 	defer c.Close()
 	// A live child's action answers 204: the re-render travels on the
 	// connection as a patch frame, not in the action's own response body.
-	status, _ = app.Action(0).Over(c).Fire()
+	status, _ = vt.Act(app, func(p *listChild) func(*via.Ctx) { return p.DropFirst }).Over(c).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 	patch := c.Await("count-1")
 	assert.NotContains(t, patch, "row-drop", "the dropped row must be gone from the pushed patch")
@@ -202,7 +202,7 @@ func TestState_liveActionOnAHooklessUnitPushesItsPatch(t *testing.T) {
 	c := app.Connect()
 	defer c.Close()
 
-	status, _ := app.Action(0).Over(c).Fire()
+	status, _ := vt.Act(app, func(p *hooklessCounter) func(*via.Ctx) { return p.Inc }).Over(c).Fire()
 	require.Equal(t, http.StatusNoContent, status,
 		"a live action answers 204 — its re-render travels on the stream, not in the response")
 	assert.Contains(t, c.Await("n="), "n=1", "the mutation must reach the browser as a patch frame")
@@ -526,7 +526,7 @@ func TestState_trackFromAnActionHandlerIsIgnored(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *trackFromAction) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 
 	frame := conn.Await("bumps=1")
@@ -675,7 +675,7 @@ func TestList_aTabsRemoveLeavesTheSeedOtherTabsGet(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(sharedSeed{Lit: via.ListOf("a", "b", "c")}))
 	conn := app.Connect()
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *sharedSeed) func(*via.Ctx) { return p.Drop }).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("lit=b,c,<")
 
@@ -697,7 +697,7 @@ func (p *mapSeed) View() h.H {
 func TestState_aTaggedMapSeedIsEachRequestsOwn(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(mapSeed{}))
-	code, _ := app.Action(0).Fire()
+	code, _ := vt.Act(app, func(p *mapSeed) func(*via.Ctx) { return p.Mark }).Fire()
 	require.Less(t, code, 300)
 
 	_, body := app.Get("/")

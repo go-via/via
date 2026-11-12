@@ -1148,7 +1148,7 @@ func TestReload_rereadsMutatedDataForThePlainActionRender(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="n">0</p>`)
 
-	code, body := app.Action(0).Fire()
+	code, body := vt.Act(app, func(p *reloadingLoader) func(*via.Ctx) { return p.Bump }).Fire()
 	require.Equal(t, http.StatusOK, code, "a OnReload that changes the render must not answer 204")
 	assert.Contains(t, body, `<p id="n">1</p>`,
 		"the action's response must show what the handler wrote, not what OnInit loaded before it")
@@ -1162,7 +1162,8 @@ func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 
 	app := vt.Serve(t, via.Handler(staleLoader{s: &store{}}))
 	app.Get("/")
-	code, _ := app.Action(0).Fire()
+	bump := func(p *staleLoader) func(*via.Ctx) { return p.Bump }
+	code, _ := vt.Act(app, bump).Fire()
 
 	require.Equal(t, http.StatusNoContent, code)
 	assert.Contains(t, logs.String(), "changed nothing the render shows")
@@ -1173,7 +1174,7 @@ func TestReload_absenceIsLoggedWhenTheActionChangesNothing(t *testing.T) {
 	// click buries the log instead of reading it.
 	logs.Reset()
 	for range 5 {
-		app.Action(0).Fire()
+		vt.Act(app, bump).Fire()
 	}
 	assert.NotContains(t, logs.String(), "changed nothing the render shows",
 		"the dead-click warning must be deduped per action, not repeated per click")
@@ -1202,7 +1203,7 @@ func TestReload_rereadsMutatedDataBeforeTheLivePush(t *testing.T) {
 	app := vt.Serve(t, via.Handler(liveReloader{s: &store{}}))
 	conn := app.Connect()
 
-	code, _ := app.Action(0).Over(conn).Fire()
+	code, _ := vt.Act(app, func(p *liveReloader) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 	require.Less(t, code, 300)
 	// The pushed frame must carry post-action data, not the connect-time snapshot.
 	conn.Await("n=1")
@@ -1227,7 +1228,7 @@ func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(reloadNotFound{}))
 	app.Get("/")
-	code, body := app.Action(0).Fire()
+	code, body := vt.Act(app, func(p *reloadNotFound) func(*via.Ctx) { return p.Drop }).Fire()
 	assert.Equal(t, http.StatusNotFound, code)
 	assert.Contains(t, body, "not found")
 }
@@ -1262,7 +1263,7 @@ func (p *liveReloadRedirector) View() h.H { return h.Div(p.n.Display(), h.Button
 func TestReload_redirectFromALiveUnitsReloadNavigatesTheTab(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveReloadRedirector{}))
-		code, body := app.Action(0).Over(app.Connect()).Fire()
+		code, body := vt.Act(app, func(p *liveReloadRedirector) func(*via.Ctx) { return p.Go }).Over(app.Connect()).Fire()
 
 		assert.Equal(t, http.StatusOK, code)
 		assert.Contains(t, body, "location.assign", "a Redirect from the reload after a live action must still navigate")
@@ -1295,7 +1296,7 @@ func TestReload_tickInsideReloadDoesNotMakeAPlainUnitLive(t *testing.T) {
 	_, page := app.Get("/")
 	require.NotContains(t, page, "data-init", "the page must be served plain")
 
-	code, body := app.Action(0).Fire()
+	code, body := vt.Act(app, func(p *tickingReload) func(*via.Ctx) { return p.Bump }).Fire()
 	assert.Equal(t, http.StatusOK, code, "a Tick in OnReload must be ignored, not fail the action")
 	assert.Contains(t, body, "<p>1</p>")
 	assert.NotContains(t, logs.String(), "Tick called after OnInit returned",
@@ -1329,7 +1330,7 @@ func TestReload_runsOnTheActedChildNotTheRoot(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, `<p id="n">0</p>`)
 
-	code, body := app.Action(0).Raw(actionURL(t, page, "C", 0)).Fire()
+	code, body := vt.Act(app, func(p *reloadedChildParent) func(*via.Ctx) { return p.C.Bump }).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, `<p id="n">1</p>`)
 }
@@ -1439,7 +1440,7 @@ func TestRouterClose_answersALiveActionOnAClosedTabWith410(t *testing.T) {
 	conn.Await("datastar-patch-elements")
 	r.Close()
 
-	code, _ := app.Action(0).Over(conn).Fire()
+	code, _ := vt.Act(app, func(p *closablePage) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 	assert.Equal(t, http.StatusGone, code, "an action on a shut-down tab must be refused, not dropped")
 }
 

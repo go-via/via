@@ -572,3 +572,28 @@ func findBrowser() string {
 	}
 	return ""
 }
+
+// In scopes selectors to the container of the child at key, as vt.Key gives
+// it: s.In(vt.Key(func(p *Page) *Chat { return &p.Chat })).Click("button")
+// clicks the first button inside #via-iChat, wherever the page puts it.
+func (s *Session) In(key string) Scope { return Scope{s: s, root: "#via-i" + key} }
+
+// Scope is a Session whose selectors match only inside one child's container.
+type Scope struct {
+	s    *Session
+	root string
+}
+
+func (sc Scope) sel(selector string) string { return sc.root + " " + selector }
+
+// Click is Session.Click inside the scope.
+func (sc Scope) Click(selector string) {
+	sc.s.t.Helper()
+	sc.s.Click(sc.sel(selector))
+}
+
+// WaitTextContains is Session.WaitTextContains inside the scope.
+func (sc Scope) WaitTextContains(selector, want string) {
+	sc.s.t.Helper()
+	sc.s.WaitTextContains(sc.sel(selector), want)
+}

@@ -38,14 +38,14 @@ func TestClick_wiresAPostAction(t *testing.T) {
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, page, `data-on:click="@post('`)
 
-	_, body := app.Action(0).Fire()
+	_, body := vt.Act(app, func(b *board) func(*via.Ctx) { return b.Hit }).Fire()
 	assert.Contains(t, body, "<p>hit</p>")
 }
 
 func TestBind_carriesTheArgToTheHandler(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(board{}))
-	_, body := app.Action(1).Fire()
+	_, body := vt.ActArg(app, func(b *board) func(*via.Ctx, int) { return b.Pick }, 7).Fire()
 	assert.Contains(t, body, "<p>picked 7</p>")
 }
 
@@ -95,7 +95,7 @@ func TestNamedEvents_wireTheirDOMEventToAPostAction(t *testing.T) {
 			_, page := app.Get("/")
 			assert.Contains(t, page, tt.want)
 
-			_, body := app.Action(0).Fire()
+			_, body := vt.Act(app, func(p *wirePage) func(*via.Ctx) { return p.Hit }).Fire()
 			assert.Contains(t, body, "<p>hit</p>")
 		})
 	}

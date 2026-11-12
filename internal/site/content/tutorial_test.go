@@ -19,7 +19,7 @@ func TestTutorialChat_clearsAWhitespaceOnlyDraft(t *testing.T) {
 	app := vt.Serve(t, via.Handler(demos.NewTutorialChat(allowAll{})))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Over(conn).Body(`{"draft":"   "}`).Fire()
+	status, _ := vt.Act(app, func(p *demos.TutorialChat) func(*via.Ctx) { return p.Send }).Over(conn).Body(`{"draft":"   "}`).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await(`"draft":""`)
 }

@@ -267,7 +267,7 @@ func TestChild_liveChildActionRoutesToItsChildAndPushes(t *testing.T) {
 		conn := app.Connect()
 
 		// URL id 1 addresses this child; Live routes it to this connection's tab.
-		status, _ := app.ChildAction("A", 0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *panel) func(*via.Ctx) { return p.A.Bump }).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live child action acks 204; the result rides the SSE")
 
 		conn.Await("selector #via-iA") // the action's push must target its own child container
@@ -280,7 +280,7 @@ func TestChild_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
 
-		status, _ := app.ChildAction("A", 0).Over(conn).Tab("bogus-tab-id").Fire()
+		status, _ := vt.Act(app, func(p *panel) func(*via.Ctx) { return p.A.Bump }).Over(conn).Tab("bogus-tab-id").Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }
@@ -319,7 +319,7 @@ func TestChild_plainRootPatchLeavesLiveChildRegionAlone(t *testing.T) {
 		assert.Contains(t, body, `id="via-iIsl" data-ignore-morph`,
 			"a live child's container must be marked so a root patch skips it")
 
-		status, body = app.Action(0).Fire()
+		status, body = vt.Act(app, func(p *hitsRoot) func(*via.Ctx) { return p.Hit }).Fire()
 		assert.Equal(t, http.StatusOK, status)
 		assert.Contains(t, body, "hits:1", "the root's own action must take effect")
 		assert.Contains(t, body, `id="via-iIsl" data-ignore-morph`,
@@ -616,7 +616,7 @@ func TestChild_hydratedGateCannotGrowALiveGrandchildInsideALiveChildsPush(t *tes
 
 	// Gate starts false, so GET and connect see no grandchild at all — only
 	// this push, driven by the posted signal, conjures Grand.
-	app.ChildAction("Kid", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+	kidPing(t, app).Over(conn).Body(`{"kid__gate":true}`).Fire()
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(out.String(), "live push aborted")
@@ -631,6 +631,14 @@ func TestChild_hydratedGateCannotGrowALiveGrandchildInsideALiveChildsPush(t *tes
 		assert.NotContains(t, line, "grand=",
 			"the illegal render must never reach the client as a pushed frame")
 	}
+}
+
+// kidPing posts the Kid child's Ping by position: Ping sits on a generic
+// type, whose View binds c.Ping as a closure named after the View, not as a
+// method value vt.Act can name.
+func kidPing(t *testing.T, app *vt.App) *vt.Action {
+	_, page := app.Get("/")
+	return app.Post(actionURL(t, page, "Kid", 0))
 }
 
 // gatedLiveChildFastTick is gatedLiveChild with a short-interval Tick instead
@@ -671,7 +679,7 @@ func TestChild_liveNestingViolationAbortsTheStreamAndLogsOnce(t *testing.T) {
 		conn := app.Connect()
 		defer conn.Close()
 
-		app.ChildAction("Kid", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		kidPing(t, app).Over(conn).Body(`{"kid__gate":true}`).Fire()
 
 		require.Eventually(t, func() bool {
 			return strings.Contains(out.String(), "live push aborted")
@@ -694,7 +702,7 @@ func TestChild_hydratedGateCanStillGrowAPlainGrandchildInsideALiveChildsPush(t *
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, _ := app.ChildAction("Kid", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+	status, _ := kidPing(t, app).Over(conn).Body(`{"kid__gate":true}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
 
 	// A hydrated signal opening a plain grandchild inside a live child's own push is a legal shape and must keep pushing.
@@ -1031,7 +1039,7 @@ func TestDispatch_plainChildOfALivePageStaysPlain(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, body := app.ChildAction("Kid", 0).Over(conn).Fire()
+	status, body := vt.Act(app, func(p *livePageWithPlainKid) func(*via.Ctx) { return p.Kid.Bump }).Over(conn).Fire()
 
 	assert.Equal(t, http.StatusOK, status,
 		"a plain child on a streaming page must dispatch on the plain path, not 410 as a missing live unit")
@@ -1103,7 +1111,7 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, patch := app.ChildAction("Left", 0).Over(conn).Fire()
+	status, patch := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Search }).Over(conn).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Equal(t, int64(1), hits.Load(), "the left panel's own action ran")
 
@@ -1119,7 +1127,7 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	childURL := actionURL(t, patch, "Left-Kid", 0)
 	assert.Contains(t, childURL, "/_via/a/Left-Kid/",
 		"the child's button is addressed by its composed key")
-	code, _ := app.Action(0).Raw(childURL).Over(conn).Body(`{"left__kid__step":5}`).Fire()
+	code, _ := app.Post(childURL).Over(conn).Body(`{"left__kid__step":5}`).Fire()
 	assert.Equal(t, http.StatusNoContent, code,
 		"the URL the parent's patch handed the browser must still reach the live child")
 	conn.Await("n=5<")
@@ -1150,7 +1158,7 @@ func TestChild_liveLeafUnderTwoPlainChildsKeepsItsPathKey(t *testing.T) {
 	assert.Contains(t, page, `id="via-iOuter-Mid-Kid"`, "the leaf's key is the path of field names down to it")
 	assert.Contains(t, page, `data-bind="outer__mid__kid__step"`)
 
-	status, _ := app.ChildAction("Outer-Mid-Kid", 0).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
+	status, _ := vt.Act(app, func(p *threeDeepPage) func(*via.Ctx) { return p.Outer.Mid.Kid.Inc }).Over(conn).Body(`{"outer__mid__kid__step":3}`).Fire()
 	assert.Equal(t, http.StatusNoContent, status, "the leaf dispatches at its own path address")
 	conn.Await("n=3<")
 }
@@ -1179,7 +1187,7 @@ func TestChild_rootActionPatchInitsNestedChildren(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, "kid=7", "the GET paints the inited child")
 
-	status, patch := app.Action(0).Fire()
+	status, patch := vt.Act(app, func(p *initRoot) func(*via.Ctx) { return p.Bump }).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, patch, "kid=7",
 		"the action patch must not repaint the nested child zero-valued")
@@ -1206,7 +1214,7 @@ func TestChild_childActionPatchInitsNestedChildren(t *testing.T) {
 	_, page := app.Get("/")
 	require.Contains(t, page, "kid=7")
 
-	status, patch := app.ChildAction("Mid", 0).Fire()
+	status, patch := vt.Act(app, func(p *initHost) func(*via.Ctx) { return p.Mid.Note }).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, patch, "kid=7",
 		"the child patch must not repaint its own nested children zero-valued")
@@ -1307,7 +1315,7 @@ func TestChild_rowArgRidesAlongsideTheIdentityOfASameTypeSibling(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(argTwins{}))
 
-	status, body := app.ChildAction("B", 0).Fire()
+	status, body := vt.ActArg(app, func(p *argTwins) func(*via.Ctx, string) { return p.B.Pick }, "x7").Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "picked=x7")
 }
@@ -1344,9 +1352,9 @@ func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossAReRender(t *testing.T) 
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(storedBody{}))
 
-	status, patch := app.Action(0).Fire()
+	status, patch := vt.Act(app, func(p *storedBody) func(*via.Ctx) { return p.Poke }).Fire()
 	require.Equal(t, http.StatusOK, status, "the root action must ship a re-render")
-	status, body := app.ChildAction("card", 0).Raw(actionURL(t, patch, "card", 0)).Fire()
+	status, body := app.Post(actionURL(t, patch, "card", 0)).Fire()
 	assert.Equal(t, http.StatusOK, status, "the URL the root action's re-render shipped must still dispatch")
 	assert.Contains(t, body, "S hits=1")
 }
@@ -1371,16 +1379,16 @@ func TestChild_childBuiltOutsideTheViewKeepsItsURLAcrossALivePushAndAReconnect(t
 	app := vt.Serve(t, via.Handler(liveStoredBody{}))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *liveStoredBody) func(*via.Ctx) { return p.Poke }).Over(conn).Fire()
 	require.Less(t, status, 300)
 	conn.Await("S hits=0")
-	status, _ = app.ChildAction("card", 0).Over(conn).Fire()
+	status, _ = vt.Act(app, func(p *liveStoredBody) func(*via.Ctx) { return p.card.Hit }).Over(conn).Fire()
 	assert.Less(t, status, 300, "the URL the push shipped must still dispatch")
 
 	conn.Close()
 	again := app.Connect()
 	_, page := app.Get("/")
-	status, _ = app.ChildAction("card", 0).Raw(actionURL(t, page, "card", 0)).Tab(again.TabID()).Fire()
+	status, _ = app.Post(actionURL(t, page, "card", 0)).Tab(again.TabID()).Fire()
 	assert.Less(t, status, 300, "a reconnect re-runs OnInit without re-framing; the page's URL must still dispatch")
 }
 
@@ -1404,11 +1412,11 @@ func TestChild_aLiveChildsPushKeepsTheRoutersLogger(t *testing.T) {
 		var buf bytes.Buffer
 		app := vt.Serve(t, via.Handler(loggedParent{}, via.WithLogger(slog.New(slog.NewTextHandler(&buf, nil)))))
 		conn := app.Connect()
-		code, _ := app.ChildAction("C", 0).Over(conn).Fire()
+		code, _ := vt.Act(app, func(p *loggedParent) func(*via.Ctx) { return p.C.Bump }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		conn.Await(">1<")
 
-		code, _ = app.ChildAction("C", 0).Over(conn).Body(`{"c__n":"x"}`).Fire()
+		code, _ = vt.Act(app, func(p *loggedParent) func(*via.Ctx) { return p.C.Bump }).Over(conn).Body(`{"c__n":"x"}`).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		assert.Contains(t, buf.String(), "did not decode", "the warning must reach WithLogger, not slog.Default")
 	})
@@ -1444,7 +1452,7 @@ func TestChild_aTickOnlyLiveChildsPushCannotGrowALiveGrandchild(t *testing.T) {
 		conn := app.Connect()
 		defer conn.Close()
 
-		app.ChildAction("Kid", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		kidPing(t, app).Over(conn).Body(`{"kid__gate":true}`).Fire()
 		synctest.Wait()
 		assert.Contains(t, out.String(), "live push aborted", "liveness comes from the Tick, which a push does not re-run")
 	})
@@ -1461,7 +1469,7 @@ func TestChild_aPlainGrandchildALiveChildsPushRevealsRunsItsOnInit(t *testing.T)
 		conn := app.Connect()
 		defer conn.Close()
 
-		app.ChildAction("Kid", 0).Over(conn).Body(`{"kid__gate":true}`).Fire()
+		kidPing(t, app).Over(conn).Body(`{"kid__gate":true}`).Fire()
 		conn.Await("grand=[inited]")
 	})
 }
@@ -1533,7 +1541,7 @@ func (p *plainOpenerRoot) View() h.H { return h.Div(via.Child(&p.O)) }
 func TestChild_aPlainChildsPatchDeclaresAGrandchildItOpened(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(plainOpenerRoot{}))
-	code, body := app.ChildAction("O", 0).Fire()
+	code, body := vt.Act(app, func(p *plainOpenerRoot) func(*via.Ctx) { return p.O.Open }).Fire()
 	require.Equal(t, http.StatusOK, code)
 	assert.Contains(t, body, `"o__in__note":""`)
 }
@@ -1611,7 +1619,7 @@ func TestChild_anActionAddressesTheChildByItsFieldPath(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(keyPage{}))
 
-	code, body := app.ChildAction("Stats-B", 0).Fire()
+	code, body := vt.Act(app, func(p *keyPage) func(*via.Ctx) { return p.Stats.B.bump }).Fire()
 	require.Equal(t, 200, code)
 	assert.Contains(t, body, "n=1")
 }

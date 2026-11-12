@@ -20,6 +20,13 @@
   value-receiver `View` panics at Mount even on a type with no Signals, and a
   value-receiver action panics even where its type sits at one field: the
   method ran on a copy, so its changes were lost.
+- **Breaking:** `vt` names an action by its handler, not its position:
+  `vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Chat.Send })` finds
+  the binding wherever the View puts it, under a child too, and
+  `vt.ActArg(app, fn, arg)` picks an `on.Bind` row by its argument.
+  `App.Action(n)`, `App.ChildAction(key, n)`, `Conn.ActionURL` and
+  `Action.Raw` are gone; `App.Post(url)` posts a literal URL,
+  `Action.URL()` reads the resolved one and `vt.Key(fn)` gives a child's key.
 - The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
   longer panics on its first Subscribe or Publish. `topic.New` still works.
 

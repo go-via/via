@@ -71,15 +71,15 @@ func TestGone_answersEachStaleCase(t *testing.T) {
 	buf := &syncBuf{}
 	closed := vt.Serve(t, via.Handler(Gated{todo: seed}, logTo(buf)))
 
-	status, body := closed.Action(0).Raw(urls[1]).Fire()
+	status, body := closed.Post(urls[1]).Fire()
 	assert.Equal(t, 410, status)
 	assert.Contains(t, body, "; this render does not bind it")
 
-	status, body = closed.Action(0).Raw(strings.Replace(urls[0], "a=1", "a=2", 1)).Fire()
+	status, body = closed.Post(strings.Replace(urls[0], "a=1", "a=2", 1)).Fire()
 	assert.Equal(t, 410, status)
 	assert.Equal(t, "this render does not bind that action for that argument\n", body)
 
-	status, body = closed.Action(0).Raw("/_via/a/3/x").Fire()
+	status, body = closed.Post("/_via/a/3/x").Fire()
 	assert.Equal(t, 410, status)
 	assert.Equal(t, "no such child\n", body)
 
@@ -98,7 +98,7 @@ func TestTodos_deleteLeavesTheMountedRowsAlone(t *testing.T) {
 		{ID: 1, Title: "a"}, {ID: 2, Title: "b"}, {ID: 3, Title: "c"},
 	}}))
 
-	status, _ := app.Action(0).Fire() // the first row's delete
+	status, _ := vt.ActArg(app, func(l *troubleshooting.Todos) func(*via.Ctx, int) { return l.Delete }, 1).Fire() // the first row's delete
 	require.Equal(t, 200, status)
 
 	_, body := app.Get("/")
@@ -109,11 +109,12 @@ func TestGone_liveActionWithoutItsStream(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Board{}))
 
-	status, body := app.Action(0).Fire()
+	post := func(b *Board) func(*via.Ctx) { return b.Post }
+	status, body := vt.Act(app, post).Fire()
 	assert.Equal(t, 410, status)
 	assert.Contains(t, body, "this action needs the page's tab id and the request carried no viatab signal")
 
-	status, body = app.Action(0).Tab("deadbeef").Fire()
+	status, body = vt.Act(app, post).Tab("deadbeef").Fire()
 	assert.Equal(t, 410, status)
 	assert.Contains(t, body, "this tab id has no open stream for this page")
 }
@@ -122,14 +123,15 @@ func TestForbidden_originOffTheAllowlist(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Board{}, via.WithTrustedOrigin("https://example.com")))
 
-	status, body := app.Action(0).Origin("https://www.example.com").Fire()
+	post := func(b *Board) func(*via.Ctx) { return b.Post }
+	status, body := vt.Act(app, post).Origin("https://www.example.com").Fire()
 	assert.Equal(t, 403, status)
 	assert.Equal(t, "forbidden origin\n", body)
 
-	status, _ = app.Action(0).NoOrigin().Fire()
+	status, _ = vt.Act(app, post).NoOrigin().Fire()
 	assert.Equal(t, 403, status)
 
-	status, _ = app.Action(0).SecFetch("same-site").Origin("https://app.example.com").Fire()
+	status, _ = vt.Act(app, post).SecFetch("same-site").Origin("https://app.example.com").Fire()
 	assert.Equal(t, 403, status)
 }
 
@@ -137,7 +139,7 @@ func TestTooLarge_overMaxBody(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(troubleshooting.Todos{Items: []troubleshooting.Todo{{ID: 1, Title: "a"}}}, via.WithMaxBody(64)))
 
-	status, body := app.Action(0).Body(`{"x":"` + strings.Repeat("a", 100) + `"}`).Fire()
+	status, body := vt.ActArg(app, func(l *troubleshooting.Todos) func(*via.Ctx, int) { return l.Delete }, 1).Body(`{"x":"` + strings.Repeat("a", 100) + `"}`).Fire()
 	assert.Equal(t, 413, status)
 	assert.Equal(t, "request body too large\n", body)
 }
@@ -221,7 +223,7 @@ func TestActionFailed_stateBehindAClosedBranch(t *testing.T) {
 	buf := &syncBuf{}
 	app := vt.Serve(t, via.Handler(Gate{}, logTo(buf)))
 
-	status, body := app.Action(0).Fire()
+	status, body := vt.Act(app, func(g *Gate) func(*via.Ctx) { return g.Open }).Fire()
 	assert.Equal(t, 500, status)
 	assert.Equal(t, "action failed\n", body)
 	assert.Contains(t, buf.String(), `msg="via: action panic" err="via: this action made a unit live on a page that was served plain — the tab has no stream.`)

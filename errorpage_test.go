@@ -490,7 +490,7 @@ func TestErrorPage_carriesErrStoreDownWhenTheStoreCannotAnswer(t *testing.T) {
 	conn := app.Connect()
 	// The action URL is read off a rendered page, so it has to be taken while
 	// the store still answers — a GET during the outage is refused as well.
-	action := app.URL() + conn.ActionURL("_", 0)
+	action := app.URL() + vt.Act(app, func(p *errLiveSess) func(*via.Ctx) { return p.Bump }).Over(conn).URL()
 	store.down.Store(true)
 
 	resp, body := nativePost(t, app.Client(), action,

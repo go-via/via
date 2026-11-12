@@ -42,7 +42,7 @@ func TestStepper_addsItsDefaultStep(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(compositions.Stepper{Label: "apples"}))
 	conn := app.Connect()
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *compositions.Stepper) func(*via.Ctx) { return p.Add }).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("<output>1</output>")
 }
@@ -83,7 +83,7 @@ func TestTodos_rowsCarryTheirIDs(t *testing.T) {
 	assert.Contains(t, body, `<li id="todo-2">`)
 
 	conn := app.Connect()
-	status, _ = app.Action(0).Over(conn).Fire()
+	status, _ = vt.ActArg(app, func(p *compositions.Todos) func(*via.Ctx, int) { return p.Remove }, 1).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	frame := conn.Await(`id="todo-2"`)
 	assert.NotContains(t, frame, `id="todo-1"`)
@@ -93,7 +93,7 @@ func TestCart_passesTheTotalDown(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(compositions.Cart{}))
 	conn := app.Connect()
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *compositions.Cart) func(*via.Ctx) { return p.Add }).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("items: 1")
 }

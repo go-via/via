@@ -135,7 +135,7 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	status, _ := app.Action(1).SecFetch("cross-site").Fire()
+	status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 
 	_, body := app.Get("/")
@@ -144,13 +144,13 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 
 func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))).Action(1).SecFetch("same-site").Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("same-site").Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
 func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))).Action(1).NoOrigin().Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).NoOrigin().Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -217,7 +217,7 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 	t.Parallel()
 	// Without WithTrustedOrigin every origin is admitted before the host compare runs.
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
-	status, body := app.Action(1).Origin(app.URL()).Fire()
+	status, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Origin(app.URL()).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -225,19 +225,19 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
 	big := `{"pad":"` + strings.Repeat("a", 2<<20) + `"}`
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body(big).Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body(big).Fire()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }
 
 func TestAction_rejectsMalformedBody(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body("{not valid json").Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body("{not valid json").Fire()
 	assert.Equal(t, http.StatusBadRequest, status)
 }
 
 func TestAction_treatsEmptyBodyAsNoSignals(t *testing.T) {
 	t.Parallel()
-	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).Body("").Fire()
+	status, body := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body("").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -246,7 +246,7 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(panicComp{}))
 
-	status, _ := app.Action(0).Fire()
+	status, _ := vt.Act(app, func(p *panicComp) func(*via.Ctx) { return p.Boom }).Fire()
 	assert.Equal(t, http.StatusInternalServerError, status)
 
 	status2, _ := app.Get("/")
@@ -256,14 +256,14 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 func TestAction_defaultAllowsCrossSite(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}))
-	status, body := app.Action(1).SecFetch("cross-site").Fire()
+	status, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
 
 func TestAction_defaultAllowsRequestWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, body := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1).NoOrigin().Fire()
+	status, body := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).NoOrigin().Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -279,7 +279,7 @@ func TestAction_defaultAdmitsEveryOrigin(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			headers := map[string]string{}
-			a := vt.Serve(t, via.Handler(counter{count: &store{}})).Action(1)
+			a := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc })
 			if c.origin == "" {
 				a.NoOrigin()
 			} else {
@@ -301,7 +301,7 @@ func TestWithTrustedOrigin_allowsNamedCrossOrigin(t *testing.T) {
 	t.Parallel()
 	const trusted = "https://trusted.example"
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin(trusted)))
-	status, body := app.Action(1).Origin(trusted).SecFetch("cross-site").Fire()
+	status, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Origin(trusted).SecFetch("cross-site").Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -317,7 +317,7 @@ func TestOriginFloor_matchesHostCaseAndDefaultPortInsensitively(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
-			status, body := app.Action(1).Host(c.host).Origin(c.origin).Fire()
+			status, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusOK, status, "a normalized same-origin request must be allowed")
 			assert.Contains(t, body, "<h1>1</h1>", "and must mutate server state")
 		})
@@ -334,7 +334,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
-			status, _ := app.Action(1).Host(c.host).Origin(c.origin).Fire()
+			status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host(c.host).Origin(c.origin).Fire()
 			assert.Equal(t, http.StatusForbidden, status)
 		})
 	}
@@ -344,10 +344,10 @@ func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	t.Parallel()
 	app := vt.ServeTLS(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Fire()
+	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Fire()
 	assert.Equal(t, http.StatusForbidden, down, "http Origin on a TLS request is a scheme downgrade")
 
-	ok, body := app.Action(1).Host("app.example").Origin("https://app.example").Fire()
+	ok, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("https://app.example").Fire()
 	assert.Equal(t, http.StatusOK, ok, "https Origin on a TLS request to the same host matches")
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -539,7 +539,7 @@ func TestRedirect_followsOnlyOnSiteTargets(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			app := vt.Serve(t, via.Handler(hop{to: c.to, external: c.external}, c.opts...))
-			status, body := app.Action(0).Host("app.example").Fire()
+			status, body := vt.Act(app, func(p *hop) func(*via.Ctx) { return p.Go }).Host("app.example").Fire()
 			require.Equal(t, http.StatusOK, status)
 			if c.followed {
 				assert.Contains(t, body, "location.assign", "the navigation script")
@@ -620,13 +620,13 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 			page := fetchPage(t, app, "/")
 			url := actionURL(t, page, "_", 0)
 			for _, n := range []string{"99", "-1", "________"} {
-				status, _ := app.Action(0).Raw(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
+				status, _ := app.Post(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
 				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
 			}
 			// The connection must still be usable — the recovered panic path
 			// this replaces must not be the only thing standing between a
 			// forged n and a crashed stream.
-			status, _ := app.Action(0).Raw(url).Tab(conn.TabID()).Fire()
+			status, _ := app.Post(url).Tab(conn.TabID()).Fire()
 			assert.Equal(t, http.StatusNoContent, status)
 		})
 	})
@@ -777,7 +777,7 @@ func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 			conn := app.Connect()
 			defer conn.Close()
 
-			status, _ := app.Action(0).Body(tc.body).Fire()
+			status, _ := vt.Act(app, func(p *tabGuard) func(*via.Ctx) { return p.Bump }).Body(tc.body).Fire()
 			assert.Equal(t, http.StatusGone, status,
 				"a live action with no valid tab id must 410, not run against a throwaway instance")
 			assert.Zero(t, calls, "and the connection's unit must not have been touched")
@@ -854,7 +854,7 @@ func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T
 			conn := app.Connect()
 			defer conn.Close()
 
-			status, _ := app.Action(0).Body(body).Fire()
+			status, _ := vt.Act(app, func(p *liveBoundRoot) func(*via.Ctx) { return p.Bump }).Body(body).Fire()
 			assert.Equal(t, http.StatusGone, status,
 				"liveness is decided by the auth render; a posted signal that adds a discovery pass must not bypass it")
 			assert.Zero(t, calls, "and the live unit must not have been touched")
@@ -903,10 +903,10 @@ func TestOriginFloor_enforcesSchemeBehindATLSProxy(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	down, _ := app.Action(1).Host("app.example").Origin("http://app.example").Header("X-Forwarded-Proto", "https").Fire()
+	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Header("X-Forwarded-Proto", "https").Fire()
 	assert.Equal(t, http.StatusForbidden, down, "an http Origin when the browser spoke https to the proxy is a downgrade")
 
-	ok, body := app.Action(1).Host("app.example").Origin("https://app.example").Header("X-Forwarded-Proto", "https").Fire()
+	ok, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("https://app.example").Header("X-Forwarded-Proto", "https").Fire()
 	assert.Equal(t, http.StatusOK, ok)
 	assert.Contains(t, body, "<h1>1</h1>")
 }
@@ -923,7 +923,7 @@ func TestWithTrustedOrigin_matchesTheNormalizedOrigin(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin(tt.trusted)))
-			status, body := app.Action(1).Origin(tt.origin).SecFetch("cross-site").Fire()
+			status, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Origin(tt.origin).SecFetch("cross-site").Fire()
 			assert.Equal(t, http.StatusOK, status)
 			assert.Contains(t, body, "<h1>1</h1>")
 		})

@@ -87,8 +87,9 @@ func (p *twoEvents) View() h.H {
 func TestActionArg_twoEventsOnOneElementEachDispatchTheirOwnArg(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(twoEvents{got: &store{}}))
-	for n, want := range []string{"got 1", "got 3"} {
-		status, body := app.Action(n).Fire()
+	add := func(p *twoEvents) func(*via.Ctx, int) { return p.Add }
+	for n, want := range []string{"got 1", "got 3"} { // click binds arg 1, change binds arg 2
+		status, body := vt.ActArg(app, add, n+1).Fire()
 		require.Equal(t, http.StatusOK, status)
 		assert.Contains(t, body, want)
 	}
@@ -642,11 +643,12 @@ func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveOwnedRows{}))
 		conn := app.Connect()
 
-		url := strings.Replace(conn.ActionURL("_", 0), "a=2", "a=1", 1)
-		status, _ := app.Action(0).Raw(url).Over(conn).Fire()
+		del := func(p *liveOwnedRows) func(*via.Ctx, int) { return p.Delete }
+		url := strings.Replace(vt.ActArg(app, del, 2).Over(conn).URL(), "a=2", "a=1", 1)
+		status, _ := app.Post(url).Over(conn).Fire()
 		assert.Equal(t, http.StatusGone, status, "an unrendered arg must not dispatch over a live stream")
 
-		status, _ = app.Action(0).Over(conn).Fire() // the rendered arg, same slot
+		status, _ = vt.ActArg(app, del, 2).Over(conn).Fire() // the rendered arg, same binding
 		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive")
 		conn.Await("deleted 2")
 	})
@@ -788,7 +790,7 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 			require.NotEqual(t, own, stolen, "the swap must actually change the URL")
 
 			var conn *vt.Conn
-			attack, legit := app.Action(0).Raw(stolen), app.Action(0).Raw(own)
+			attack, legit := app.Post(stolen), app.Post(own)
 			if shape.live {
 				conn = app.Connect()
 				attack, legit = attack.Over(conn), legit.Over(conn)
@@ -862,14 +864,15 @@ func TestBind_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing
 	t.Parallel()
 	store := &rowStore{ids: []string{"a", "b", "c"}}
 	app := vt.Serve(t, via.Handler(rowPage{Store: store}))
-	_, _ = app.Action(0).Fire() // caches the a, b, c render the tab keeps clicking
+	pick := func(p *rowPage) func(*via.Ctx, string) { return p.Pick }
+	_, _ = vt.ActArg(app, pick, "a").Fire() // caches the a, b, c render the tab keeps clicking
 
 	store.setIDs("c", "a")
-	status, _ := app.Action(0).Fire()
+	status, _ := vt.ActArg(app, pick, "a").Fire()
 	assert.Less(t, status, 300, "row a moved but still exists")
-	status, _ = app.Action(1).Fire()
+	status, _ = vt.ActArg(app, pick, "b").Fire()
 	assert.Equal(t, http.StatusGone, status, "row b is gone; its click must not land on the row now in its place")
-	status, _ = app.Action(2).Fire()
+	status, _ = vt.ActArg(app, pick, "c").Fire()
 	assert.Less(t, status, 300, "row c moved but still exists")
 
 	assert.Equal(t, []string{"a", "a", "c"}, store.picks())

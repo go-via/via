@@ -987,9 +987,8 @@ spelling outright.
   (`#via-iChat`), action URLs (`/_via/a/Chat/…`) and the signal prefix of a
   child that shared its type with a sibling (`left__chat__draft`, was
   `i0__chat__draft`) change with it. A `via.When` around a `Child` no longer
-  moves its siblings' keys. A `vt` test that names a child by ordinal
-  (`ChildAction("0", n)`) names it by field path (`ChildAction("Chat", n)`).
-- **The page root's action address is `_`**, was `r`: `ChildAction("_", n)`.
+  moves its siblings' keys.
+- **The page root's action address is `_`**, was `r`.
 - **A child's `OnInit` runs once per request or connection.** See [A child's
   OnInit runs once per request or
   connection](#a-childs-oninit-runs-once-per-request-or-connection).
@@ -1004,3 +1003,10 @@ spelling outright.
   action panics at Mount (or at the first render that binds it) even where its
   type sits at one field. A value receiver ran on a copy, so its changes were
   lost.
+- **`vt` names an action by its handler.** Compiler. `app.Action(n)` →
+  `vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Inc })`;
+  `app.ChildAction("Chat", n)` → the same with `p.Chat.Send`, which vt finds
+  under the child; an `on.Bind` row → `vt.ActArg(app, fn, arg)`;
+  `app.Action(n).Raw(url)` → `app.Post(url)`;
+  `conn.ActionURL(key, n)` → `vt.Act(app, fn).Over(conn).URL()`. A string
+  child key, where a test still needs one, is `vt.Key(fn)`.

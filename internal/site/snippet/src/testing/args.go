@@ -32,7 +32,7 @@ func TestStepper_addsThePostedStep(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Stepper{n: new(atomic.Int64)}, via.WithLogger(vt.Logger(t))))
 
-	status, body := app.Action(0).Body(`{"step":5}`).Fire()
+	status, body := vt.Act(app, func(s *Stepper) func(*via.Ctx) { return s.Add }).Body(`{"step":5}`).Fire()
 	require.Equal(t, 200, status)
 	assert.Contains(t, body, "total: 5")
 }
@@ -60,7 +60,7 @@ func TestShelf_eachRowCarriesItsOwnArg(t *testing.T) {
 	app := vt.Serve(t, via.Handler(Shelf{titles: []string{"Solaris", "Dune", "Ubik"}},
 		via.WithLogger(vt.Logger(t))))
 
-	_, body := app.Action(1).Fire() // the second row's button
+	_, body := vt.ActArg(app, func(s *Shelf) func(*via.Ctx, int) { return s.Pick }, 1).Fire() // the second row's button
 	assert.Contains(t, body, `"picked":"Dune"`)
 }
 
@@ -83,8 +83,8 @@ func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Layout{}, via.WithLogger(vt.Logger(t))))
 
-	// "Search" is the child's field path; its signals are prefixed with its field name.
-	_, body := app.ChildAction("Search", 0).Body(`{"search__q":"via"}`).Fire()
+	// Search's signals are prefixed with its field name.
+	_, body := vt.Act(app, func(l *Layout) func(*via.Ctx) { return l.Search.Go }).Body(`{"search__q":"via"}`).Fire()
 	assert.Contains(t, body, "searched: via")
 }
 
@@ -96,13 +96,14 @@ func TestCounter_refusesCrossSitePosts(t *testing.T) {
 	app := vt.Serve(t, via.Handler(Counter{n: new(atomic.Int64)},
 		via.WithTrustedOrigin("https://example.com"), via.WithLogger(vt.Logger(t))))
 
-	status, _ := app.Action(1).Fire() // same-origin by default
+	inc := func(c *Counter) func(*via.Ctx) { return c.Inc }
+	status, _ := vt.Act(app, inc).Fire() // same-origin by default
 	assert.Equal(t, 200, status)
 
-	status, _ = app.Action(1).Origin("https://evil.example").Fire()
+	status, _ = vt.Act(app, inc).Origin("https://evil.example").Fire()
 	assert.Equal(t, 403, status)
 
-	status, _ = app.Action(1).NoOrigin().Fire()
+	status, _ = vt.Act(app, inc).NoOrigin().Fire()
 	assert.Equal(t, 403, status)
 }
 
@@ -114,10 +115,11 @@ func TestCounter_overTLSRefusesAnHTTPOrigin(t *testing.T) {
 	app := vt.ServeTLS(t, via.Handler(Counter{n: new(atomic.Int64)},
 		via.WithTrustedOrigin("https://example.com"), via.WithLogger(vt.Logger(t))))
 
-	status, _ := app.Action(1).Host("app.example").Origin("https://app.example").Fire()
+	inc := func(c *Counter) func(*via.Ctx) { return c.Inc }
+	status, _ := vt.Act(app, inc).Host("app.example").Origin("https://app.example").Fire()
 	assert.Equal(t, 200, status)
 
-	status, _ = app.Action(1).Host("app.example").Origin("http://app.example").Fire()
+	status, _ = vt.Act(app, inc).Host("app.example").Origin("http://app.example").Fire()
 	assert.Equal(t, 403, status) // a scheme downgrade on a TLS request
 }
 

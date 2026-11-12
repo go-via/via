@@ -703,6 +703,12 @@ func (p *sessionTicker) View() h.H {
 		h.Button(on.Click(p.Rename)))
 }
 
+// sessionTicker's handlers, for vt.Act.
+var (
+	tickerLogin  = func(p *sessionTicker) func(*via.Ctx) { return p.Login }
+	tickerRename = func(p *sessionTicker) func(*via.Ctx) { return p.Rename }
+)
+
 // servedWithJar is vt.Serve whose client keeps cookies, so every Connect and
 // Fire carries the session the last response set, as a browser's tabs do.
 func servedWithJar(t *testing.T, h http.Handler) *vt.App {
@@ -732,12 +738,12 @@ func TestLive_aSessionWriteOnOneTabReachesEveryTabsTickHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey))
 		a := app.Connect()
-		code, _ := app.Action(0).Over(a).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		b := app.Connect()
 		b.Await("who:alice")
 
-		code, _ = app.Action(1).Over(a).Fire()
+		code, _ = vt.Act(app, func(p *sessionTicker) func(*via.Ctx) { return p.Logout }).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 
 		b.Await("who:</p>")
@@ -749,17 +755,17 @@ func TestLive_rotateClosesTheSessionsOtherTabsAndKeepsItsOwn(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey))
 		a := app.Connect()
-		code, _ := app.Action(0).Over(a).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		b := app.Connect()
 		b.Await("who:alice")
 
-		code, _ = app.Action(2).Over(a).Fire()
+		code, _ = vt.Act(app, func(p *sessionTicker) func(*via.Ctx) { return p.Rotate }).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 
 		assert.NoError(t, b.AwaitClose(), "a tab rendered under the old id must end cleanly so it reloads")
 		time.Sleep(26 * time.Second) // past a keepalive beat, which re-reads the session under the id the tab holds
-		code, _ = app.Action(3).Over(a).Fire()
+		code, _ = vt.Act(app, tickerRename).Over(a).Fire()
 		assert.Equal(t, http.StatusNoContent, code, "the tab that rotated keeps its stream, under the new id")
 		a.Await("who:bob")
 	})
@@ -770,7 +776,7 @@ func TestLive_aSessionRevokedByAnotherProcessClosesTheStreamOnTheNextBeat(t *tes
 		store := via.NewMemorySessionStore()
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
 		a := app.Connect()
-		code, _ := app.Action(0).Over(a).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		a.Await("who:alice")
 
@@ -788,7 +794,7 @@ func TestLive_aSessionWriteInAnotherProcessReachesTickHandlersOnTheNextBeat(t *t
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
 		other := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
 		a := app.Connect()
-		code, _ := app.Action(0).Over(a).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		a.Await("who:alice")
 
@@ -798,7 +804,7 @@ func TestLive_aSessionWriteInAnotherProcessReachesTickHandlersOnTheNextBeat(t *t
 		require.NoError(t, err)
 		other.Client().Jar.SetCookies(to, app.Client().Jar.Cookies(from))
 		o := other.Connect()
-		code, _ = other.Action(3).Over(o).Fire()
+		code, _ = vt.Act(other, tickerRename).Over(o).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 
 		time.Sleep(25 * time.Second)
@@ -921,7 +927,7 @@ func TestLive_aPinLoggedByTheStreamDoesNotSilenceTheActionThatHitsIt(t *testing.
 		time.Sleep(3 * time.Second)
 		require.Equal(t, 1, strings.Count(out.String(), "tab pinned"), "precondition: the stream's own timer logged")
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *blockedTick) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Equal(t, 2, strings.Count(out.String(), "tab pinned"))
@@ -1321,7 +1327,7 @@ func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
 		store := via.NewMemorySessionStore()
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
 		a := app.Connect()
-		code, _ := app.Action(0).Over(a).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(a).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		// Connected after the login, so its id is bound to the cookie a click still carries.
 		b := app.Connect()
@@ -1331,7 +1337,7 @@ func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
 		require.NoError(t, b.AwaitClose())
 
 		start := time.Now()
-		code, _ = app.Action(3).Over(b).Fire()
+		code, _ = vt.Act(app, tickerRename).Over(b).Fire()
 
 		assert.Equal(t, http.StatusGone, code)
 		assert.Zero(t, time.Since(start), "a stream the server ended is not coming back under this id")
@@ -1342,7 +1348,7 @@ func TestDispatch_aServerEndedTabThatReconnectsUnderItsIdTakesActionsAgain(t *te
 	synctest.Test(t, func(t *testing.T) {
 		store := via.NewMemorySessionStore()
 		app := servedWithJar(t, via.Handler(sessionTicker{}, testSessionKey, via.WithSessionStore(store)))
-		code, _ := app.Action(0).Over(app.Connect()).Fire()
+		code, _ := vt.Act(app, tickerLogin).Over(app.Connect()).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		b := app.Connect()
 		b.Await("who:alice")
@@ -1352,7 +1358,7 @@ func TestDispatch_aServerEndedTabThatReconnectsUnderItsIdTakesActionsAgain(t *te
 
 		again := app.ConnectWith(`{"viatab":"` + b.TabID() + `"}`)
 		require.Equal(t, b.TabID(), again.TabID())
-		code, _ = app.Action(0).Over(again).Fire()
+		code, _ = vt.Act(app, tickerLogin).Over(again).Fire()
 
 		assert.Equal(t, http.StatusNoContent, code, "the reclaimed id must drop its tombstone")
 	})
@@ -1368,7 +1374,7 @@ func TestDispatch_actionOnATabWhoseClientHungUpWaitsForItsReconnect(t *testing.T
 
 		got := make(chan int, 1)
 		go func() {
-			code, _ := app.Action(0).Tab(id).Fire()
+			code, _ := vt.Act(app, func(p *clicker) func(*via.Ctx) { return p.Bump }).Tab(id).Fire()
 			got <- code
 		}()
 		synctest.Wait()

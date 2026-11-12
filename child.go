@@ -4,12 +4,12 @@ import (
 	"bytes"
 	"log/slog"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/actionid"
 	"github.com/go-via/via/internal/render"
 )
 
@@ -76,7 +76,7 @@ func childLocalKey(parent *Ctx, inst instance) string {
 	}
 	path, ok := "", false
 	if k.parent != nil {
-		path, ok = childPath(k.parent, k.off, k.child)
+		path, ok = actionid.ChildPath(k.parent, k.off, k.child)
 	}
 	if !ok {
 		panic(render.Miswired("via: via.Child(&x) needs x to be a field of " + unitTypeName(k.parent) +
@@ -98,61 +98,6 @@ func unitTypeName(t reflect.Type) string {
 		return "the parent"
 	}
 	return t.String()
-}
-
-// childPath names the field of t at byte offset off that holds a target, with
-// '-' between struct fields and array indexes. It walks struct fields and array
-// elements only: memory behind a pointer, slice or map is not t's. An embedded
-// struct keeps its name ("page-Search" for a promoted p.Search): an outer field
-// may shadow the promoted one, and the two must not share a key.
-func childPath(t reflect.Type, off uintptr, target reflect.Type) (string, bool) {
-	var segs []string
-	for off != 0 || t != target {
-		switch t.Kind() {
-		case reflect.Struct:
-			f, ok := fieldHolding(t, off, target)
-			if !ok {
-				return "", false
-			}
-			segs = append(segs, f.Name)
-			off -= f.Offset
-			t = f.Type
-		case reflect.Array:
-			size := t.Elem().Size()
-			if size == 0 {
-				return "", false
-			}
-			i := off / size
-			if i >= uintptr(t.Len()) {
-				return "", false
-			}
-			segs = append(segs, strconv.FormatUint(uint64(i), 10))
-			off -= i * size
-			t = t.Elem()
-		default:
-			return "", false
-		}
-	}
-	if len(segs) == 0 {
-		return "", false // x is the parent itself
-	}
-	return strings.Join(segs, "-"), true
-}
-
-// fieldHolding is the field of struct t whose bytes contain off. A zero-sized
-// field contains no byte, so one at off is chosen only when it is a target.
-func fieldHolding(t reflect.Type, off uintptr, target reflect.Type) (reflect.StructField, bool) {
-	for i := range t.NumField() {
-		f := t.Field(i)
-		size := f.Type.Size()
-		if size == 0 && f.Offset == off && f.Type == target {
-			return f, true
-		}
-		if f.Offset <= off && off < f.Offset+size {
-			return f, true
-		}
-	}
-	return reflect.StructField{}, false
 }
 
 // childViewer renders the child into <div id="via-i{key}">, binds its

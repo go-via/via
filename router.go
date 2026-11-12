@@ -18,6 +18,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/go-via/via/internal/actionid"
 	"github.com/go-via/via/internal/render"
 )
 
@@ -508,7 +509,7 @@ func (r *Router) Close() {
 // behind a pointer to say the sharing is meant.
 func Mount[T any, PT ptrViewer[T]](r *Router, path string, root T, opts ...MountOption) {
 	r.init(nil)
-	verifyMethodTrampoline()
+	actionid.VerifyTrampoline()
 	mc := &mountConfig{}
 	for _, opt := range opts {
 		opt.applyMount(mc)

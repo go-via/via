@@ -21,7 +21,7 @@ func TestHookLog_logsBothInitsAndTheConnect(t *testing.T) {
 	frame := conn.Await("OnConnect")
 	assert.Contains(t, frame, "OnInit     POST /_via/sse")
 
-	status, _ = app.Action(0).Over(conn).Fire()
+	status, _ = vt.Act(app, func(p *demos.HookLog) func(*via.Ctx) { return p.Act }).Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("OnReload")
 }
@@ -30,7 +30,7 @@ func TestRelay_carriesAPickToTheSibling(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(demos.Relay{}))
 	conn := app.Connect()
-	status, _ := app.ChildAction("Picker", 1).Over(conn).Fire()
+	status, _ := vt.ActArg(app, func(p *demos.Relay) func(*via.Ctx, string) { return p.Picker.Pick }, "Rust").Over(conn).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 	conn.Await("last pick: <strong>Rust</strong>")
 }

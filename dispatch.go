@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/go-via/via/internal/actionid"
 )
 
 // actionMode is decided by the request, not the route: the bundled Datastar
@@ -230,9 +232,8 @@ func liveAncestor(bind *Ctx, child string) bool {
 	return live
 }
 
-// rootAddr is "_" because no child key can be: a blank field cannot have its
-// address taken.
-const rootAddr = "_"
+// rootAddr is the root's address in an action URL; see actionid.RootUnit.
+const rootAddr = actionid.RootUnit
 
 // validAddr reports whether child has the shape unitAddr produces: rootAddr, or
 // '-'-joined Go field names and array indexes.
@@ -296,7 +297,7 @@ func (m *mount) dispatch(w http.ResponseWriter, req *http.Request) {
 	// may park: the id is one this app issued to this browser, so a stream
 	// for it is on its way, and the plain path could only 410 a live unit.
 	// An address via never renders is not worth a slot.
-	park := ar.tab != "" && validAddr(ar.child) && isActionID(ar.act) && m.issuedTab(ar.tab, tabCredential(m.sessions, req))
+	park := ar.tab != "" && validAddr(ar.child) && actionid.Valid(ar.act) && m.issuedTab(ar.tab, tabCredential(m.sessions, req))
 	lc, ticket, out := m.reg.enter(req.Context(), m.ctx, ar.tab, deadline, park)
 	if m.refuseEnter(w, out) {
 		return
@@ -497,7 +498,7 @@ func sentinelFail(log *slog.Logger, rec any) *actionFail {
 // of a shape via never mints is answered without touching the dedupe set, and
 // the set itself is capped and reset hourly (see idDedupe).
 func (m *mount) unknownAction(u *Ctx, act string) string {
-	if !isActionID(act) {
+	if !actionid.Valid(act) {
 		return "no such action; this render does not bind it"
 	}
 	switch fresh, filled := m.unknownActs.add(act); {

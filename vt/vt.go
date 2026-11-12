@@ -1,15 +1,17 @@
 // Package vt (via test) is a black-box test harness for via compositions. It
-// drives a registered handler over real HTTP through via's public surface — no
-// reach into unexported state — so a test can exercise the origin floor, an
-// action, or a live SSE stream without hand-rolling request plumbing.
+// drives a registered handler over real HTTP — no reach into a running app's
+// state, only the naming rules via itself uses for a handler or a child — so a
+// test can exercise the origin floor, an action, or a live SSE stream without
+// hand-rolling request plumbing.
 //
 //	app := vt.Serve(t, via.Handler(Counter{count: &store{}}))
-//	status, body := app.Action(1).Fire()      // POST the root's 2nd action, same-origin
+//	inc := func(c *Counter) func(*via.Ctx) { return c.Inc }
+//	status, body := vt.Act(app, inc).Fire()   // POST Counter.Inc, same-origin
 //	require.Equal(t, 200, status)
 //
-//	conn := app.Connect()                      // open the per-tab SSE stream
-//	app.Action(0).Tab(conn.TabID()).Fire()     // route to this connection
-//	conn.Await("count: 1")                     // the push lands on the stream
+//	conn := app.Connect()                     // open the per-tab SSE stream
+//	vt.Act(app, inc).Over(conn).Fire()        // route to this connection
+//	conn.Await("count: 1")                    // the push lands on the stream
 //
 // vt exists so security- and render-level behavior that the plain httptest
 // idiom can't reach cleanly (a controlled request Host, a TLS request, the
@@ -27,12 +29,17 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/go-via/via"
+	"github.com/go-via/via/internal/actionid"
 )
 
 // App wraps a via handler under an httptest server, registered for cleanup.
@@ -44,29 +51,34 @@ type App struct {
 	fetched  bool
 }
 
-// actionURLRe matches every action URL bound to a child in one chunk of
-// rendered markup. The action id is content-addressed from the handler's own
-// func name, so a test cannot construct the URL — it reads the one the page
-// actually shipped, which is also what makes the ?a= row datum travel with it.
-// A binding with a query ships it in the data-via-q-<event> attribute just
-// before its data-on, which the expression appends to the path (group 1);
-// the path is group 2.
-func actionURLRe(child string) *regexp.Regexp {
-	return regexp.MustCompile(`(?:data-via-q-[^=\s]+="([^"]*)" data-on:[^=\s]+="@post\('|@post\('|action=")` +
-		`([^'"]*_via/a/` + child + `/[A-Za-z0-9_-]+(?:[?&][^'"]*)?)['"]`)
-}
+// actionURLRe matches every action URL in one chunk of rendered markup. The
+// action id is content-addressed from the handler's func name and receiver
+// path, so vt reads the URL the page actually shipped, which is also what
+// makes the ?a= row datum travel with it. A binding with a query ships it in
+// the data-via-q-<event> attribute just before its data-on, which the
+// expression appends to the path (group 1); the path is group 2, its unit
+// address group 3 and its id group 4.
+var actionURLRe = regexp.MustCompile(`(?:data-via-q-[^=\s]+="([^"]*)" data-on:[^=\s]+="@post\('|@post\('|action=")` +
+	`([^'"]*_via/a/([^/'"]+)/([A-Za-z0-9_-]+)(?:[?&][^'"]*)?)['"]`)
 
-// nthActionURL returns the n-th action URL for child in document order
-// within markup — vt addresses actions by render position, which is how a
-// test reads its own View, while the wire addresses them by handler.
-func nthActionURL(markup []byte, child string, n int) (string, bool) {
-	m := actionURLRe(child).FindAllSubmatch(markup, -1)
-	if n < 0 || n >= len(m) {
-		return "", false
+// findActionURL returns the URL in markup that posts to one of targets, tried
+// in order, with exactly query ("" for an action with no arg).
+func findActionURL(markup []byte, targets []actionid.Target, query string) (string, bool) {
+	m := actionURLRe.FindAllSubmatch(markup, -1)
+	for _, tg := range targets {
+		for _, u := range m {
+			if (tg.Unit != "" && string(u[3]) != tg.Unit) || string(u[4]) != tg.ID {
+				continue
+			}
+			// The URL sits in attributes, so it is entity-escaped there: the
+			// browser posts the decoded text.
+			full := html.UnescapeString(string(u[2]) + string(u[1]))
+			if _, q, _ := strings.Cut(full, "?"); q == query {
+				return full, true
+			}
+		}
 	}
-	// The URL sits in attributes, so it is entity-escaped there: the
-	// browser posts the decoded text ("&amp;" joins two query params as "&").
-	return html.UnescapeString(string(m[n][2]) + string(m[n][1])), true
+	return "", false
 }
 
 // Serve mounts handler on an in-memory httptest server (req.TLS is nil), so
@@ -171,27 +183,57 @@ func (a *App) Get(path string) (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// Action builds a POST to the n-th action the root renders, in document
-// order (the root is child "_"). The URL is read off the root page the App's
-// first Fire fetched, not constructed: the wire id is a hash of the handler's
-// func name and any ?a= row datum rides along with it, so a hand-built path
-// would be wrong. That page is cached, so an action that only appears after a
-// change needs Raw with a URL read off a fresh Get. By default it carries
-// Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch; the
-// builder methods override that to exercise the origin floor.
-func (a *App) Action(n int) *Action { return a.ChildAction("_", n) }
-
-// ChildAction builds a POST to the n-th action a child renders,
-// in document order. child is the key a child's own container carries:
-// its field path from the root, '-'-joined: "Chat" for via.Child(&p.Chat),
-// "Stats-A" for &p.Stats.A, "Rows-1" for &p.Rows[1], "Outer-Kid" for a Kid
-// the child Outer renders (the root is "_"; use Action for that).
-func (a *App) ChildAction(child string, n int) *Action {
-	return &Action{app: a, child: child, n: n, headers: map[string]string{}, body: "{}"}
+// Act builds a POST to the action fn returns, taken off the mounted
+// composition: vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Chat.Send }).
+// The handler is named, not counted, so reordering the View moves no test. A
+// handler on a field rendered with via.Child is found under that child. The
+// URL is read off the root page the App's first Fire fetched (or, with Over,
+// off the Conn's pushed frames), so an action that only appears after a
+// change needs Over or Post with a URL read off a fresh Get. By default it
+// carries Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch;
+// the builder methods override that to exercise the origin floor.
+func Act[P any](a *App, fn func(*P) func(*via.Ctx)) *Action {
+	root := new(P)
+	return a.act(root, fn(root), "")
 }
 
-// page fetches and caches the root page's HTML, so repeated Action/
-// ChildAction calls don't re-render it.
+// ActArg is Act for a handler bound with on.Bind(fn, arg): it posts to the
+// binding of fn that carries arg, as clicking that row's button would.
+func ActArg[P, T any](a *App, fn func(*P) func(*via.Ctx, T), arg T) *Action {
+	data, err := json.Marshal(arg)
+	if err != nil {
+		a.t.Fatalf("vt.ActArg: arg does not encode: %v", err)
+	}
+	root := new(P)
+	return a.act(root, fn(root), "a="+url.QueryEscape(string(data)))
+}
+
+// act builds an Action for h, a handler taken off root.
+func (a *App) act(root, h any, query string) *Action {
+	return &Action{app: a, targets: actionid.Targets(root, h), name: actionid.FuncOf(reflect.ValueOf(h).Pointer()).Name,
+		query: query, headers: map[string]string{}, body: "{}"}
+}
+
+// Post builds a POST to path as is, for a URL the test read itself: one off a
+// fresh Get, or a forged or stale one.
+func (a *App) Post(path string) *Action {
+	return &Action{app: a, raw: path, headers: map[string]string{}, body: "{}"}
+}
+
+// Key is the key via gives the child fn points at, its field path from the
+// root: vt.Key(func(p *Page) *Chat { return &p.Chat }) is "Chat". The child's
+// container is #via-i{key}.
+func Key[P, C any](fn func(*P) *C) string {
+	root := new(P)
+	key, ok := actionid.Key(root, fn(root))
+	if !ok {
+		panic("vt.Key: fn must return the address of a field (or array element) of the *P it is given")
+	}
+	return key
+}
+
+// page fetches and caches the root page's HTML, so repeated Act calls don't
+// re-render it.
 func (a *App) page() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -206,8 +248,9 @@ func (a *App) page() string {
 // Action is a builder for an action POST.
 type Action struct {
 	app         *App
-	child       string
-	n           int
+	targets     []actionid.Target
+	name        string // the handler's Go name, for a lookup that fails
+	query       string // "a=…" for an on.Bind arg
 	raw         string
 	host        string
 	headers     map[string]string
@@ -219,11 +262,6 @@ type Action struct {
 	tabSet      bool
 	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
 }
-
-// Raw overrides the URL Fire posts to, bypassing the page-read lookup — for a
-// test that deliberately wants a hand-built or stale URL (e.g. asserting a
-// 410 on an action id this render no longer binds).
-func (a *Action) Raw(path string) *Action { a.raw = path; return a }
 
 // Host overrides the request Host header (the authority the origin floor
 // compares an Origin against). The connection still dials the test server.
@@ -254,11 +292,10 @@ func (a *Action) Header(k, v string) *Action { a.headers[k] = v; return a }
 func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 
 // Over routes this action over c's stream: its viatab signal is set to c's
-// tab id, and — unless Raw overrides it — Fire reads the action's URL off c's own
-// pushed markup (see Conn.ActionURL) instead of a separate plain GET's
-// render. That GET renders a fresh tab, so once c's actions have changed what
-// is on screen (a row added, a branch toggled), its n-th action can be a
-// different handler.
+// tab id, and — unless Post pinned it — Fire reads the action's URL off c's
+// own pushed markup (see Conn.find) instead of a separate plain GET's render.
+// That GET renders a fresh tab, so once c's actions have changed what is on
+// screen (a row added, a branch toggled), it may not bind the handler at all.
 func (a *Action) Over(c *Conn) *Action {
 	a.conn = c
 	return a.Tab(c.tabID)
@@ -300,7 +337,7 @@ func (a *Action) signalBody() string {
 // for a malformed body, an oversized one, or a busy or closing server.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
-	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.path(), strings.NewReader(a.signalBody()))
+	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.URL(), strings.NewReader(a.signalBody()))
 	if err != nil {
 		a.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
@@ -327,21 +364,31 @@ func (a *Action) Fire() (int, string) {
 	return resp.StatusCode, string(b)
 }
 
-// path is the action URL Fire posts to: the raw one the test pinned, else the
-// open Conn's, else the one the rendered page carries.
-func (a *Action) path() string {
+// URL is the action URL Fire posts to: the one Post pinned, else the open
+// Conn's, else the one the rendered page carries.
+func (a *Action) URL() string {
 	a.app.t.Helper()
 	if a.raw != "" {
 		return a.raw
 	}
 	if a.conn != nil {
-		if u := a.conn.ActionURL(a.child, a.n); u != "" {
+		if u, ok := a.conn.find(a.targets, a.query); ok {
 			return u
 		}
 	}
-	u, ok := nthActionURL([]byte(a.app.page()), a.child, a.n)
+	u, ok := findActionURL([]byte(a.app.page()), a.targets, a.query)
 	if !ok {
-		a.app.t.Fatalf("vt.Action.Fire: no action %s/%d found on the rendered page", a.child, a.n)
+		hint := ""
+		if strings.Contains(a.name, "[...]") {
+			// Inside a generic type's View, c.M compiles to a closure named
+			// after the View, so the binding carries that name, not M's.
+			hint = "; a method on a generic type is bound under its View's closure name, so post its URL with Post"
+		}
+		name := a.name
+		if a.query != "" {
+			name += " with ?" + a.query
+		}
+		a.app.t.Fatalf("vt.Action.URL: %s is bound nowhere on the rendered page%s", name, hint)
 	}
 	return u
 }
@@ -540,27 +587,22 @@ func (c *Conn) endRead(sc *bufio.Scanner) {
 // connection; Action.Over splices it in for you.
 func (c *Conn) TabID() string { return c.tabID }
 
-// ActionURL returns the currently-rendered URL of child's n-th action, in
-// document order — read off the latest datastar-patch-elements frame that
-// carries one, the same markup a browser's DOM would hold at this point, not a
-// separate plain GET's render. Until a push carries the child (the first
-// action after Connect, say), it falls back to the page's initial GET, which
-// is what a browser would still show.
-func (c *Conn) ActionURL(child string, n int) string {
-	c.t.Helper()
+// find returns the currently-rendered URL of one of targets — read off the
+// latest datastar-patch-elements frame that carries one, the same markup a
+// browser's DOM would hold at this point, not a separate plain GET's render.
+// Until a push carries it (the first action after Connect, say), the caller
+// falls back to the page's initial GET, which is what a browser would still
+// show.
+func (c *Conn) find(targets []actionid.Target, query string) (string, bool) {
 	c.mu.Lock()
 	frames := append([][]byte(nil), c.elements...)
 	c.mu.Unlock()
 	for i := len(frames) - 1; i >= 0; i-- {
-		if u, ok := nthActionURL(frames[i], child, n); ok {
-			return u
+		if u, ok := findActionURL(frames[i], targets, query); ok {
+			return u, true
 		}
 	}
-	if u, ok := nthActionURL([]byte(c.app.page()), child, n); ok {
-		return u
-	}
-	c.t.Fatalf("vt.Conn.ActionURL: no action %s/%d found on the page or any pushed frame", child, n)
-	return ""
+	return "", false
 }
 
 // Peek takes the next buffered frame without blocking. Like Await it consumes

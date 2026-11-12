@@ -35,7 +35,7 @@ func TestRoom_aPublishReachesEveryTab(t *testing.T) {
 	alice, bob := app.Connect(), app.Connect()
 	assert.NotEqual(t, alice.TabID(), bob.TabID())
 
-	status, _ := app.Action(0).Over(alice).Fire()
+	status, _ := vt.Act(app, func(r *Room) func(*via.Ctx) { return r.Wave }).Over(alice).Fire()
 	require.Equal(t, 204, status)
 
 	alice.Await("last: wave")

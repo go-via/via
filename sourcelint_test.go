@@ -351,12 +351,10 @@ func TestCore_reflectUseMatchesTheAllowlist(t *testing.T) {
 		"via.go": {"reflect.Array", "reflect.Map", "reflect.New", "reflect.Pointer", "reflect.PointerTo",
 			"reflect.Slice", "reflect.Struct", "reflect.StructField", "reflect.Type",
 			"reflect.TypeOf", "reflect.Uint8"},
-		// action.go resolves a handler's Go name off its code pointer and its
-		// receiver's field path off the unit type, once per (unit type, fn,
-		// receiver offset) and memoized — see actionID.
-		"action.go": {"reflect.Array", "reflect.Struct",
-			"reflect.StructField", "reflect.Type", "reflect.ValueOf"},
-		"child.go": {"reflect.Array", "reflect.Struct", "reflect.StructField", "reflect.Type", "reflect.TypeFor"},
+		// action.go reads a handler's code pointer; internal/actionid names it
+		// once per (unit type, fn, receiver offset) and memoizes — see actionID.
+		"action.go": {"reflect.ValueOf"},
+		"child.go":  {"reflect.Type", "reflect.TypeFor"},
 		// hooks.go checks each composition type's hook methods once — see
 		// checkHooks.
 		"hooks.go": {"reflect.PointerTo", "reflect.Type", "reflect.TypeOf"},
@@ -1339,15 +1337,16 @@ func failsThrough(body *ast.BlockStmt, t string) bool {
 // A new edge is a design decision, made here in review. A package split out
 // of root never imports it (CONVENTIONS.md, Internal Packages).
 var allowedImports = map[string][]string{
-	"via":              {"expr", "h", "internal/render", "internal/session", "topic"},
-	"expr":             nil,
-	"h":                {"internal/render"},
-	"internal/render":  nil,
-	"internal/session": nil,
-	"on":               {"expr", "h", "internal/render", "via"},
-	"topic":            nil,
-	"vt":               nil,
-	"vtbrowser":        nil,
+	"via":               {"expr", "h", "internal/actionid", "internal/render", "internal/session", "topic"},
+	"expr":              nil,
+	"h":                 {"internal/render"},
+	"internal/actionid": nil,
+	"internal/render":   nil,
+	"internal/session":  nil,
+	"on":                {"expr", "h", "internal/render", "via"},
+	"topic":             nil,
+	"vt":                {"internal/actionid", "via"},
+	"vtbrowser":         nil,
 }
 
 func TestPackages_importOnlyWhatTheTableAdmits(t *testing.T) {
@@ -2459,23 +2458,24 @@ func (*Action) Host(string) *Action
 func (*Action) NoOrigin() *Action
 func (*Action) Origin(string) *Action
 func (*Action) Over(*Conn) *Action
-func (*Action) Raw(string) *Action
 func (*Action) SecFetch(string) *Action
 func (*Action) Tab(string) *Action
-func (*App) Action(int) *Action
-func (*App) ChildAction(string, int) *Action
+func (*Action) URL() string
 func (*App) Client() *http.Client
 func (*App) Connect() *Conn
 func (*App) ConnectAt(string, string) *Conn
 func (*App) ConnectWith(string) *Conn
 func (*App) Get(string) (int, string)
+func (*App) Post(string) *Action
 func (*App) URL() string
-func (*Conn) ActionURL(string, int) string
 func (*Conn) Await(string) string
 func (*Conn) AwaitClose() error
 func (*Conn) Close()
 func (*Conn) Peek() (string, bool)
 func (*Conn) TabID() string
+func ActArg[P, T any](*App, func(*P) func(*via.Ctx, T), T) *Action
+func Act[P any](*App, func(*P) func(*via.Ctx)) *Action
+func Key[P, C any](func(*P) *C) string
 func Logger(testing.TB) *slog.Logger
 func Serve(testing.TB, http.Handler) *App
 func ServeTLS(testing.TB, http.Handler) *App
@@ -2488,6 +2488,7 @@ func (*Session) Click(string)
 func (*Session) ConsoleErrors() []string
 func (*Session) Eval(string, any)
 func (*Session) GoTo(string)
+func (*Session) In(string) Scope
 func (*Session) NewTab() *Session
 func (*Session) Reload()
 func (*Session) RequireCleanConsole()
@@ -2504,8 +2505,11 @@ func (*Session) WaitLiveConnected()
 func (*Session) WaitLoaded()
 func (*Session) WaitTextContains(string, string)
 func (*Session) WaitValue(string, string)
+func (Scope) Click(string)
+func (Scope) WaitTextContains(string, string)
 func Open(testing.TB, http.Handler) *Session
 func OpenURL(testing.TB, string) *Session
+type Scope struct{}
 type Session struct{}
 `,
 }

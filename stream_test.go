@@ -674,7 +674,7 @@ func TestLiveAction_mutatesThisConnectionsStateAndPushesOverItsSSE(t *testing.T)
 		app := vt.Serve(t, via.Handler(clicker{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *clicker) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "a live action acks 204; the patch ships over the SSE")
 
 		conn.Await("count: 1") // the mutation reaches this connection
@@ -709,10 +709,10 @@ func TestLive_pushPanicDoesNotKillTheStream(t *testing.T) {
 		app := vt.Serve(t, via.Handler(flakyRender{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *flakyRender) func(*via.Ctx) { return p.Trigger }).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "the mutation applies and answers before its render panics")
 
-		status, _ = app.Action(1).Over(conn).Fire()
+		status, _ = vt.Act(app, func(p *flakyRender) func(*via.Ctx) { return p.Fix }).Over(conn).Fire()
 		assert.Equal(t, http.StatusNoContent, status, "the stream goroutine must still be alive to dispatch a second action")
 		conn.Await("n: 1")
 	})

@@ -329,7 +329,7 @@ func TestLive_actionDoesNotOverwriteTheConnectCtxATickHolds(t *testing.T) {
 		// still the exact Ctx OnInit handed to Tick. Waiting for a push first
 		// replaces the unit with a fresh render Ctx, hiding the corruption this
 		// test exists to catch.
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *pathTicker) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n: 1") // the action landed
 
@@ -1289,7 +1289,7 @@ func TestLive_tickCalledFromAnActionHandlerIsALoudNoOp(t *testing.T) {
 		conn := app.Connect()
 		defer conn.Close()
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *actionTicker) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n=1")
 
@@ -1328,7 +1328,7 @@ func TestLive_tickCalledFromAPlainActionHandlerIsALoudNoOp(t *testing.T) {
 
 	beats := &atomic.Int64{}
 	app := vt.Serve(t, via.Handler(plainTicker{beats: beats}))
-	status, _ := app.Action(0).Fire()
+	status, _ := vt.Act(app, func(p *plainTicker) func(*via.Ctx) { return p.Bump }).Fire()
 	require.Equal(t, http.StatusOK, status)
 
 	assert.Equal(t, int64(0), beats.Load(),
@@ -1406,7 +1406,7 @@ func fireReloadRegistrar(t *testing.T, hook string) string {
 	app := vt.Serve(t, via.Handler(reloadRegistrar{hook: hook, room: topic.New[int]()}, logTo(&out)))
 	_, page := app.Get("/")
 	require.NotContains(t, page, "data-init", "the page must be served plain")
-	code, body := app.Action(0).Fire()
+	code, body := vt.Act(app, func(p *reloadRegistrar) func(*via.Ctx) { return p.Bump }).Fire()
 	require.Equal(t, http.StatusOK, code)
 	require.Contains(t, body, "<p>1</p>")
 	return out.String()
@@ -1478,12 +1478,13 @@ func TestLive_anActionsContextIsTheStreamsNotThePOSTs(t *testing.T) {
 		got := make(chan context.Context, 1)
 		app := vt.Serve(t, via.Handler(ctxKeeper{got: got}))
 		conn := app.Connect()
-		code, _ := app.Action(0).Over(conn).Fire()
+		keep := func(p *ctxKeeper) func(*via.Ctx) { return p.Keep }
+		code, _ := vt.Act(app, keep).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		<-got
 		conn.Await(">1<")
 		// The second action runs on the unit the first one's push rebuilt.
-		code, _ = app.Action(0).Over(conn).Fire()
+		code, _ = vt.Act(app, keep).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, code)
 		actx := <-got
 

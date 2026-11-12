@@ -198,14 +198,14 @@ func TestUnknownAction_isGone(t *testing.T) {
 func TestAction_invalidUTF8InSignalBodyIsNotA400(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(boundForm{}))
-	status, _ := app.Action(0).Body("{\"name\":\"\xff\"}").Fire()
+	status, _ := vt.Act(app, func(p *boundForm) func(*via.Ctx) { return p.Save }).Body("{\"name\":\"\xff\"}").Fire()
 	assert.Equal(t, http.StatusOK, status)
 }
 
 func TestAction_duplicateSignalKeyLastWins(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(boundForm{}))
-	status, frag := app.Action(0).Body(`{"name":"one","name":"two"}`).Fire()
+	status, frag := vt.Act(app, func(p *boundForm) func(*via.Ctx) { return p.Save }).Body(`{"name":"one","name":"two"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "two")
 	assert.NotContains(t, frag, "one")

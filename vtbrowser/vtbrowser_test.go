@@ -31,6 +31,7 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/topic"
+	"github.com/go-via/via/vt"
 	"github.com/go-via/via/vtbrowser"
 )
 
@@ -145,8 +146,9 @@ func TestChild_multiplexedChildsUpdateIndependently(t *testing.T) {
 	// Counter child: its action must route to #via-iCounter via the viatab signal and morph
 	// only that container, leaving the clock running.
 	s.WaitLiveConnected()
-	s.Click("#via-iCounter button")
-	s.WaitTextContains("#via-iCounter p", "clicks 1")
+	counter := s.In(vt.Key(func(d *bDash) *bCounter { return &d.Counter }))
+	counter.Click("button")
+	counter.WaitTextContains("p", "clicks 1")
 	s.RequireCleanConsole()
 }
 

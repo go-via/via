@@ -23,9 +23,9 @@ func (c *Counter) Dec(ctx *via.Ctx) { c.n.Add(-1) }
 
 func (c *Counter) View() h.H {
 	return h.Div(
-		h.Button(on.Click(c.Dec), h.Str("-")), // action 0
+		h.Button(on.Click(c.Dec), h.Str("-")),
 		h.P(h.Str("count: "), h.Str(c.n.Load())),
-		h.Button(on.Click(c.Inc), h.Str("+")), // action 1
+		h.Button(on.Click(c.Inc), h.Str("+")),
 	)
 }
 
@@ -40,7 +40,7 @@ func TestCounter_incrementsOnClick(t *testing.T) {
 	require.Equal(t, 200, status)
 	assert.Contains(t, body, "count: 0")
 
-	status, body = app.Action(1).Fire() // the second action on the page: Inc
+	status, body = vt.Act(app, func(c *Counter) func(*via.Ctx) { return c.Inc }).Fire()
 	require.Equal(t, 200, status)
 	assert.Contains(t, body, "count: 1") // the Datastar patch for the re-render
 }

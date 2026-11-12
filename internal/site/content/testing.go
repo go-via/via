@@ -42,7 +42,7 @@ func (p *Testing) View() h.H {
 
 		d.H2("Test a page without a browser"),
 		snippet.Region("testing/plain.go", "counter", snippet.Title("counter.go")),
-		snippet.Region("testing/plain.go", "test", snippet.Title("counter_test.go"), snippet.Mark("vt.Serve", "vt.Logger", "Action(1)")),
+		snippet.Region("testing/plain.go", "test", snippet.Title("counter_test.go"), snippet.Mark("vt.Serve", "vt.Logger", "vt.Act(")),
 		h.P(API("vt.Serve"), h.Str(" mounts any "), Code("http.Handler"), h.Str(" on an in-memory "), Code("httptest"),
 			h.Str(" server and closes it when the test ends. "), API("vt.App.Get"), h.Str(" returns the status and body; a render "+
 				"that panics comes back as a 500, not a transport error.")),
@@ -50,28 +50,24 @@ func (p *Testing) View() h.H {
 			h.Str(", sends via's warnings to the test's own log, which go test prints only when the test fails or runs "+
 				"with -v. Without it they reach stderr on every run, the "), API("via.WithTrustedOrigin"),
 			h.Str(" warning once per router.")),
-		h.P(API("vt.App.Action"), h.Str(" addresses an action by position: "), Code("Action(n)"),
-			h.Str(" is the n-th action the root renders, in document order. vt reads the action's URL off the rendered page "+
-				"when the action fires, because the wire id is a hash of the handler and cannot be built by hand. "),
+		h.P(API("vt.Act"), h.Str(" names an action by its handler: "), Code("vt.Act(app, func(c *Counter) func(*via.Ctx) { return c.Inc })"),
+			h.Str(" posts to wherever the View binds Counter.Inc, so reordering the View moves no test. vt reads the action's URL "+
+				"off the rendered page when the action fires, because the wire id is a hash of the handler's name and field path. "),
 			API("vt.Action.Fire"), h.Str(" returns the status and the body, which on a plain page is the Datastar patch.")),
-		Callout(Caveat, "Positions move with the View",
-			h.P(h.Str("Adding a button above another shifts every index after it. That is the cost of addressing by "+
-				"render order; a comment naming each index, as above, keeps the test readable.")),
-		),
 
 		d.H2("Actions and arguments"),
 		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark("Body(")),
 		h.P(API("vt.Action.Body"), h.Str(" sets the JSON the browser would post: the page's signals, keyed by wire name. "+
 			"The handler reads them with "), API("via.Signal.Get"), h.Str(" as it would from a real click.")),
-		snippet.Region("testing/args.go", "arg", snippet.Title("shelf_test.go"), snippet.Mark("Action(1)")),
+		snippet.Region("testing/args.go", "arg", snippet.Title("shelf_test.go"), snippet.Mark("vt.ActArg(")),
 		h.P(h.Str("An action bound with "), API("on.Bind"),
-			h.Str(" renders one URL per row, each carrying its own argument. Picking a row by position picks its argument; "+
-				"there is nothing to encode.")),
-		snippet.Region("testing/args.go", "child", snippet.Title("layout_test.go"), snippet.Mark("ChildAction")),
-		h.P(API("vt.App.ChildAction"), h.Str(" does the same inside a child. The key is the child's container: "),
-			Code(`"Search"`), h.Str(" for "), API("via.Child"), h.Str("(&l.Search), "), Code(`"Stats-A"`),
-			h.Str(" for a field of a nested struct, "), Code(`"Outer-Kid"`), h.Str(" for a child inside the child Outer. "+
-				"A child's signals carry its field name and a double underscore.")),
+			h.Str(" renders one URL per row, each carrying its own argument. "), API("vt.ActArg"),
+			h.Str(" picks the row by that argument, encoded as the binding encodes it.")),
+		snippet.Region("testing/args.go", "child", snippet.Title("layout_test.go"), snippet.Mark("l.Search.Go")),
+		h.P(h.Str("A child's handler is named through the parent's field, "), Code("l.Search.Go"),
+			h.Str(", and vt finds it under the child's container. "), API("vt.Key"), h.Str(" gives the key itself, "),
+			Code(`"Search"`), h.Str(", "), Code(`"Stats-A"`), h.Str(" or "), Code(`"Outer-Kid"`),
+			h.Str(", when a test needs the container id. A child's signals carry its field name and a double underscore.")),
 		snippet.Region("testing/args.go", "origin", snippet.Title("counter_test.go"), snippet.Mark("Origin(", "NoOrigin")),
 		h.P(h.Str("Every action is a same-origin fetch by default. "), API("vt.Action.Origin"), h.Str(", "),
 			API("vt.Action.NoOrigin"), h.Str(", "), API("vt.Action.SecFetch"), h.Str(" and "), API("vt.Action.Host"),
@@ -200,9 +196,12 @@ func (p *Testing) View() h.H {
 			h.Li(h.Strong(h.Str("Frames are text. ")), API("vt.Conn.Await"),
 				h.Str(" matches a substring of one frame line, not a parsed DOM. It cannot assert structure, and it can "+
 					"match a stale frame.")),
-			h.Li(h.Strong(h.Str("Action URLs come from the root page. ")), API("vt.App.Action"),
+			h.Li(h.Strong(h.Str("Action URLs come from the root page. ")), API("vt.Act"),
 				h.Str(" reads URLs from a GET of "), Code("/"), h.Str(". For a page mounted elsewhere, take the URL from its "),
-				API("vt.App.Get"), h.Str(" and pass it to "), API("vt.Action.Raw"), h.Str(".")),
+				API("vt.App.Get"), h.Str(" and pass it to "), API("vt.App.Post"), h.Str(".")),
+			h.Li(h.Strong(h.Str("A generic type's handlers have no name vt can reach. ")),
+				h.Str("Inside a generic type's View, "), Code("c.M"), h.Str(" compiles to a closure named after the View, so "),
+				API("vt.Act"), h.Str(" cannot find it; read its URL off the page and "), API("vt.App.Post"), h.Str(" it.")),
 		),
 		h.P(h.Str("For behaviour that depends on the client (client-only signals, modifiers, morphing, reconnect), "+
 			"write a "), Code("vtbrowser"), h.Str(" test.")),

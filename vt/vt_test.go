@@ -64,6 +64,9 @@ type tally struct {
 
 func (p *tally) Inc(ctx *via.Ctx) { p.N.Set(p.N.Get() + 1) }
 
+// tallyInc names tally's one action for vt.Act.
+func tallyInc(p *tally) func(*via.Ctx) { return p.Inc }
+
 func (p *tally) View() h.H {
 	return h.Div(h.Button(on.Click(p.Inc)), h.P(h.Str("n="), p.N.Display()), h.P(h.Str(p.Tail)))
 }
@@ -74,7 +77,7 @@ func TestConnAwait_timeoutShowsTheFramesThatDidArrive(t *testing.T) {
 		app := vt.Serve(rec, via.Handler(tally{}, via.WithLogger(vt.Logger(t))))
 		conn := app.Connect()
 		for range 3 {
-			status, _ := app.Action(0).Over(conn).Fire()
+			status, _ := vt.Act(app, tallyInc).Over(conn).Fire()
 			require.Equal(t, http.StatusNoContent, status)
 		}
 		conn.Await("n=3")
@@ -93,7 +96,7 @@ func TestConnAwait_truncatesALongFrame(t *testing.T) {
 		rec := &recorder{TB: t}
 		app := vt.Serve(rec, via.Handler(tally{Tail: strings.Repeat("x", 5000) + "END"}, via.WithLogger(vt.Logger(t))))
 		conn := app.Connect()
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, tallyInc).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		msg := rec.failure(func() { conn.Await("never") })
@@ -163,7 +166,7 @@ func TestConnAwait_findsAFrameLargerThanAScannerToken(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(tally{Tail: strings.Repeat("x", 100<<10)}, via.WithLogger(vt.Logger(t))))
 		conn := app.Connect()
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, tallyInc).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 		conn.Await("n=1")
 	})
@@ -174,7 +177,7 @@ func TestConnAwait_timeoutCountsTheFramesThisWaitRead(t *testing.T) {
 		rec := &recorder{TB: t}
 		app := vt.Serve(rec, via.Handler(tally{}, via.WithLogger(vt.Logger(t))))
 		conn := app.Connect()
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, tallyInc).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		msg := rec.failure(func() { conn.Await("never") })
@@ -193,6 +196,71 @@ func TestAction_aNullBodyWithATabIsPostedVerbatim(t *testing.T) {
 		}
 		inner.ServeHTTP(w, r)
 	}))
-	app.Action(0).Body("null").Tab("x").Fire()
+	vt.Act(app, tallyInc).Body("null").Tab("x").Fire()
 	assert.Equal(t, "null", string(posted))
+}
+
+type actKid struct{ n int }
+
+func (k *actKid) Bump(*via.Ctx) { k.n++ }
+func (k *actKid) View() h.H {
+	return h.Div(h.Button(on.Click(k.Bump)), h.P(h.Str(fmt.Sprintf("kid=%d", k.n))))
+}
+
+type actPage struct {
+	Kid    actKid
+	picked string
+}
+
+func (p *actPage) Pick(ctx *via.Ctx, s string) { p.picked = s }
+func (p *actPage) Reset(*via.Ctx)              { p.picked = "reset" }
+func (p *actPage) Unbound(*via.Ctx)            {}
+func (p *actPage) View() h.H {
+	return h.Div(
+		h.Button(on.Click(on.Bind(p.Pick, "x"))), h.Button(on.Click(on.Bind(p.Pick, "y"))),
+		via.Child(&p.Kid),
+		h.Button(on.Click(p.Reset)), h.P(h.Str("picked="+p.picked)),
+	)
+}
+
+func TestAct_postsTheNamedHandlerWhereverTheViewPutsIt(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(actPage{}))
+
+	status, body := vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Reset }).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "picked=reset", "two row buttons and a child sit before Reset in the View")
+}
+
+func TestAct_findsAHandlerUnderTheChildThatRendersIt(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(actPage{}))
+
+	act := vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Kid.Bump })
+	assert.Contains(t, act.URL(), "/_via/a/Kid/")
+	_, body := act.Fire()
+	assert.Contains(t, body, "kid=1")
+}
+
+func TestActArg_postsTheRowCarryingTheArg(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(actPage{}))
+
+	_, body := vt.ActArg(app, func(p *actPage) func(*via.Ctx, string) { return p.Pick }, "y").Fire()
+	assert.Contains(t, body, "picked=y")
+}
+
+func TestAct_failsNamingAHandlerTheViewDoesNotBind(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{TB: t}
+	app := vt.Serve(rec, via.Handler(actPage{}))
+
+	msg := rec.failure(func() { vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Unbound }).Fire() })
+	assert.Contains(t, msg, "Unbound")
+	assert.Contains(t, msg, "bound nowhere")
+}
+
+func TestKey_isTheChildsFieldPath(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "Kid", vt.Key(func(p *actPage) *actKid { return &p.Kid }))
 }

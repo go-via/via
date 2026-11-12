@@ -136,7 +136,7 @@ func TestSignal_boundValueRoundTripsAndSlotStaysStableAcrossPost(t *testing.T) {
 	_, page := app.Get("/")
 	getSlot := attrValue(t, page, "data-bind")
 
-	status, frag := app.Action(0).Body(`{"` + getSlot + `":"Ada"}`).Fire()
+	status, frag := vt.Act(app, func(p *boundForm) func(*via.Ctx) { return p.Save }).Body(`{"` + getSlot + `":"Ada"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Equal(t, getSlot, attrValue(t, frag, "data-bind"), "wire name must be stable across the POST")
 	assert.Contains(t, frag, "Ada", "response must reflect the value the client typed, not a zero reset")
@@ -212,7 +212,7 @@ func TestPlainSignal_setOnANeverRenderedSignalRidesTheActionPatch(t *testing.T) 
 	_, page := app.Get("/")
 	assert.NotContains(t, page, `"series"`, "nothing has written it yet")
 
-	_, frag := app.Action(0).Fire()
+	_, frag := vt.Act(app, func(p *plainIsland) func(*via.Ctx) { return p.Load }).Fire()
 	assert.Contains(t, frag, `"series":[1,2,3]`, "the action's Set must ride the patch with no Bind or Display anywhere")
 }
 
@@ -221,7 +221,7 @@ func TestLiveSignal_setOnANeverRenderedSignalPatchesTheClient(t *testing.T) {
 		app := vt.Serve(t, via.Handler(island{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *island) func(*via.Ctx) { return p.Load }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		assert.Contains(t, conn.Await(`"series"`), "[1,2,3]",
@@ -253,7 +253,7 @@ func TestPlainAction_answerSendsOnlyTheSignalsItWrote(t *testing.T) {
 	assert.Contains(t, page, `"written":""`, "the GET first paint declares every slot")
 	assert.Contains(t, page, `"left":""`, "the GET first paint declares every slot")
 
-	status, frag := app.Action(0).Fire()
+	status, frag := vt.Act(app, func(p *twoSignals) func(*via.Ctx) { return p.Fill }).Fire()
 	assert.Equal(t, http.StatusOK, status, "the action patch is delivered")
 	assert.Contains(t, frag, `"written":"ada"`, "the written signal is sent")
 	assert.NotContains(t, frag, "left\":", "the untouched signal must not be sent")
@@ -261,7 +261,7 @@ func TestPlainAction_answerSendsOnlyTheSignalsItWrote(t *testing.T) {
 
 func TestPlainAction_answersAWrittenSignalAsAPatchSignalsFrame(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(twoSignals{})).Action(0).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(twoSignals{})), func(p *twoSignals) func(*via.Ctx) { return p.Fill }).Fire()
 	assert.Contains(t, frag, "event: datastar-patch-signals\ndata: signals {\"written\":\"ada\"}",
 		"a morph skips a data-signals text the element already has, so a Set rides its own frame")
 	assert.NotContains(t, frag, "data-signals", "no attribute for the morph to skip")
@@ -317,7 +317,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	_, step0 := app.Get("/")
 	nameSlot := bindSlots(step0)[0]
 
-	status, _ := app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	status, _ := vt.Act(app, func(p *wizard) func(*via.Ctx) { return p.Next }).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status, "the live action acks; the push carries the render")
 
 	// "name=" and not "name=Ada": a live push renders the server's value for a
@@ -331,7 +331,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnALivePage(t *testing.T) {
 	// Save, with the client store the browser is actually holding: the name it
 	// typed on step 1, under the slot that input had. Nothing has been typed
 	// into the email box yet, so an aliased slot posts the name into Email.
-	status, _ = app.Action(0).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	status, _ = vt.Act(app, func(p *wizard) func(*via.Ctx) { return p.Save }).Over(conn).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusNoContent, status)
 
 	line := conn.Await("saved")
@@ -344,7 +344,7 @@ func TestSignal_conditionalBindKeepsItsOwnSlotOnAPlainPage(t *testing.T) {
 	_, page := app.Get("/")
 	nameSlot := bindSlots(page)[0]
 
-	status, frag := app.Action(0).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
+	status, frag := vt.Act(app, func(p *plainWizard) func(*via.Ctx) { return p.Next }).Body(`{"` + nameSlot + `":"Ada"}`).Fire()
 	require.Equal(t, http.StatusOK, status)
 	emailSlot := bindSlots(frag)[0]
 	assert.NotEqual(t, nameSlot, emailSlot, "the email input must not be seated on the name's slot")
@@ -356,7 +356,7 @@ func TestPlainAction_patchSeedsAnInputThatJustAppeared(t *testing.T) {
 	app := vt.Serve(t, via.Handler(plainWizard{}))
 	_, page := app.Get("/")
 
-	_, frag := app.Action(0).Body(`{"` + bindSlots(page)[0] + `":"Ada"}`).Fire()
+	_, frag := vt.Act(app, func(p *plainWizard) func(*via.Ctx) { return p.Next }).Body(`{"` + bindSlots(page)[0] + `":"Ada"}`).Fire()
 	emailSlot := bindSlots(frag)[0]
 	assert.Contains(t, frag, `"`+emailSlot+`":""`, "the newly-appearing input must be seeded")
 }
@@ -464,7 +464,7 @@ func (g *gatedFlag) View() h.H {
 func TestSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(gatedFlag{}))
-	status, frag := app.Action(0).Body(`{"admin":true}`).Fire()
+	status, frag := vt.Act(app, func(p *gatedFlag) func(*via.Ctx) { return p.Bump }).Body(`{"admin":true}`).Fire()
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
 	assert.NotContains(t, frag, "admin only",
@@ -497,7 +497,7 @@ func TestLiveSignal_displayOnlySignalIsNotHydratedFromTheRequest(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveGatedFlag{}))
 		conn := app.Connect()
-		status, _ := app.Action(0).Over(conn).Body(`{"admin":true}`).Fire()
+		status, _ := vt.Act(app, func(p *liveGatedFlag) func(*via.Ctx) { return p.Bump }).Over(conn).Body(`{"admin":true}`).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		frame := conn.Await(">1<")
@@ -587,7 +587,7 @@ func TestSignal_undecodableValueIsDroppedAndLogged(t *testing.T) {
 
 	buf := globalLog(t)
 
-	status, frag := app.Action(0).Body(`{"` + slot + `":"not-a-number"}`).Fire()
+	status, frag := vt.Act(app, func(p *dropForm) func(*via.Ctx) { return p.Save }).Body(`{"` + slot + `":"not-a-number"}`).Fire()
 	assert.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `data-text="$`+slot+`">0<`, "the undecodable value must not overwrite the zero value")
 	assert.Contains(t, buf.String(), slot, "the log must name the slot that failed to decode")
@@ -622,7 +622,7 @@ func TestSignal_undecodableValueIsLoggedOncePerConnection(t *testing.T) {
 	buf := globalLog(t)
 
 	for range 3 {
-		status, _ := app.Action(0).Over(conn).Body(`{"n":"not-a-number"}`).Fire()
+		status, _ := vt.Act(app, func(p *dropFormLive) func(*via.Ctx) { return p.Save }).Over(conn).Body(`{"n":"not-a-number"}`).Fire()
 		assert.Equal(t, http.StatusNoContent, status)
 	}
 
@@ -658,7 +658,7 @@ func TestSignal_undecodableValuesAreLoggedOncePerRequest(t *testing.T) {
 	buf := globalLog(t)
 
 	body := `{"` + strings.Join(slots, `":"x","`) + `":"x"}`
-	status, _ := app.Action(0).Body(body).Fire()
+	status, _ := vt.Act(app, func(p *dropFormWide) func(*via.Ctx) { return p.Save }).Body(body).Fire()
 	assert.Equal(t, http.StatusOK, status)
 
 	out := buf.String()
@@ -751,7 +751,7 @@ func (g *csGated) View() h.H {
 
 func TestSignalCS_postedValueIsIgnoredWithoutError(t *testing.T) {
 	t.Parallel()
-	status, frag := vt.Serve(t, via.Handler(csGated{})).Action(0).Body(`{"_open":true}`).Fire()
+	status, frag := vt.Act(vt.Serve(t, via.Handler(csGated{})), func(p *csGated) func(*via.Ctx) { return p.Bump }).Body(`{"_open":true}`).Fire()
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
@@ -858,7 +858,7 @@ func (g *csSeedGated) View() h.H {
 
 func TestSignalCS_seededSlotIsStillNeverPosted(t *testing.T) {
 	t.Parallel()
-	status, frag := vt.Serve(t, via.Handler(csSeedGated{})).Action(0).Body(`{"_open":false}`).Fire()
+	status, frag := vt.Act(vt.Serve(t, via.Handler(csSeedGated{})), func(p *csSeedGated) func(*via.Ctx) { return p.Bump }).Body(`{"_open":false}`).Fire()
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="note">bumped</p>`)
@@ -924,7 +924,7 @@ func (p *seedTagPosted) View() h.H {
 
 func TestSignal_postedValueWinsOverTheTagSeed(t *testing.T) {
 	t.Parallel()
-	status, frag := vt.Serve(t, via.Handler(seedTagPosted{})).Action(0).Body(`{"count":9}`).Fire()
+	status, frag := vt.Act(vt.Serve(t, via.Handler(seedTagPosted{})), func(p *seedTagPosted) func(*via.Ctx) { return p.Read }).Body(`{"count":9}`).Fire()
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, `<p id="seen">9</p>`)
@@ -950,7 +950,7 @@ func TestSignal_aLivePushDeclaresASlotItsBranchJustOpened(t *testing.T) {
 		_, step0 := app.Get("/")
 		require.NotContains(t, step0, `"email"`, "step 0 must not declare the email slot")
 
-		app.Action(0).Over(conn).Fire()
+		vt.Act(app, func(p *wizard) func(*via.Ctx) { return p.Next }).Over(conn).Fire()
 		conn.Await(`"email":""`) // the client store has no value for it, so a Display would read undefined
 	})
 }
@@ -977,7 +977,7 @@ func TestSignal_aLivePushDeclaresASlotInAChildItJustOpened(t *testing.T) {
 		conn := app.Connect()
 		defer conn.Close()
 
-		app.Action(0).Over(conn).Fire()
+		vt.Act(app, func(p *kidOpener) func(*via.Ctx) { return p.Open }).Over(conn).Fire()
 		conn.Await(`"kid__note":""`)
 	})
 }
@@ -1016,7 +1016,7 @@ func (p *csSetAction) View() h.H {
 
 func TestPlainSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 	t.Parallel()
-	status, frag := vt.Serve(t, via.Handler(csSetAction{})).Action(0).Fire()
+	status, frag := vt.Act(vt.Serve(t, via.Handler(csSetAction{})), func(p *csSetAction) func(*via.Ctx) { return p.Close }).Fire()
 
 	require.Equal(t, http.StatusOK, status)
 	assert.Contains(t, frag, "data: signals {\"_open\":false}")
@@ -1059,7 +1059,7 @@ func TestDataSignals_keysAreSorted(t *testing.T) {
 
 func TestPlainAction_signalFrameKeysAreSorted(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(unsortedSignals{})).Action(0).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(unsortedSignals{})), func(p *unsortedSignals) func(*via.Ctx) { return p.Fill }).Fire()
 
 	assert.Contains(t, frag, `data: signals {"alpha":"a","zeta":"z"}`, "stable bytes for identical answers")
 }
@@ -1073,7 +1073,7 @@ func (p *onlyUnencodable) View() h.H                 { return h.Button(on.Click(
 func TestPlainAction_answerWhoseSignalsAllFailToEncodeIs204(t *testing.T) {
 	// sequential: swaps the global log writer
 	buf := globalLog(t)
-	status, body := vt.Serve(t, via.Handler(onlyUnencodable{})).Action(0).Fire()
+	status, body := vt.Act(vt.Serve(t, via.Handler(onlyUnencodable{})), func(p *onlyUnencodable) func(*via.Ctx) { return p.Fill }).Fire()
 
 	assert.Equal(t, http.StatusNoContent, status, "an empty signals frame would carry nothing")
 	assert.Empty(t, body)
@@ -1088,7 +1088,7 @@ func (p *hostileSet) View() h.H         { return h.Button(on.Click(p.Send)) }
 
 func TestPlainAction_hostileSignalValueStaysOneFrameLine(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(hostileSet{})).Action(0).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(hostileSet{})), func(p *hostileSet) func(*via.Ctx) { return p.Send }).Fire()
 
 	assert.Contains(t, frag, "data: signals {\"msg\":\"a'b\\nc@d\"}\n\n",
 		"a raw newline would end the data line and let the rest of the value forge its own SSE field")
@@ -1107,7 +1107,7 @@ func (p *csSetInitAct) View() h.H {
 
 func TestPlainSignalCS_setInOnInitIsNotResentByAnUnrelatedAction(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(csSetInitAct{})).Action(0).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(csSetInitAct{})), func(p *csSetInitAct) func(*via.Ctx) { return p.Bump }).Fire()
 
 	assert.Contains(t, frag, "bumped")
 	assert.NotContains(t, frag, "_open", "re-sending the first paint's value would undo the user's toggle")
@@ -1115,7 +1115,7 @@ func TestPlainSignalCS_setInOnInitIsNotResentByAnUnrelatedAction(t *testing.T) {
 
 func TestPlainSignalCS_setToTheSeedStillSends(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(csSetAction{})).Action(1).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(csSetAction{})), func(p *csSetAction) func(*via.Ctx) { return p.Reopen }).Fire()
 
 	assert.Contains(t, frag, "data: signals {\"_open\":true}", "the browser may have changed it; the server cannot know")
 }
@@ -1136,7 +1136,7 @@ func TestLiveSignalCS_setInAnActionPatchesTheClient(t *testing.T) {
 		app := vt.Serve(t, via.Handler(csSetLive{}))
 		conn := app.Connect()
 
-		status, _ := app.Action(0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *csSetLive) func(*via.Ctx) { return p.Close }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		assert.Contains(t, conn.Await(`"_open"`), `"_open":false`)
@@ -1149,7 +1149,7 @@ func (p *csSetHost) View() h.H { return h.Div(via.Child(&p.Panel)) }
 
 func TestPlainSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 	t.Parallel()
-	_, frag := vt.Serve(t, via.Handler(csSetHost{})).ChildAction("Panel", 0).Fire()
+	_, frag := vt.Act(vt.Serve(t, via.Handler(csSetHost{})), func(p *csSetHost) func(*via.Ctx) { return p.Panel.Close }).Fire()
 
 	assert.Contains(t, frag, "data: signals {\"_panel__open\":false}")
 	assert.Contains(t, frag, `<span data-text="$_panel__open">false</span>`)
@@ -1164,7 +1164,7 @@ func TestLiveSignalCS_setInAChildActionPatchesTheChildSlot(t *testing.T) {
 		app := vt.Serve(t, via.Handler(csSetLiveHost{}))
 		conn := app.Connect()
 
-		status, _ := app.ChildAction("Panel", 0).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *csSetLiveHost) func(*via.Ctx) { return p.Panel.Close }).Over(conn).Fire()
 		require.Equal(t, http.StatusNoContent, status)
 
 		assert.Contains(t, conn.Await(`"_panel__open"`), `"_panel__open":false`)
@@ -1185,10 +1185,10 @@ func TestPlainSignalCS_setSendsASliceWholeAndANilAsEmpty(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(csSetSlice{}))
 
-	_, frag := app.Action(0).Fire()
+	_, frag := vt.Act(app, func(p *csSetSlice) func(*via.Ctx) { return p.Fill }).Fire()
 	assert.Contains(t, frag, "data: signals {\"_rows\":[1,2]}")
 
-	_, frag = app.Action(1).Fire()
+	_, frag = vt.Act(app, func(p *csSetSlice) func(*via.Ctx) { return p.Clear }).Fire()
 	assert.Contains(t, frag, "data: signals {\"_rows\":[]}", "a nil slice must not delete the signal on the client")
 }
 
@@ -1218,7 +1218,7 @@ func TestPlainChildAction_answerDoesNotRedeclareAGrandchildsSignals(t *testing.T
 	_, page := app.Get("/")
 	require.Contains(t, page, `"mid__leaf__name":"ada"`, "the page declares the grandchild's signal")
 
-	_, frag := app.ChildAction("Mid", 0).Fire()
+	_, frag := vt.Act(app, func(p *editHost) func(*via.Ctx) { return p.Mid.Bump }).Fire()
 	require.Contains(t, frag, "<div>x<button", "the child re-rendered after the action")
 	assert.NotContains(t, frag, "data-signals", "a re-declared seed would overwrite what the user is typing")
 }
@@ -1239,7 +1239,7 @@ func TestLiveSignal_setOverAPostedValueSurvivesTheRevert(t *testing.T) {
 		app := vt.Serve(t, via.Handler(liveOverwrite{}))
 		conn := app.Connect()
 
-		app.Action(0).Over(conn).Body(`{"name":"typed"}`).Fire()
+		vt.Act(app, func(p *liveOverwrite) func(*via.Ctx) { return p.Save }).Over(conn).Body(`{"name":"typed"}`).Fire()
 
 		assert.Contains(t, conn.Await(`data-text="$name"`), `data-text="$name">server<`,
 			"the push renders the server's Set, not the value the revert restored")
@@ -1257,7 +1257,7 @@ func (p *signalOnlyInit) View() h.H {
 func TestPlainAction_signalOnlyAnswerDoesNotWarnItChangedNothing(t *testing.T) {
 	// sequential: swaps the global log writer
 	buf := globalLog(t)
-	status, _ := vt.Serve(t, via.Handler(signalOnlyInit{})).Action(0).Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(signalOnlyInit{})), func(p *signalOnlyInit) func(*via.Ctx) { return p.Fill }).Fire()
 
 	require.Equal(t, http.StatusOK, status)
 	assert.NotContains(t, buf.String(), "changed nothing")

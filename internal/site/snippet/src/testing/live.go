@@ -30,7 +30,7 @@ func TestBoard_pushesOverTheStream(t *testing.T) {
 	app := vt.Serve(t, via.Handler(Board{}, via.WithLogger(vt.Logger(t))))
 	conn := app.Connect()
 
-	status, _ := app.Action(0).Over(conn).Fire()
+	status, _ := vt.Act(app, func(b *Board) func(*via.Ctx) { return b.Post }).Over(conn).Fire()
 	require.Equal(t, 204, status) // a live action acks; the render rides the stream
 
 	conn.Await("msg: hello")
