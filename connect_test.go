@@ -580,7 +580,10 @@ func TestHeldRoot_childrenOneActionOpensAllListenBeforeAnyConnects(t *testing.T)
 	defer conn.Close()
 
 	vt.Act(app, func(p *pairGateRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Fire()
-	conn.Await(vt.Slot(func(p *pairGateRoot) *via.Signal[int] { return &p.Greet.S }) + `":7`)
+	read := linesUntil(t, conn, `id="via-iGreet"`)
+	slot := vt.Slot(func(p *pairGateRoot) *via.Signal[int] { return &p.Greet.S }) + `":`
+	assert.True(t, strings.HasPrefix(read[strings.LastIndex(read, slot):], slot+"7"),
+		"the OnConnect write is the last word on the slot, not the seed of the render before it: %s", read)
 	conn.Await("last=joined")
 }
 

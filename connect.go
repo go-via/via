@@ -146,8 +146,12 @@ func initedAs(bind, k *Ctx) *Ctx {
 
 func (p *unitPusher) adopt(k *Ctx) {
 	// An OnConnect fn of a child attached just now wrote through the bind its
-	// baseline rendered, which this replaces.
-	p.lc.flushDirty(p.last)
+	// baseline rendered, which this replaces. Flushed after the root's push
+	// seeds the slots it opened, or that seed — rendered before the fn ran —
+	// would overwrite the write.
+	if p.last != k {
+		p.lc.replaced = append(p.lc.replaced, p.last)
+	}
 	k.pusher = p
 	k.guard = p.lc.guard
 	k.streamCtx = p.lc.streamCtx
@@ -283,12 +287,21 @@ func (p *unitPusher) push() {
 	prev, kids := p.last, p.lc.kidBinds(p)
 	body := p.rebind()
 	p.lc.declareOpened(p.last, prev, kids...)
+	p.lc.flushReplaced()
 	if !bytes.Equal(body, p.lastBody) {
 		p.lastBody = append(p.lastBody[:0], body...)
 		p.stream.patch(p.frameID, body)
 		p.lc.framed(p)
 	}
 	p.lc.pushKids(p)
+}
+
+// flushReplaced ships what was written through binds adopt replaced.
+func (c *tabStream) flushReplaced() {
+	for _, b := range c.replaced {
+		c.flushDirty(b)
+	}
+	c.replaced = c.replaced[:0]
 }
 
 // kidBinds returns, for the root's push, the binds the live children last

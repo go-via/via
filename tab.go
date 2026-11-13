@@ -35,6 +35,7 @@ type tabStream struct {
 	base      string
 	root      *unitPusher            // the root's pusher; its push carries every unit below it
 	kids      map[string]*unitPusher // live children's pushers by child key, kept while their branch is closed
+	replaced  []*Ctx                 // binds adopt replaced this push, whose writes flushReplaced ships
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
