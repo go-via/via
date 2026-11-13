@@ -55,7 +55,9 @@ func (p *Testing) View() h.H {
 				"off the rendered page when the action fires, because the wire id is a hash of the handler's name and field path. "),
 			API("vt.Action.Fire"), h.Str(" returns the status and the body, which on a plain page is the Datastar patch. "+
 				"It fails the test on a status outside 2xx; a test that asserts a refusal chains "), API("vt.Action.Expect"),
-			h.Str(" with the code it wants.")),
+			h.Str(" with the code it wants. "), API("vt.Action.Form"), h.Str(" submits a "), API("via.PostForm"),
+			h.Str(" as the browser does, and "), API("vt.Action.Redirected"),
+			h.Str(" reports where the answer navigates, since Fire follows no redirect.")),
 
 		d.H2("Actions and arguments"),
 		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark(".Set(")),

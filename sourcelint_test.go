@@ -2455,11 +2455,13 @@ func (*Action) At(string) *Action
 func (*Action) Body(string) *Action
 func (*Action) Expect(...int) *Action
 func (*Action) Fire() (int, string)
+func (*Action) Form(url.Values) *Action
 func (*Action) Header(string, string) *Action
 func (*Action) Host(string) *Action
 func (*Action) NoOrigin() *Action
 func (*Action) Origin(string) *Action
 func (*Action) Over(*Conn) *Action
+func (*Action) Redirected() string
 func (*Action) SecFetch(string) *Action
 func (*Action) Set(...SigValue) *Action
 func (*Action) Tab(string) *Action

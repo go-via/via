@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -406,4 +407,31 @@ func TestAt_actsOnAPageMountedAtAnotherPath(t *testing.T) {
 
 	_, body := vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Reset }).At("/act").Fire()
 	assert.Contains(t, body, "picked=reset")
+}
+
+type formPage struct{}
+
+func (p *formPage) Submit(ctx *via.Ctx) { ctx.Redirect("/hi/" + ctx.Request().FormValue("name")) }
+func (p *formPage) Leave(ctx *via.Ctx)  { ctx.Redirect("/bye") }
+func (p *formPage) View() h.H {
+	return h.Div(via.PostForm(p.Submit, h.Input(h.Name("name"))), h.Button(on.Click(p.Leave)))
+}
+
+func TestForm_submitsAPostFormAsTheBrowserDoes(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(formPage{}))
+
+	act := vt.Act(app, func(p *formPage) func(*via.Ctx) { return p.Submit }).Form(url.Values{"name": {"ann"}})
+	status, _ := act.Fire()
+	assert.Equal(t, http.StatusSeeOther, status)
+	assert.Equal(t, "/hi/ann", act.Redirected())
+}
+
+func TestRedirected_readsTheTargetOfAnActionsNavigation(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(formPage{}))
+
+	act := vt.Act(app, func(p *formPage) func(*via.Ctx) { return p.Leave })
+	act.Fire()
+	assert.Equal(t, "/bye", act.Redirected())
 }

@@ -20,6 +20,7 @@ package vt
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -28,6 +29,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -322,6 +324,8 @@ type Action struct {
 	expect      []int // the codes Fire accepts; empty means any 2xx
 	sigs        []SigValue
 	path        string // the page At names; "" is "/"
+	form        url.Values
+	redirect    string // where the last Fire's answer navigates
 }
 
 // Host overrides the request Host header (the authority the origin floor
@@ -404,7 +408,8 @@ func (a *Action) Expect(codes ...int) *Action {
 }
 
 // Fire issues the POST and returns the status code and the response body. It
-// fails the test unless the action answers 2xx, or a code given to Expect. A
+// fails the test unless the action answers 2xx, a form's 303, or a code given
+// to Expect. It follows no redirect; Redirected reports the target. A
 // plain page answers 200 with the Datastar patch: HTML, or SSE frames when the
 // action wrote or opened signals. A live unit, and a plain child of a live
 // root, answers 204 and sends the patch to the open Conn, so assert on the
@@ -416,16 +421,63 @@ func (a *Action) Expect(codes ...int) *Action {
 // or a busy or closing server.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
-	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.URL(), strings.NewReader(a.signalBody()))
+	client := *a.app.srv.Client()
+	client.CheckRedirect = stayPut
+	resp, err := client.Do(a.request())
+	if err != nil {
+		a.app.t.Fatalf("vt.Action.Fire: %v", err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	a.redirect = redirectTarget(resp)
+	a.check(resp.StatusCode, string(b))
+	return resp.StatusCode, string(b)
+}
+
+// Redirected is where the last Fire's answer navigates: the Location of a
+// form's 303, or the target of an action's navigation script. It is "" when
+// the action queued no Redirect.
+func (a *Action) Redirected() string { return a.redirect }
+
+// stayPut stops a client at a redirect, so Fire answers with the redirect
+// itself and Redirected can report where it goes.
+func stayPut(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+func redirectTarget(resp *http.Response) string {
+	if resp.StatusCode/100 == 3 {
+		return resp.Header.Get("Location")
+	}
+	var attrs map[string]string
+	_ = json.Unmarshal([]byte(resp.Header.Get("Datastar-Script-Attributes")), &attrs)
+	return attrs["data-via-to"]
+}
+
+// Form submits fields as a browser submits a via.PostForm: multipart, with no
+// Datastar header, so the handler reads them with ctx.Request().FormValue.
+// Fire then answers 303 when the handler redirects; see Redirected.
+func (a *Action) Form(fields url.Values) *Action {
+	a.form = fields
+	return a
+}
+
+// request builds the POST Fire sends.
+func (a *Action) request() *http.Request {
+	a.app.t.Helper()
+	body, ctype := a.payload()
+	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.URL(), body)
 	if err != nil {
 		a.app.t.Fatalf("vt.Action.Fire: build request: %v", err)
 	}
 	if a.host != "" {
 		req.Host = a.host
 	}
-	// The bundled Datastar client sends this on every @post; it is how
-	// dispatch tells a JSON action apart from a native form submit.
-	req.Header.Set("Datastar-Request", "true")
+	if ctype != "" {
+		req.Header.Set("Content-Type", ctype)
+	} else {
+		// The bundled Datastar client sends this on every @post; it is how
+		// dispatch tells a JSON action apart from a native form submit.
+		req.Header.Set("Datastar-Request", "true")
+	}
 	// A same-origin fetch is the default; only when the test pins no origin,
 	// an explicit Origin, or an explicit Sec-Fetch-Site do we drop it.
 	if !a.noOrigin && !a.originSet && !a.secFetchSet {
@@ -434,20 +486,33 @@ func (a *Action) Fire() (int, string) {
 	for k, v := range a.headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := a.app.srv.Client().Do(req)
-	if err != nil {
-		a.app.t.Fatalf("vt.Action.Fire: %v", err)
+	return req
+}
+
+// payload is the body Fire posts and its content type: the JSON signal body
+// (type left to the Datastar header), or the multipart form Form names.
+func (a *Action) payload() (io.Reader, string) {
+	if a.form == nil {
+		return strings.NewReader(a.signalBody()), ""
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(resp.Body)
-	a.check(resp.StatusCode, string(b))
-	return resp.StatusCode, string(b)
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	for k, vs := range a.form {
+		for _, v := range vs {
+			w.WriteField(k, v)
+		}
+	}
+	if a.tabSet {
+		w.WriteField(tabFormField, a.tab)
+	}
+	w.Close()
+	return &buf, w.FormDataContentType()
 }
 
 // check fails the test on a status Fire was not told to accept.
 func (a *Action) check(code int, body string) {
 	a.app.t.Helper()
-	if slices.Contains(a.expect, code) || len(a.expect) == 0 && code/100 == 2 {
+	if slices.Contains(a.expect, code) || len(a.expect) == 0 && (code/100 == 2 || code == http.StatusSeeOther) {
 		return
 	}
 	if len(body) > 300 {
@@ -590,8 +655,12 @@ func (c *Conn) arrived(read int) string {
 	return b.String()
 }
 
-// tabSignal mirrors via's own wire name for the tab id.
-const tabSignal = "viatab"
+// tabSignal and tabFormField mirror via's own wire names for the tab id: the
+// signal a @post carries, and the hidden field a PostForm renders.
+const (
+	tabSignal    = "viatab"
+	tabFormField = "_viatab"
+)
 
 var tabRE = regexp.MustCompile(`"` + tabSignal + `":"([^"]+)"`)
 
