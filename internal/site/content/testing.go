@@ -53,7 +53,9 @@ func (p *Testing) View() h.H {
 		h.P(API("vt.Act"), h.Str(" names an action by its handler: "), Code("vt.Act(app, func(c *Counter) func(*via.Ctx) { return c.Inc })"),
 			h.Str(" posts to wherever the View binds Counter.Inc, so reordering the View moves no test. vt reads the action's URL "+
 				"off the rendered page when the action fires, because the wire id is a hash of the handler's name and field path. "),
-			API("vt.Action.Fire"), h.Str(" returns the status and the body, which on a plain page is the Datastar patch.")),
+			API("vt.Action.Fire"), h.Str(" returns the status and the body, which on a plain page is the Datastar patch. "+
+				"It fails the test on a status outside 2xx; a test that asserts a refusal chains "), API("vt.Action.Expect"),
+			h.Str(" with the code it wants.")),
 
 		d.H2("Actions and arguments"),
 		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark("Body(")),

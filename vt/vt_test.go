@@ -196,7 +196,7 @@ func TestAction_aNullBodyWithATabIsPostedVerbatim(t *testing.T) {
 		}
 		inner.ServeHTTP(w, r)
 	}))
-	vt.Act(app, tallyInc).Body("null").Tab("x").Fire()
+	vt.Act(app, tallyInc).Body("null").Tab("x").Expect(http.StatusGone).Fire()
 	assert.Equal(t, "null", string(posted))
 }
 
@@ -263,4 +263,34 @@ func TestAct_failsNamingAHandlerTheViewDoesNotBind(t *testing.T) {
 func TestKey_isTheChildsFieldPath(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "Kid", vt.Key(func(p *actPage) *actKid { return &p.Kid }))
+}
+
+func TestFire_failsARefusalTheTestDidNotExpect(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{TB: t}
+	app := vt.Serve(rec, via.Handler(actPage{}))
+
+	msg := rec.failure(func() { app.Post("/_via/a/_/nope").Fire() })
+	assert.Contains(t, msg, "answered 410")
+	assert.Contains(t, msg, "chain .Expect(410)")
+}
+
+func TestFire_failsANamedHandlerByItsTypeAndMethod(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{TB: t}
+	app := vt.Serve(rec, via.Handler(actPage{}))
+
+	msg := rec.failure(func() {
+		vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Reset }).Expect(http.StatusGone).Fire()
+	})
+	assert.Contains(t, msg, "actPage.Reset answered 200, want one of [410]")
+}
+
+func TestExpect_letsFireReturnTheRefusal(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(actPage{}))
+
+	status, body := app.Post("/_via/a/_/nope").Expect(http.StatusBadRequest, http.StatusGone).Fire()
+	assert.Equal(t, http.StatusGone, status)
+	assert.NotEmpty(t, body)
 }

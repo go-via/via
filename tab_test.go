@@ -927,7 +927,7 @@ func TestLive_aPinLoggedByTheStreamDoesNotSilenceTheActionThatHitsIt(t *testing.
 		time.Sleep(3 * time.Second)
 		require.Equal(t, 1, strings.Count(out.String(), "tab pinned"), "precondition: the stream's own timer logged")
 
-		status, _ := vt.Act(app, func(p *blockedTick) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *blockedTick) func(*via.Ctx) { return p.Bump }).Over(conn).Expect(http.StatusServiceUnavailable).Fire()
 
 		assert.Equal(t, http.StatusServiceUnavailable, status)
 		assert.Equal(t, 2, strings.Count(out.String(), "tab pinned"))
@@ -1337,7 +1337,7 @@ func TestDispatch_actionOnATabTheServerEndedAnswers410AtOnce(t *testing.T) {
 		require.NoError(t, b.AwaitClose())
 
 		start := time.Now()
-		code, _ = vt.Act(app, tickerRename).Over(b).Fire()
+		code, _ = vt.Act(app, tickerRename).Over(b).Expect(http.StatusGone).Fire()
 
 		assert.Equal(t, http.StatusGone, code)
 		assert.Zero(t, time.Since(start), "a stream the server ended is not coming back under this id")

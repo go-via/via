@@ -356,6 +356,7 @@ var apiSymbols = []apiSymbol{
 	{"vt", "ActArg", "func", "func ActArg[P, T any](a *App, fn func(*P) func(*via.Ctx, T), arg T) *Action", "ActArg is Act for a handler bound with on.Bind(fn, arg): it posts to the binding of fn that carries arg, as clicking that row's button would.", ""},
 	{"vt", "Action", "type", "type Action struct{ … }", "Action is a builder for an action POST.", ""},
 	{"vt", "Action.Body", "method", "func (a *Action) Body(json string) *Action", "Body sets the raw JSON signal body (defaults to \"{}\").", ""},
+	{"vt", "Action.Expect", "method", "func (a *Action) Expect(codes ...int) *Action", "Expect makes Fire accept exactly codes instead of any 2xx, for a test that asserts a refusal.", ""},
 	{"vt", "Action.Fire", "method", "func (a *Action) Fire() (int, string)", "Fire issues the POST and returns the status code and the response body.", ""},
 	{"vt", "Action.Header", "method", "func (a *Action) Header(k, v string) *Action", "Header sets any other request header, such as the X-Forwarded-Proto a TLS-terminating proxy adds.", ""},
 	{"vt", "Action.Host", "method", "func (a *Action) Host(h string) *Action", "Host overrides the request Host header (the authority the origin floor compares an Origin against).", ""},

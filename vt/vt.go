@@ -32,6 +32,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -261,6 +262,7 @@ type Action struct {
 	tab         string
 	tabSet      bool
 	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
+	expect      []int // the codes Fire accepts; empty means any 2xx
 }
 
 // Host overrides the request Host header (the authority the origin floor
@@ -327,14 +329,23 @@ func (a *Action) signalBody() string {
 	return string(out)
 }
 
-// Fire issues the POST and returns the status code and the response body. On a
-// plain page the body is the Datastar patch: HTML, or SSE frames when the
-// action wrote or opened signals; on a live one the patch goes to
-// the open Conn instead and the body is empty, so assert on the Conn there. A
-// refused dispatch answers with its reason as a one-line text body: 410 when
-// the target is gone (no such action id in the current render, no such child,
-// the stream closed), 403 for the origin or tab-id check, and 400, 413 or 503
-// for a malformed body, an oversized one, or a busy or closing server.
+// Expect makes Fire accept exactly codes instead of any 2xx, for a test that
+// asserts a refusal.
+func (a *Action) Expect(codes ...int) *Action {
+	a.expect = codes
+	return a
+}
+
+// Fire issues the POST and returns the status code and the response body. It
+// fails the test unless the action answers 2xx, or a code given to Expect. A
+// plain page answers 200 with the Datastar patch: HTML, or SSE frames when the
+// action wrote or opened signals. A live one answers 204 and sends the patch
+// to the open Conn, so assert on the Conn there; a plain page answers 204 too
+// when nothing changed. A refused dispatch answers with its reason as a
+// one-line text body: 410 when the target is gone (no such action id in the
+// current render, no such child, the stream closed), 403 for the origin or
+// tab-id check, and 400, 413 or 503 for a malformed body, an oversized one,
+// or a busy or closing server.
 func (a *Action) Fire() (int, string) {
 	a.app.t.Helper()
 	req, err := http.NewRequest(http.MethodPost, a.app.srv.URL+a.URL(), strings.NewReader(a.signalBody()))
@@ -361,7 +372,34 @@ func (a *Action) Fire() (int, string) {
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
+	a.check(resp.StatusCode, string(b))
 	return resp.StatusCode, string(b)
+}
+
+// check fails the test on a status Fire was not told to accept.
+func (a *Action) check(code int, body string) {
+	a.app.t.Helper()
+	if slices.Contains(a.expect, code) || len(a.expect) == 0 && code/100 == 2 {
+		return
+	}
+	if len(body) > 300 {
+		body = body[:300] + "…"
+	}
+	if len(a.expect) > 0 {
+		a.app.t.Fatalf("vt.Action.Fire: %s answered %d, want one of %v: %s", a.label(), code, a.expect, body)
+	}
+	a.app.t.Fatalf("vt.Action.Fire: %s answered %d: %s; chain .Expect(%d) to assert a refusal", a.label(), code, body, code)
+}
+
+// label names the action in a failure: its handler as T.M, or the URL Post
+// pinned.
+func (a *Action) label() string {
+	if a.name == "" {
+		return a.raw
+	}
+	name := strings.TrimSuffix(a.name[strings.LastIndex(a.name, "/")+1:], "-fm")
+	_, name, _ = strings.Cut(name, ".")
+	return strings.NewReplacer("(*", "", ")", "").Replace(name)
 }
 
 // URL is the action URL Fire posts to: the one Post pinned, else the open
@@ -384,7 +422,7 @@ func (a *Action) URL() string {
 			// after the View, so the binding carries that name, not M's.
 			hint = "; a method on a generic type is bound under its View's closure name, so post its URL with Post"
 		}
-		name := a.name
+		name := a.label()
 		if a.query != "" {
 			name += " with ?" + a.query
 		}

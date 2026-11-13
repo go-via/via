@@ -233,7 +233,7 @@ func TestDispatch_liveActionPanicAnswers500NotStream(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panicLive{}))
 		conn := app.Connect()
 
-		status, _ := vt.Act(app, func(p *panicLive) func(*via.Ctx) { return p.Boom }).Over(conn).Fire()
+		status, _ := vt.Act(app, func(p *panicLive) func(*via.Ctx) { return p.Boom }).Over(conn).Expect(http.StatusInternalServerError).Fire()
 		assert.Equal(t, http.StatusInternalServerError, status, "a live action panic must answer 500")
 
 		status2, _ := vt.Act(app, func(p *panicLive) func(*via.Ctx) { return p.Ping }).Over(conn).Fire()
@@ -861,7 +861,7 @@ func TestDispatchPlain_inBranchActionStaysUndispatchableWithoutTheServerRender(t
 	_, open := app.Get("/?mode=x")
 	url := actionURL(t, open, "_", 1)
 
-	code, body := app.Post(url).Body(`{"mode":"x"}`).Fire()
+	code, body := app.Post(url).Body(`{"mode":"x"}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a handler is dispatchable only if the render the client did not influence bound it")
 	assert.Contains(t, body, "does not bind it")
@@ -889,7 +889,7 @@ func TestDispatchLive_inBranchActionStaysUndispatchable(t *testing.T) {
 	_, open := app.Get("/?mode=x")
 	url := actionURL(t, open, "_", 1)
 
-	code, body := app.Post(url).Over(conn).Body(`{"mode":"x"}`).Fire()
+	code, body := app.Post(url).Over(conn).Body(`{"mode":"x"}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code)
 	assert.Contains(t, body, "does not bind it")
 }
@@ -959,7 +959,7 @@ func TestDispatchPlain_postedSignalCannotWidenAnActionsArgSet(t *testing.T) {
 	url := strings.Replace(actionURL(t, page, "_", 0), "a=1", "a=3", 1)
 	require.Contains(t, url, "a=3")
 
-	code, body := app.Post(url).Body(`{"filter":"all"}`).Fire()
+	code, body := app.Post(url).Body(`{"filter":"all"}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"the executed render is an intersection with auth per (handler, arg), not per handler")
 	assert.NotContains(t, body, "del:3")
@@ -1009,7 +1009,7 @@ func TestConnect_postedSignalCannotWidenALiveActionsArgSet(t *testing.T) {
 	require.Contains(t, legitURL, "a=1")
 	widenedURL := strings.Replace(legitURL, "a=1", "a=3", 1)
 
-	code, body := app.Post(widenedURL).Over(conn).Body(`{"filter":"all"}`).Fire()
+	code, body := app.Post(widenedURL).Over(conn).Body(`{"filter":"all"}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a posted signal may widen the rows the client sees, never the args it may call")
 	assert.NotContains(t, body, "del:3")
@@ -1133,7 +1133,7 @@ func TestLive_unknownActionAnswers410(t *testing.T) {
 		conn := app.Connect()
 
 		url := swapActionID(t, vt.Act(app, func(p *clicker) func(*via.Ctx) { return p.Bump }).Over(conn).URL(), "zzzzzzzz")
-		status, _ := app.Post(url).Over(conn).Fire()
+		status, _ := app.Post(url).Over(conn).Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }
@@ -1156,7 +1156,7 @@ func TestLive_malformedActionArgAnswers400(t *testing.T) {
 
 		set := func(p *liveArg) func(*via.Ctx, int) { return p.Set }
 		url := strings.Replace(vt.ActArg(app, set, 7).Over(conn).URL(), "a=7", "a=%22bad%22", 1)
-		status, _ := app.Post(url).Over(conn).Fire()
+		status, _ := app.Post(url).Over(conn).Expect(http.StatusBadRequest).Fire()
 		assert.Equal(t, http.StatusBadRequest, status)
 
 		status, _ = vt.ActArg(app, set, 7).Over(conn).Fire() // well-formed, same binding
@@ -1182,7 +1182,7 @@ func TestLive_missingActionArgAnswers400(t *testing.T) {
 
 				set := func(p *liveArg) func(*via.Ctx, int) { return p.Set }
 				url := strings.Replace(vt.ActArg(app, set, 7).Over(conn).URL(), "a=7", tt.a, 1)
-				status, _ := app.Post(url).Over(conn).Fire()
+				status, _ := app.Post(url).Over(conn).Expect(http.StatusBadRequest).Fire()
 				assert.Equal(t, http.StatusBadRequest, status)
 
 				status, _ = vt.ActArg(app, set, 7).Over(conn).Fire() // well-formed, same binding
@@ -1221,7 +1221,7 @@ func TestDispatchLive_aFailedActionLeavesNoPostedValueOnTheInstance(t *testing.T
 	require.Contains(t, conn.Await("seen: "), "seen: 0")
 
 	url := strings.Replace(vt.ActArg(app, func(p *tickAfterBadArg) func(*via.Ctx, int) { return p.Bump }, 7).Over(conn).URL(), "a=7", "a=%22bad%22", 1)
-	status, _ := app.Post(url).Body(`{"idx":99}`).Over(conn).Fire()
+	status, _ := app.Post(url).Body(`{"idx":99}`).Over(conn).Expect(http.StatusBadRequest).Fire()
 	require.Equal(t, http.StatusBadRequest, status)
 
 	// Drained rather than counted: the 5ms tick keeps frames in the pipe that
@@ -1439,7 +1439,7 @@ func TestConnect_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) {
 		"the gated action":      vt.Act(app, func(p *livePriv) func(*via.Ctx) { return p.Nuke }),
 		"its gated on.Bind arg": vt.ActArg(app, func(p *livePriv) func(*via.Ctx, int) { return p.NukeArg }, 42),
 	} {
-		code, body := a.Over(conn).Body(`{"isAdmin":true}`).Fire()
+		code, body := a.Over(conn).Body(`{"isAdmin":true}`).Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, code, "%s must not be dispatchable: %s", what, a.URL())
 		assert.Contains(t, body, "does not bind it")
 	}
@@ -1464,7 +1464,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T) 
 		"the gated action":      vt.Act(app, func(p *livePriv) func(*via.Ctx) { return p.Nuke }),
 		"its gated on.Bind arg": vt.ActArg(app, func(p *livePriv) func(*via.Ctx, int) { return p.NukeArg }, 42),
 	} {
-		code, body := a.Over(conn).Body(`{"isAdmin":true}`).Fire()
+		code, body := a.Over(conn).Body(`{"isAdmin":true}`).Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, code, "%s must not be dispatchable: %s", what, a.URL())
 		assert.Contains(t, body, "does not bind it")
 	}
@@ -1487,7 +1487,7 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedBranchsActions(t *testing.T)
 
 	for n := 1; n <= 2; n++ {
 		url := actionURL(t, privileged, "_", n)
-		code, body := app.Post(url).Body(`{"isAdmin":true}`).Fire()
+		code, body := app.Post(url).Body(`{"isAdmin":true}`).Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, code, "action %d must not be dispatchable: %s", n, url)
 		assert.Contains(t, body, "does not bind it")
 	}
@@ -1551,12 +1551,12 @@ func TestDispatchPlain_aLivePagesConjuredChildIsNotDispatchable(t *testing.T) {
 	// stream registration (only the root does) — this POST falls to
 	// dispatchPlain, whose own fresh auth render never sees it gated open
 	// either, at "Secret" or at the grandchild "Secret-Grand" below.
-	code, body := vt.Act(app, func(p *liveConjuredRoot) func(*via.Ctx) { return p.Secret.Reveal }).Over(conn).Body(`{"gate":true}`).Fire()
+	code, body := vt.Act(app, func(p *liveConjuredRoot) func(*via.Ctx) { return p.Secret.Reveal }).Over(conn).Body(`{"gate":true}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a branch a posted signal conjured must never be dispatchable, only visible")
 	assert.Contains(t, body, "no such child")
 
-	code, body = vt.Act(app, func(p *liveConjuredRoot) func(*via.Ctx) { return p.Secret.Grand.Poke }).Over(conn).Body(`{"gate":true}`).Fire()
+	code, body = vt.Act(app, func(p *liveConjuredRoot) func(*via.Ctx) { return p.Secret.Grand.Poke }).Over(conn).Body(`{"gate":true}`).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code,
 		"a conjured child's own conjured grandchild must be cleared too")
 	assert.Contains(t, body, "no such child")
@@ -1581,13 +1581,13 @@ func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	app := vt.Serve(t, r)
 
 	_, plain := app.Get("/p/notanint")
-	code, body := app.Post(actionURL(t, plain, "_", 0)).Fire()
+	code, body := app.Post(actionURL(t, plain, "_", 0)).Expect(http.StatusNotFound).Fire()
 	require.Equal(t, http.StatusNotFound, code)
 	require.Contains(t, body, "not found")
 
 	_, live := app.Get("/l/notanint")
 	conn := app.ConnectAt("/l/notanint", "{}")
-	code, body = app.Post(actionURL(t, live, "_", 0)).Over(conn).Fire()
+	code, body = app.Post(actionURL(t, live, "_", 0)).Over(conn).Expect(http.StatusNotFound).Fire()
 	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
 	assert.Contains(t, body, "not found")
 }
@@ -1650,7 +1650,7 @@ func TestDispatchLive_aSiblingUnitsPushCannotStrandTheRevertSet(t *testing.T) {
 			"the gated action":      vt.Act(app, func(p *twoLivePage) func(*via.Ctx) { return p.Priv.Nuke }),
 			"its gated on.Bind arg": vt.ActArg(app, func(p *twoLivePage) func(*via.Ctx, int) { return p.Priv.NukeArg }, 42),
 		} {
-			code, body := a.Over(conn).Body(`{"priv__isAdmin":true}`).Fire()
+			code, body := a.Over(conn).Body(`{"priv__isAdmin":true}`).Expect(http.StatusGone).Fire()
 			assert.Equal(t, http.StatusGone, code, "round %d: %s must not be dispatchable: %s", beat, what, a.URL())
 			assert.Contains(t, body, "does not bind it")
 		}
@@ -1767,7 +1767,7 @@ func TestDispatchLive_aPanickingActionsSetSurvivesIntoTheNextPush(t *testing.T) 
 	app := vt.Serve(t, via.Handler(dirtyAfterPanic{}))
 	conn := app.ConnectWith(`{"x":0}`)
 
-	status, _ := vt.Act(app, func(p *dirtyAfterPanic) func(*via.Ctx) { return p.SetAndBoom }).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *dirtyAfterPanic) func(*via.Ctx) { return p.SetAndBoom }).Over(conn).Expect(http.StatusInternalServerError).Fire()
 	require.Equal(t, http.StatusInternalServerError, status, "the handler must panic")
 
 	status, _ = vt.Act(app, func(p *dirtyAfterPanic) func(*via.Ctx) { return p.Noop }).Over(conn).Fire()
@@ -1988,7 +1988,7 @@ func TestDispatchPlain_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.
 			_, privileged := app.Get("/?admin=1")
 			url := actionURL(t, privileged, shape.plainChild, shape.gatedN)
 
-			code, body := app.Post(url).Body(forgedAdmin).Fire()
+			code, body := app.Post(url).Body(forgedAdmin).Expect(http.StatusGone).Fire()
 			assertGateHeld(t, hits, code, body)
 			assert.NotContains(t, body, ">nuke<", "the refused render must not ship the gated branch")
 
@@ -2025,7 +2025,7 @@ func TestConnect_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T) {
 			// body forces the display render the forged connect body rode in for.
 			require.Equal(t, http.StatusNoContent, mustFire(t, shape.safe(app).Over(conn)))
 
-			code, body := app.Post(url).Over(conn).Fire()
+			code, body := app.Post(url).Over(conn).Expect(http.StatusGone).Fire()
 			assertGateHeld(t, hits, code, body)
 
 			assert.Equal(t, http.StatusNoContent, mustFire(t, shape.safe(app).Over(conn)),
@@ -2049,7 +2049,7 @@ func TestDispatchLive_postedSignalsCannotOpenAGatedActionInAnyShape(t *testing.T
 			// allowed to call, which is the door a connect-only fix misses.
 			require.Equal(t, http.StatusNoContent, mustFire(t, shape.safe(app).Over(conn).Body(forgedAdmin)))
 
-			code, body := app.Post(url).Over(conn).Body(forgedAdmin).Fire()
+			code, body := app.Post(url).Over(conn).Body(forgedAdmin).Expect(http.StatusGone).Fire()
 			assertGateHeld(t, hits, code, body)
 
 			assert.Equal(t, http.StatusNoContent, mustFire(t, shape.safe(app).Over(conn).Body(forgedAdmin)),
@@ -2166,7 +2166,7 @@ func TestDispatch_pinnedStreamGoroutineAnswers503AndLogsOncePerPath(t *testing.T
 	}
 
 	for range 3 {
-		status, body := vt.Act(app, func(p *pinnedLive) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+		status, body := vt.Act(app, func(p *pinnedLive) func(*via.Ctx) { return p.Bump }).Over(conn).Expect(http.StatusServiceUnavailable).Fire()
 		assert.Equal(t, http.StatusServiceUnavailable, status,
 			"a dispatch onto a pinned goroutine is a server-side stall, not a closed stream")
 		assert.Contains(t, body, "stream busy")
@@ -2266,7 +2266,7 @@ func TestDispatch_sessionStoreOutageAnswers503NotForbidden(t *testing.T) {
 	store.down = true
 	store.mu.Unlock()
 
-	status, body := vt.Act(app, bump).Over(conn).Fire()
+	status, body := vt.Act(app, bump).Over(conn).Expect(http.StatusServiceUnavailable).Fire()
 	assert.Equal(t, http.StatusServiceUnavailable, status,
 		"a store that cannot answer is an outage, not a session mismatch")
 	assert.Contains(t, body, "session store unavailable")
@@ -2363,11 +2363,11 @@ func TestDispatch_unknownActionLogsTheActionTableOncePerID(t *testing.T) {
 	defer conn.Close()
 
 	for range 5 {
-		status, _ := app.Post("/_via/a/_/deadbeef").Over(conn).Fire()
+		status, _ := app.Post("/_via/a/_/deadbeef").Over(conn).Expect(http.StatusGone).Fire()
 		require.Equal(t, http.StatusGone, status)
 	}
 	for range 5 {
-		status, _ := app.Post("/_via/a/_/cafebabe").Over(conn).Fire()
+		status, _ := app.Post("/_via/a/_/cafebabe").Over(conn).Expect(http.StatusGone).Fire()
 		require.Equal(t, http.StatusGone, status)
 	}
 
@@ -2438,7 +2438,7 @@ func TestDispatch_unknownActionLogResumesAfterAnHour(t *testing.T) {
 		url := actionURL(t, page, "_", 0)
 		flood := func(prefix string) {
 			for i := range 1030 {
-				status, _ := app.Post(swapActionID(t, url, fmt.Sprintf("%s%06d", prefix, i))).Fire()
+				status, _ := app.Post(swapActionID(t, url, fmt.Sprintf("%s%06d", prefix, i))).Expect(http.StatusGone).Fire()
 				require.Equal(t, http.StatusGone, status)
 			}
 		}
@@ -2446,7 +2446,7 @@ func TestDispatch_unknownActionLogResumesAfterAnHour(t *testing.T) {
 		require.Equal(t, 1, strings.Count(out.String(), "further unknown action ids"))
 
 		time.Sleep(time.Hour)
-		status, _ := app.Post(swapActionID(t, url, "yy000000")).Fire()
+		status, _ := app.Post(swapActionID(t, url, "yy000000")).Expect(http.StatusGone).Fire()
 		require.Equal(t, http.StatusGone, status)
 		assert.Contains(t, out.String(), "act=yy000000", "a stale id after the interval is reported again")
 
@@ -2474,7 +2474,7 @@ func TestDispatch_atCapacityLogsWhichWallWasHit(t *testing.T) {
 	defer conn.Close()
 
 	for range 3 {
-		status, body := app.Post("/_via/sse").Over(conn).Fire()
+		status, body := app.Post("/_via/sse").Over(conn).Expect(http.StatusServiceUnavailable).Fire()
 		require.Equal(t, http.StatusServiceUnavailable, status)
 		require.Contains(t, body, "stream capacity reached")
 	}
@@ -2494,7 +2494,7 @@ func TestDispatch_liveActionPanicLogNamesTheTabAndUnit(t *testing.T) {
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, _ := vt.Act(app, func(p *panicLive) func(*via.Ctx) { return p.Boom }).Over(conn).Fire()
+	status, _ := vt.Act(app, func(p *panicLive) func(*via.Ctx) { return p.Boom }).Over(conn).Expect(http.StatusInternalServerError).Fire()
 	require.Equal(t, http.StatusInternalServerError, status)
 
 	out := logs.String()
@@ -2661,7 +2661,7 @@ func TestLiveAction_aFailedActionStillPushesWhatItChanged(t *testing.T) {
 				app := vt.Serve(t, via.Handler(failingBump{room: topic.New[int](), reload: tt.reload}))
 				conn := app.Connect()
 
-				code, _ := vt.Act(app, func(p *failingBump) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+				code, _ := vt.Act(app, func(p *failingBump) func(*via.Ctx) { return p.Bump }).Over(conn).Expect(http.StatusInternalServerError).Fire()
 
 				assert.Equal(t, http.StatusInternalServerError, code)
 				conn.Await("n=1")

@@ -280,7 +280,7 @@ func TestChild_liveChildActionWithUnknownTabIsGone(t *testing.T) {
 		app := vt.Serve(t, via.Handler(panel{}))
 		conn := app.Connect() // establish the app, but use a bogus tab below
 
-		status, _ := vt.Act(app, func(p *panel) func(*via.Ctx) { return p.A.Bump }).Over(conn).Tab("bogus-tab-id").Fire()
+		status, _ := vt.Act(app, func(p *panel) func(*via.Ctx) { return p.A.Bump }).Over(conn).Tab("bogus-tab-id").Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, status)
 	})
 }

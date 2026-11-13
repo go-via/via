@@ -100,10 +100,10 @@ func TestCounter_refusesCrossSitePosts(t *testing.T) {
 	status, _ := vt.Act(app, inc).Fire() // same-origin by default
 	assert.Equal(t, 200, status)
 
-	status, _ = vt.Act(app, inc).Origin("https://evil.example").Fire()
+	status, _ = vt.Act(app, inc).Origin("https://evil.example").Expect(403).Fire()
 	assert.Equal(t, 403, status)
 
-	status, _ = vt.Act(app, inc).NoOrigin().Fire()
+	status, _ = vt.Act(app, inc).NoOrigin().Expect(403).Fire()
 	assert.Equal(t, 403, status)
 }
 
@@ -119,7 +119,7 @@ func TestCounter_overTLSRefusesAnHTTPOrigin(t *testing.T) {
 	status, _ := vt.Act(app, inc).Host("app.example").Origin("https://app.example").Fire()
 	assert.Equal(t, 200, status)
 
-	status, _ = vt.Act(app, inc).Host("app.example").Origin("http://app.example").Fire()
+	status, _ = vt.Act(app, inc).Host("app.example").Origin("http://app.example").Expect(403).Fire()
 	assert.Equal(t, 403, status) // a scheme downgrade on a TLS request
 }
 

@@ -2452,6 +2452,7 @@ type Topic[T any] struct{}
 `,
 	"vt": `
 func (*Action) Body(string) *Action
+func (*Action) Expect(...int) *Action
 func (*Action) Fire() (int, string)
 func (*Action) Header(string, string) *Action
 func (*Action) Host(string) *Action

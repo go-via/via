@@ -645,7 +645,7 @@ func TestLiveActionArg_swappingInAnotherUsersArgIs410(t *testing.T) {
 
 		del := func(p *liveOwnedRows) func(*via.Ctx, int) { return p.Delete }
 		url := strings.Replace(vt.ActArg(app, del, 2).Over(conn).URL(), "a=2", "a=1", 1)
-		status, _ := app.Post(url).Over(conn).Fire()
+		status, _ := app.Post(url).Over(conn).Expect(http.StatusGone).Fire()
 		assert.Equal(t, http.StatusGone, status, "an unrendered arg must not dispatch over a live stream")
 
 		status, _ = vt.ActArg(app, del, 2).Over(conn).Fire() // the rendered arg, same binding
@@ -796,7 +796,7 @@ func TestActionArg_swappingInAnotherUsersArgIs410InEveryUnitShape(t *testing.T) 
 				attack, legit = attack.Over(conn), legit.Over(conn)
 			}
 
-			code, body := attack.Fire()
+			code, body := attack.Expect(http.StatusGone).Fire()
 			assert.Equal(t, http.StatusGone, code, "alice's arg must not dispatch off bob's render")
 			assert.NotContains(t, body, "deleted: [1", "alice's row was deleted by an arg swap")
 
@@ -870,7 +870,7 @@ func TestBind_staleRowClickAfterAReorderOrDeleteHitsItsOwnRowOrIsGone(t *testing
 	store.setIDs("c", "a")
 	status, _ := vt.ActArg(app, pick, "a").Fire()
 	assert.Less(t, status, 300, "row a moved but still exists")
-	status, _ = vt.ActArg(app, pick, "b").Fire()
+	status, _ = vt.ActArg(app, pick, "b").Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, status, "row b is gone; its click must not land on the row now in its place")
 	status, _ = vt.ActArg(app, pick, "c").Fire()
 	assert.Less(t, status, 300, "row c moved but still exists")

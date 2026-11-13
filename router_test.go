@@ -1228,7 +1228,7 @@ func TestReload_errNotFoundAfterAnActionAnswers404(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(reloadNotFound{}))
 	app.Get("/")
-	code, body := vt.Act(app, func(p *reloadNotFound) func(*via.Ctx) { return p.Drop }).Fire()
+	code, body := vt.Act(app, func(p *reloadNotFound) func(*via.Ctx) { return p.Drop }).Expect(http.StatusNotFound).Fire()
 	assert.Equal(t, http.StatusNotFound, code)
 	assert.Contains(t, body, "not found")
 }
@@ -1440,7 +1440,7 @@ func TestRouterClose_answersALiveActionOnAClosedTabWith410(t *testing.T) {
 	conn.Await("datastar-patch-elements")
 	r.Close()
 
-	code, _ := vt.Act(app, func(p *closablePage) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+	code, _ := vt.Act(app, func(p *closablePage) func(*via.Ctx) { return p.Bump }).Over(conn).Expect(http.StatusGone).Fire()
 	assert.Equal(t, http.StatusGone, code, "an action on a shut-down tab must be refused, not dropped")
 }
 

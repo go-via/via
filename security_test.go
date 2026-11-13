@@ -135,7 +135,7 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("cross-site").Fire()
+	status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("cross-site").Expect(http.StatusForbidden).Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 
 	_, body := app.Get("/")
@@ -144,13 +144,13 @@ func TestAction_enforcementRejectsCrossSiteOriginAndDoesNotMutate(t *testing.T) 
 
 func TestAction_enforcementRejectsSameSiteOrigin(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("same-site").Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).SecFetch("same-site").Expect(http.StatusForbidden).Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
 func TestAction_enforcementFailsClosedWithoutAnyOriginSignal(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).NoOrigin().Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example"))), func(p *counter) func(*via.Ctx) { return p.Inc }).NoOrigin().Expect(http.StatusForbidden).Fire()
 	assert.Equal(t, http.StatusForbidden, status)
 }
 
@@ -225,13 +225,13 @@ func TestAction_allowsSameOriginViaMatchingOriginHeader(t *testing.T) {
 func TestAction_rejectsOversizeBody(t *testing.T) {
 	t.Parallel()
 	big := `{"pad":"` + strings.Repeat("a", 2<<20) + `"}`
-	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body(big).Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body(big).Expect(http.StatusRequestEntityTooLarge).Fire()
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
 }
 
 func TestAction_rejectsMalformedBody(t *testing.T) {
 	t.Parallel()
-	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body("{not valid json").Fire()
+	status, _ := vt.Act(vt.Serve(t, via.Handler(counter{count: &store{}})), func(p *counter) func(*via.Ctx) { return p.Inc }).Body("{not valid json").Expect(http.StatusBadRequest).Fire()
 	assert.Equal(t, http.StatusBadRequest, status)
 }
 
@@ -246,7 +246,7 @@ func TestAction_panicIsRecoveredAs500AndServerStaysUp(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(panicComp{}))
 
-	status, _ := vt.Act(app, func(p *panicComp) func(*via.Ctx) { return p.Boom }).Fire()
+	status, _ := vt.Act(app, func(p *panicComp) func(*via.Ctx) { return p.Boom }).Expect(http.StatusInternalServerError).Fire()
 	assert.Equal(t, http.StatusInternalServerError, status)
 
 	status2, _ := app.Get("/")
@@ -334,7 +334,7 @@ func TestOriginFloor_rejectsDifferentHostOrPort(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
-			status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host(c.host).Origin(c.origin).Fire()
+			status, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host(c.host).Origin(c.origin).Expect(http.StatusForbidden).Fire()
 			assert.Equal(t, http.StatusForbidden, status)
 		})
 	}
@@ -344,7 +344,7 @@ func TestOriginFloor_enforcesSchemeOnTLSRequests(t *testing.T) {
 	t.Parallel()
 	app := vt.ServeTLS(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Fire()
+	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Expect(http.StatusForbidden).Fire()
 	assert.Equal(t, http.StatusForbidden, down, "http Origin on a TLS request is a scheme downgrade")
 
 	ok, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("https://app.example").Fire()
@@ -620,7 +620,7 @@ func TestDispatch_forgedActionIDIsGone(t *testing.T) {
 			page := fetchPage(t, app, "/")
 			url := actionURL(t, page, "_", 0)
 			for _, n := range []string{"99", "-1", "________"} {
-				status, _ := app.Post(swapActionID(t, url, n)).Tab(conn.TabID()).Fire()
+				status, _ := app.Post(swapActionID(t, url, n)).Tab(conn.TabID()).Expect(http.StatusGone).Fire()
 				assert.Equal(t, http.StatusGone, status, "forged id=%s must 410, not panic/misroute", n)
 			}
 			// The connection must still be usable — the recovered panic path
@@ -777,7 +777,7 @@ func TestDispatch_liveActionWithoutTheTabSignalIsRejected(t *testing.T) {
 			conn := app.Connect()
 			defer conn.Close()
 
-			status, _ := vt.Act(app, func(p *tabGuard) func(*via.Ctx) { return p.Bump }).Body(tc.body).Fire()
+			status, _ := vt.Act(app, func(p *tabGuard) func(*via.Ctx) { return p.Bump }).Body(tc.body).Expect(http.StatusGone).Fire()
 			assert.Equal(t, http.StatusGone, status,
 				"a live action with no valid tab id must 410, not run against a throwaway instance")
 			assert.Zero(t, calls, "and the connection's unit must not have been touched")
@@ -854,7 +854,7 @@ func TestDispatch_staleTabOnALiveRootFailsClosedOnALaterHydratePass(t *testing.T
 			conn := app.Connect()
 			defer conn.Close()
 
-			status, _ := vt.Act(app, func(p *liveBoundRoot) func(*via.Ctx) { return p.Bump }).Body(body).Fire()
+			status, _ := vt.Act(app, func(p *liveBoundRoot) func(*via.Ctx) { return p.Bump }).Body(body).Expect(http.StatusGone).Fire()
 			assert.Equal(t, http.StatusGone, status,
 				"liveness is decided by the auth render; a posted signal that adds a discovery pass must not bypass it")
 			assert.Zero(t, calls, "and the live unit must not have been touched")
@@ -903,7 +903,7 @@ func TestOriginFloor_enforcesSchemeBehindATLSProxy(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(counter{count: &store{}}, via.WithTrustedOrigin("https://childder.example")))
 
-	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Header("X-Forwarded-Proto", "https").Fire()
+	down, _ := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("http://app.example").Header("X-Forwarded-Proto", "https").Expect(http.StatusForbidden).Fire()
 	assert.Equal(t, http.StatusForbidden, down, "an http Origin when the browser spoke https to the proxy is a downgrade")
 
 	ok, body := vt.Act(app, func(p *counter) func(*via.Ctx) { return p.Inc }).Host("app.example").Origin("https://app.example").Header("X-Forwarded-Proto", "https").Fire()

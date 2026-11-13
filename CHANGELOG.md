@@ -31,6 +31,9 @@
   `App.Action(n)`, `App.ChildAction(key, n)`, `Conn.ActionURL` and
   `Action.Raw` are gone; `App.Post(url)` posts a literal URL,
   `Action.URL()` reads the resolved one and `vt.Key(fn)` gives a child's key.
+- **Breaking:** `vt.Action.Fire` fails the test on a status outside 2xx. A
+  test that asserts a refusal chains `.Expect(code)`, which takes one or more
+  codes. The failure names the handler (`Page.Save`) and quotes the body.
 - The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
   longer panics on its first Subscribe or Publish. `topic.New` still works.
 
