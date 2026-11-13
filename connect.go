@@ -138,8 +138,7 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 }
 
 func (p *unitPusher) rerender(rev *revertSet) rerender {
-	return rerender{base: p.base, from: p.from, rev: rev, badDecodeLogged: p.lc.badDecodeLogged,
-		hollowLive: p.frameID == ""}
+	return rerender{base: p.base, from: p.from, rev: rev, badDecodeLogged: p.lc.badDecodeLogged}
 }
 
 // push renders and frames the unit. Unchanged frames are dropped (the
@@ -314,7 +313,6 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	wake := make(chan struct{}, 1)
 	listeners := startListeners(units, streamCtx, wake)
 	runOnConnect(units, stream, base, lc)
-	holdPlainRoot(bind, streamCtx, stream, base, lc)
 
 	// Watched before the first sweep and the OnConnect pushes, which run app
 	// handlers: a Rotate elsewhere while they run must end this stream. Not
@@ -384,19 +382,6 @@ func runOnConnect(units []*Ctx, stream *stream, base string, lc *tabStream) {
 		// bare-tab-id credential.
 		lc.bindSession(u.session.sid())
 	}
-}
-
-// holdPlainRoot registers a plain root whose live children made the page
-// stream, so its actions and those of its plain children run on this tab's
-// instance like every other action the tab fires, not on a fresh copy. Its
-// push renders each connected live child as an empty placeholder (see
-// childViewer), so the live child's own pusher keeps its handles.
-func holdPlainRoot(root *Ctx, streamCtx context.Context, stream *stream, base string, lc *tabStream) {
-	if root.live {
-		return
-	}
-	root.streamCtx = streamCtx
-	connectUnit(root, stream, base, lc).baseline()
 }
 
 func detachResponse(units []*Ctx) {

@@ -16,15 +16,11 @@ type rerender struct {
 	from            *Ctx
 	rev             *revertSet
 	badDecodeLogged *atomic.Bool
-	// hollowLive marks a root push: a live child that already has a pusher of
-	// its own renders as an empty placeholder.
-	hollowLive bool
 }
 
 func (r rerender) wire(ctx *Ctx) {
 	ctx.rev = r.rev
 	ctx.badDecodeLogged = r.badDecodeLogged
-	ctx.hollowLive = r.hollowLive
 	inheritRequestScope(ctx, r.from)
 }
 

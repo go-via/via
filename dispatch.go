@@ -399,8 +399,9 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 		http.Error(ar.w, "no such child", http.StatusGone)
 		return true
 	}
-	// Every streaming tab holds its root (holdPlainRoot registers a plain
-	// one), so the tab takes every address; which child exists is resolved on the stream
+	// A plain child of a plain root echoes the tab id too, and nothing on
+	// the connection holds it. A live root holds its plain children, so its
+	// tab takes every address; which child exists is resolved on the stream
 	// goroutine (see tabStream.held), since each push may change it.
 	// Registration is stable (a unit is published before the tab id is, and
 	// never removed), so this check is safe here.

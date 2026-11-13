@@ -121,7 +121,7 @@ func glossaryTerms() []glossaryTerm {
 			[]seeLink{{"Lifecycle hooks", "/compositions#lifecycle-hooks"}},
 			[]h.H{API("via.Meta")}},
 		{"Plain vs live page",
-			[]h.H{s("A page streams if and only if it contains a live unit. A plain page is request and response: each GET and action POST gets a fresh copy of the mounted value, and an action's answer is the POST's own body. A live page also holds one SSE stream per tab, and every action the tab fires, on a plain unit or a live one, runs on the tab's instance and answers over that stream. The render that served the page decides; an action cannot make a plain page live.")},
+			[]h.H{s("A page streams if and only if it contains a live unit. A plain page is request and response: each GET and action POST gets a fresh copy of the mounted value, and an action's answer is the POST's own body. A live page also holds one SSE stream per tab, and an action on a live unit, or on a plain child of a live root, answers over that stream. The render that served the page decides; an action cannot make a plain page live.")},
 			[]seeLink{{"A page is plain until a unit goes live", "/live#a-page-is-plain-until-a-unit-goes-live"}, {"Concurrency", "/actions#concurrency"}},
 			nil},
 		{"PostForm vs on.Submit",

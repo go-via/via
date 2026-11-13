@@ -118,9 +118,6 @@ func childViewer(r *render.Renderer, inst instance) {
 	// no parent in scope.
 	inst.slotPrefix = parent.scopePrefix() + actionid.SlotName(local) + "__"
 	child, first := newChildCtx(parent, key, inst)
-	if writeHollow(r, child, first) {
-		return
-	}
 	parent.children = append(parent.children, child)
 
 	// Only a request-scoped render inits, and only once per key: the child's
@@ -155,19 +152,6 @@ func childViewer(r *render.Renderer, inst instance) {
 	r.WriteString(`>`)
 	r.WriteString(string(child.rendered))
 	r.WriteString(`</div>`)
-}
-
-// writeHollow writes a connected live child as an empty placeholder during a
-// root push and reports whether it did. Datastar keeps the client's subtree
-// when both sides carry data-ignore-morph, and the child's own push still
-// lands inside it; rendering its View here would rebind its handles to the
-// root's push and strand the Sets of its own Ticks.
-func writeHollow(r *render.Renderer, child *Ctx, first bool) bool {
-	if !child.hollowLive || first || !child.live {
-		return false
-	}
-	r.WriteString(`<div id="via-i` + child.childKey + `" data-ignore-morph></div>`)
-	return true
 }
 
 // checkChildOnce panics when key is already rendered anywhere in parent's
@@ -229,7 +213,6 @@ func newChildCtx(parent *Ctx, key string, inst instance) (*Ctx, bool) {
 	// A child is the parent of its own children, so it passes the declaration
 	// down or a grandchild's slots never reach the client store.
 	child.declare = parent.declare
-	child.hollowLive = parent.hollowLive
 	child.reqScope = parent.reqScope
 	child.session = parent.session // one resolved session per request tree — see inheritRequestScope
 	return child, first
