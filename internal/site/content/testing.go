@@ -58,9 +58,11 @@ func (p *Testing) View() h.H {
 			h.Str(" with the code it wants.")),
 
 		d.H2("Actions and arguments"),
-		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark("Body(")),
-		h.P(API("vt.Action.Body"), h.Str(" sets the JSON the browser would post: the page's signals, keyed by wire name. "+
-			"The handler reads them with "), API("via.Signal.Get"), h.Str(" as it would from a real click.")),
+		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark(".Set(")),
+		h.P(API("vt.Sig"), h.Str(" names a Signal through the root's fields and pairs it with a value; "), API("vt.Action.Set"),
+			h.Str(" posts it under the wire name via gives it, child prefix included. The handler reads it with "),
+			API("via.Signal.Get"), h.Str(" as it would from a real click. "), API("vt.Action.Body"),
+			h.Str(" sets the raw JSON instead, for a malformed or forged body.")),
 		snippet.Region("testing/args.go", "arg", snippet.Title("shelf_test.go"), snippet.Mark("vt.ActArg(")),
 		h.P(h.Str("An action bound with "), API("on.Bind"),
 			h.Str(" renders one URL per row, each carrying its own argument. "), API("vt.ActArg"),

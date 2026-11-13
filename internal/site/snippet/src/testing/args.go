@@ -9,7 +9,6 @@ import (
 	"github.com/go-via/via/on"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 type Stepper struct {
@@ -32,8 +31,8 @@ func TestStepper_addsThePostedStep(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Stepper{n: new(atomic.Int64)}, via.WithLogger(vt.Logger(t))))
 
-	status, body := vt.Act(app, func(s *Stepper) func(*via.Ctx) { return s.Add }).Body(`{"step":5}`).Fire()
-	require.Equal(t, 200, status)
+	step := vt.Sig(func(s *Stepper) *via.Signal[int] { return &s.Step }, 5)
+	_, body := vt.Act(app, func(s *Stepper) func(*via.Ctx) { return s.Add }).Set(step).Fire()
 	assert.Contains(t, body, "total: 5")
 }
 
@@ -83,8 +82,8 @@ func TestLayout_routesTheChildActionToSearch(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(Layout{}, via.WithLogger(vt.Logger(t))))
 
-	// Search's signals are prefixed with its field name.
-	_, body := vt.Act(app, func(l *Layout) func(*via.Ctx) { return l.Search.Go }).Body(`{"search__q":"via"}`).Fire()
+	q := vt.Sig(func(l *Layout) *via.Signal[string] { return &l.Search.Q }, "via")
+	_, body := vt.Act(app, func(l *Layout) func(*via.Ctx) { return l.Search.Go }).Set(q).Fire()
 	assert.Contains(t, body, "searched: via")
 }
 

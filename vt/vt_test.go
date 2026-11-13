@@ -294,3 +294,60 @@ func TestExpect_letsFireReturnTheRefusal(t *testing.T) {
 	assert.Equal(t, http.StatusGone, status)
 	assert.NotEmpty(t, body)
 }
+
+type sigKid struct {
+	Say  via.Signal[string]
+	said string
+}
+
+func (k *sigKid) Echo(*via.Ctx) { k.said = k.Say.Get() }
+func (k *sigKid) View() h.H {
+	return h.Div(h.Input(k.Say.Bind()), h.Button(on.Click(k.Echo)), h.P(h.Str("said="+k.said)))
+}
+
+type sigPage struct {
+	Q    via.Signal[int]
+	Form struct{ Name via.Signal[string] }
+	Kid  sigKid
+	got  string
+}
+
+func (p *sigPage) Read(*via.Ctx) { p.got = fmt.Sprintf("%d/%s", p.Q.Get(), p.Form.Name.Get()) }
+func (p *sigPage) View() h.H {
+	return h.Div(h.Input(p.Q.Bind()), h.Input(p.Form.Name.Bind()), h.Button(on.Click(p.Read)),
+		h.P(h.Str("got="+p.got)), via.Child(&p.Kid))
+}
+
+func TestSet_sendsTheRootsAndANestedStructsSignals(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sigPage{}))
+
+	_, body := vt.Act(app, func(p *sigPage) func(*via.Ctx) { return p.Read }).
+		Set(vt.Sig(func(p *sigPage) *via.Signal[int] { return &p.Q }, 7),
+			vt.Sig(func(p *sigPage) *via.Signal[string] { return &p.Form.Name }, "ann")).Fire()
+	assert.Contains(t, body, "got=7/ann")
+}
+
+func TestSet_sendsAChildsSignalUnderItsPrefix(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sigPage{}))
+
+	_, body := vt.Act(app, func(p *sigPage) func(*via.Ctx) { return p.Kid.Echo }).
+		Set(vt.Sig(func(p *sigPage) *via.Signal[string] { return &p.Kid.Say }, "hi")).Fire()
+	assert.Contains(t, body, "said=hi")
+}
+
+func TestSet_overlaysTheBody(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(sigPage{}))
+
+	_, body := vt.Act(app, func(p *sigPage) func(*via.Ctx) { return p.Read }).
+		Set(vt.Sig(func(p *sigPage) *via.Signal[int] { return &p.Q }, 7)).Body(`{"q":1,"form_name":"bo"}`).Fire()
+	assert.Contains(t, body, "got=7/bo")
+}
+
+func TestSlot_isTheSignalsWireName(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "form_name", vt.Slot(func(p *sigPage) *via.Signal[string] { return &p.Form.Name }))
+	assert.Equal(t, "kid__say", vt.Slot(func(p *sigPage) *via.Signal[string] { return &p.Kid.Say }))
+}

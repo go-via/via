@@ -2460,6 +2460,7 @@ func (*Action) NoOrigin() *Action
 func (*Action) Origin(string) *Action
 func (*Action) Over(*Conn) *Action
 func (*Action) SecFetch(string) *Action
+func (*Action) Set(...SigValue) *Action
 func (*Action) Tab(string) *Action
 func (*Action) URL() string
 func (*App) Client() *http.Client
@@ -2480,9 +2481,12 @@ func Key[P, C any](func(*P) *C) string
 func Logger(testing.TB) *slog.Logger
 func Serve(testing.TB, http.Handler) *App
 func ServeTLS(testing.TB, http.Handler) *App
+func Sig[P, T any](func(*P) *via.Signal[T], T) SigValue
+func Slot[P, T any](func(*P) *via.Signal[T]) string
 type Action struct{}
 type App struct{}
 type Conn struct{}
+type SigValue struct{}
 `,
 	"vtbrowser": `
 func (*Session) Click(string)

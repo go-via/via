@@ -221,6 +221,41 @@ func (a *App) Post(path string) *Action {
 	return &Action{app: a, raw: path, headers: map[string]string{}, body: "{}"}
 }
 
+// A SigValue is a signal value an action posts; see Sig and Action.Set.
+type SigValue struct {
+	slot string
+	val  json.RawMessage
+}
+
+// Sig is the value v for the Signal fn points at, under the slot via gives it:
+// vt.Sig(func(p *Page) *via.Signal[string] { return &p.Chat.Draft }, "hi")
+// posts {"chat__draft":"hi"}. Pass it to Action.Set.
+func Sig[P, T any](fn func(*P) *via.Signal[T], v T) SigValue {
+	val, err := json.Marshal(v)
+	if err != nil {
+		panic("vt.Sig: the value does not encode: " + err.Error())
+	}
+	return SigValue{slot: Slot(fn), val: val}
+}
+
+// Slot is the wire slot via gives the Signal fn points at: "chat__draft" for
+// &p.Chat.Draft under a Chat child, "form_name" for a plain nested struct.
+func Slot[P, T any](fn func(*P) *via.Signal[T]) string {
+	root := new(P)
+	slot, ok := actionid.Slot(root, fn(root))
+	if !ok {
+		panic("vt.Slot: fn must return the address of a via.Signal field of the *P it is given, outside any array below the last child")
+	}
+	return slot
+}
+
+// Set posts vals with the action, over any Body: the browser sends every
+// signal the page binds, and these are the ones the test names.
+func (a *Action) Set(vals ...SigValue) *Action {
+	a.sigs = append(a.sigs, vals...)
+	return a
+}
+
 // Key is the key via gives the child fn points at, its field path from the
 // root: vt.Key(func(p *Page) *Chat { return &p.Chat }) is "Chat". The child's
 // container is #via-i{key}.
@@ -263,6 +298,7 @@ type Action struct {
 	tabSet      bool
 	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
 	expect      []int // the codes Fire accepts; empty means any 2xx
+	sigs        []SigValue
 }
 
 // Host overrides the request Host header (the authority the origin floor
@@ -310,18 +346,26 @@ func (a *Action) NoOrigin() *Action { a.noOrigin = true; return a }
 // Body sets the raw JSON signal body (defaults to "{}").
 func (a *Action) Body(json string) *Action { a.body = json; return a }
 
-// signalBody splices the tab id signal into the JSON signal body the way the
-// browser would. A body Tab was never set on, or one that is not a JSON object (a test feeding deliberate garbage), is
-// posted verbatim.
+// signalBody splices the Set values and the tab id signal into the JSON
+// signal body the way the browser would. A body with neither, or one that is
+// not a JSON object (a test feeding deliberate garbage), is posted verbatim.
 func (a *Action) signalBody() string {
-	if !a.tabSet {
+	if !a.tabSet && len(a.sigs) == 0 {
 		return a.body
 	}
 	sig := map[string]json.RawMessage{}
 	if err := json.Unmarshal([]byte(a.body), &sig); err != nil || sig == nil {
+		if len(a.sigs) > 0 {
+			a.app.t.Fatalf("vt.Action.Set: the Body %q is no JSON object to set signals in", a.body)
+		}
 		return a.body
 	}
-	sig[tabSignal], _ = json.Marshal(a.tab)
+	for _, s := range a.sigs {
+		sig[s.slot] = s.val
+	}
+	if a.tabSet {
+		sig[tabSignal], _ = json.Marshal(a.tab)
+	}
 	out, err := json.Marshal(sig)
 	if err != nil {
 		return a.body

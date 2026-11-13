@@ -31,6 +31,9 @@
   `App.Action(n)`, `App.ChildAction(key, n)`, `Conn.ActionURL` and
   `Action.Raw` are gone; `App.Post(url)` posts a literal URL,
   `Action.URL()` reads the resolved one and `vt.Key(fn)` gives a child's key.
+- `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
+  via gives it, so a test names `&p.Chat.Draft` instead of writing
+  `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.
 - **Breaking:** `vt.Action.Fire` fails the test on a status outside 2xx. A
   test that asserts a refusal chains `.Expect(code)`, which takes one or more
   codes. The failure names the handler (`Page.Save`) and quotes the body.

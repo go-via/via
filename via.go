@@ -106,6 +106,7 @@ import (
 	"net/url"
 
 	"github.com/go-via/via/h"
+	"github.com/go-via/via/internal/actionid"
 	"github.com/go-via/via/internal/render"
 )
 
@@ -249,7 +250,7 @@ func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, d
 	}
 	for i := range t.NumField() {
 		f := t.Field(i)
-		name, off := prefix+lowerFirst(f.Name), base+f.Offset
+		name, off := prefix+actionid.LowerFirst(f.Name), base+f.Offset
 		switch ptr := reflect.PointerTo(f.Type); {
 		case ptr.Implements(signalMarker):
 			addSignalField(ts, t, f, off, name)
@@ -393,13 +394,6 @@ func typeHoldsSignal(t reflect.Type, seen map[reflect.Type]bool, depth int) bool
 		}
 	}
 	return false
-}
-
-func lowerFirst(s string) string {
-	if s == "" || s[0] < 'A' || s[0] > 'Z' {
-		return s
-	}
-	return string(s[0]+('a'-'A')) + s[1:]
 }
 
 // prebindSignals stamps every field-held Signal with its wire name and this

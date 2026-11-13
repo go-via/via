@@ -83,15 +83,10 @@ func childLocalKey(parent *Ctx, inst instance) string {
 			", the composition whose View renders it; the " + inst.typ.String() + " passed is not one of its " +
 			"fields. Hold the child as a struct field (or an element of an array field) and pass its address."))
 	}
-	checkChildPrefix(k.parent, childSlotName(path))
+	checkChildPrefix(k.parent, actionid.SlotName(path))
 	childPaths.Store(k, path)
 	return path
 }
-
-// childSlotName is the signal-slot segment for a child at path. '-' is no JS
-// identifier character, and Ref() hands slot names straight to Datastar
-// expressions.
-func childSlotName(path string) string { return lowerFirst(strings.ReplaceAll(path, "-", "_")) }
 
 func unitTypeName(t reflect.Type) string {
 	if t == nil {
@@ -128,7 +123,7 @@ func childViewer(r *render.Renderer, inst instance) {
 	}
 	// Stamped onto the instance because a live child's push re-renders with
 	// no parent in scope.
-	inst.slotPrefix = parent.scopePrefix() + childSlotName(local) + "__"
+	inst.slotPrefix = parent.scopePrefix() + actionid.SlotName(local) + "__"
 	child, first := newChildCtx(parent, key, inst)
 	parent.children = append(parent.children, child)
 

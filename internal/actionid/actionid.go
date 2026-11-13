@@ -391,3 +391,55 @@ func Key(root, child any) (string, bool) {
 	rv, cv := reflect.ValueOf(root), reflect.ValueOf(child)
 	return ChildPath(rv.Type().Elem(), cv.Pointer()-rv.Pointer(), cv.Type().Elem())
 }
+
+// LowerFirst lowercases s's first letter, as a signal slot does a field name.
+func LowerFirst(s string) string {
+	if s == "" || s[0] < 'A' || s[0] > 'Z' {
+		return s
+	}
+	return string(s[0]+('a'-'A')) + s[1:]
+}
+
+// SlotName is the signal-slot segment for a child at path. '-' is no JS
+// identifier character, and Ref hands slot names straight to Datastar
+// expressions.
+func SlotName(path string) string { return LowerFirst(strings.ReplaceAll(path, "-", "_")) }
+
+// Slot is the wire slot via gives sig, a Signal field of *root: each child
+// unit on the path adds its prefix, and the plain structs below the last one
+// join with "_". It reports false when sig is no field of root, or sits in an
+// array below the last unit, where via names no signal.
+func Slot(root, sig any) (string, bool) {
+	rv, sv := reflect.ValueOf(root), reflect.ValueOf(sig)
+	path, ok := ChildPath(rv.Type().Elem(), sv.Pointer()-rv.Pointer(), sv.Type().Elem())
+	if !ok || path == "" {
+		return "", false
+	}
+	return slotOf(rv.Type().Elem(), strings.Split(path, "-"))
+}
+
+// slotOf names the slot at field path segs from t: a field whose pointer has
+// a View is a unit, which closes a prefix.
+func slotOf(t reflect.Type, segs []string) (string, bool) {
+	prefix, start := "", 0
+	for i, seg := range segs[:len(segs)-1] {
+		if t.Kind() == reflect.Array {
+			t = t.Elem()
+		} else {
+			f, _ := t.FieldByName(seg)
+			t = f.Type
+		}
+		if _, ok := reflect.PointerTo(t).MethodByName("View"); ok {
+			prefix += SlotName(strings.Join(segs[start:i+1], "-")) + "__"
+			start = i + 1
+		}
+	}
+	tail := segs[start:]
+	for i, seg := range tail {
+		if seg[0] >= '0' && seg[0] <= '9' {
+			return "", false
+		}
+		tail[i] = LowerFirst(seg)
+	}
+	return prefix + strings.Join(tail, "_"), true
+}
