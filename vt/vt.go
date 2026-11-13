@@ -359,6 +359,10 @@ func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 // own pushed markup (see Conn.find) instead of a separate plain GET's render.
 // That GET renders a fresh tab, so once c's actions have changed what is on
 // screen (a row added, a branch toggled), it may not bind the handler at all.
+//
+// On a page that streams, use Over for every action the tab fires: the root's,
+// a live child's and a plain child's alike all run on the tab's instance. One
+// fired without Over runs on a fresh instance, as from a tab with no stream.
 func (a *Action) Over(c *Conn) *Action {
 	a.conn = c
 	return a.Tab(c.tabID)
@@ -579,6 +583,7 @@ type Conn struct {
 	elements [][]byte // one entry per datastar-patch-elements frame, in arrival order
 	events   int      // SSE events read so far
 	recent   []string // the last few of them, one line each, for failure messages
+	seen     []string // every event read, one line each, unclipped, for Saw
 	pending  []string // the event being read: its name, then its data lines
 }
 
@@ -611,6 +616,7 @@ func (c *Conn) endEvent() {
 	if len(c.pending) > 1 {
 		line += ": " + strings.Join(c.pending[1:], " | ")
 	}
+	c.seen = append(c.seen, line)
 	c.recent = append(c.recent, clip(line))
 	if len(c.recent) > recentKept {
 		c.recent = c.recent[1:]
@@ -826,6 +832,27 @@ func (c *Conn) Await(needle string) string {
 			}
 		}
 	}
+}
+
+// Saw reports whether any event the stream carried so far contains needle,
+// including events an Await or Peek already consumed. It does not wait. To
+// prove a push did not reach this tab, make the server send one it must send
+// after the push in question, Await that, then check Saw:
+//
+//	vt.Act(app, sendInLobby).Over(lobby).Fire()
+//	vt.Act(app, sendInAttic).Over(attic).Fire()
+//	attic.Await("attic msg")
+//	assert.False(t, attic.Saw("lobby msg"))
+func (c *Conn) Saw(needle string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// The event an Await just matched stays pending until its blank line.
+	for _, e := range slices.Concat(c.seen, c.pending) {
+		if strings.Contains(e, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // AwaitClose blocks until the server ends the stream and returns the error that

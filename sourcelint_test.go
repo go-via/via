@@ -2139,7 +2139,7 @@ func (*Signal[T]) Set(T)
 func (*State[T]) Display() h.H
 func (*State[T]) Get() T
 func (*State[T]) Set(T)
-func (*State[T]) Track(*Ctx, *topic.Topic[T], func() T)
+func (*State[T]) Track[M any](*Ctx, *topic.Topic[M], func() T)
 func Child[C any](*C) h.H
 func Each[T any]([]T, func(T) h.H) h.H
 func Gzip(int) Encoder
@@ -2150,7 +2150,7 @@ func NewMemorySessionStore() *MemorySessionStore
 func NewRouter(...Option) *Router
 func PostForm(func(*Ctx), ...h.H) h.H
 func StateOf[T any](T) State[T]
-func StateTrack[T any](*topic.Topic[T], func() T) State[T]
+func StateTrack[T, M any](*topic.Topic[M], func() T) State[T]
 func When(bool, func() h.H) h.H
 func WithErrorPage(func(*Ctx, PageError) h.H) Option
 func WithHead(Head) Option
@@ -2477,6 +2477,7 @@ func (*Conn) Await(string) string
 func (*Conn) AwaitClose() error
 func (*Conn) Close()
 func (*Conn) Peek() (string, bool)
+func (*Conn) Saw(string) bool
 func (*Conn) TabID() string
 func ActArg[P, T any](*App, func(*P) func(*via.Ctx, T), T) *Action
 func Act[P any](*App, func(*P) func(*via.Ctx)) *Action

@@ -93,7 +93,9 @@ func (p *Testing) View() h.H {
 				"open the stream with "), API("vt.App.ConnectAt"), h.Str(".")),
 		h.P(h.Str("Each line is read once, so a line an earlier Await matched or skipped is gone. When Await gives up it "+
 			"reports what did arrive: the frames on the stream, how many this wait read, and the last few. A wait that "+
-			"read none means the frame it wanted, if it came, went to an earlier Await.")),
+			"read none means the frame it wanted, if it came, went to an earlier Await. "),
+			API("vt.Conn.Saw"), h.Str(" searches every event so far, consumed or not, without waiting. To prove a push "+
+				"did not reach a tab, Await a later push the server must send to it, then check that Saw is false.")),
 		snippet.Text("go test", testingAwaitFailure),
 		snippet.Region("testing/live.go", "clock", snippet.Title("clock_test.go"), snippet.Mark("synctest.Test", "Peek()")),
 		h.P(API("vt.Serve"), h.Str(" uses an in-memory network, so a live test runs inside "), Code("synctest.Test"),

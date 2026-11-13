@@ -126,6 +126,9 @@ func (p *Live) View() h.H {
 				h.Str("Click +1 in one tab and watch the other follow."))),
 		h.P(APIText("via.State.Track", "Track"), h.Str(" works on a "), API("via.List"),
 			h.Str(" too. The store publishes a copy of the whole slice on every change, and each tab's list follows it:")),
+		h.P(h.Str("The topic need not carry the State's type. When it carries something else, such as the new message "+
+			"on a feed whose State holds the count, each publish re-runs load. load may be a method value or a "+
+			"closure; it runs on the unit's goroutine, so it must be safe beside the store's writers.")),
 		snippet.Region("live/track.go", "track", snippet.Title("wall.go"), snippet.Mark("Track(", "Publish(")),
 
 		d.H2("Per-session delivery"),

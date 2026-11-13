@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### New
+
+- `State.Track` and `via.StateTrack` take a topic of any payload type. When
+  it is not the State's type, each publish re-runs load, so a message count
+  can follow the feed that carries the messages. Existing calls compile as
+  before.
+- `vt.Conn.Saw(needle)` reports whether any event so far, consumed or not,
+  carried needle. Await a later push, then check `!Saw` to prove one did not
+  arrive.
+
 ### Changed
 
 - **Breaking:** an action on a plain child of a live root runs on the tab's

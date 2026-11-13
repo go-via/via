@@ -39,13 +39,21 @@ type State[T any] struct {
 	// one apply of a via:"init=…" tag — so a literal wins over the tag and no
 	// later render re-seeds over what a Set has authored.
 	lit   bool
-	track *stateTracking[T] // set by StateTrack; nil on every other State
+	track trackSource[T] // set by StateTrack; nil on every other State
 }
 
-type stateTracking[T any] struct {
-	topic *topic.Topic[T]
+// trackSource is a StateTrack literal's topic and load, held without naming
+// the topic's payload type.
+type trackSource[T any] interface {
+	start(s *State[T], ctx *Ctx)
+}
+
+type stateTracking[T, M any] struct {
+	topic *topic.Topic[M]
 	load  func() T
 }
+
+func (t stateTracking[T, M]) start(s *State[T], ctx *Ctx) { s.Track(ctx, t.topic, t.load) }
 
 // tracker is how a StateTrack literal is started without naming T: the type
 // walk holds a zero handle of the field's type as an any, and its method
@@ -60,22 +68,23 @@ func (*State[T]) startTrack(handle unsafe.Pointer, ctx *Ctx) {
 	if s.track == nil {
 		return
 	}
-	s.Track(ctx, s.track.topic, s.track.load)
+	s.track.start(s, ctx)
 }
 
 // StateTrack is the literal form of [State.Track]: a State that seeds from
 // load at every init of its unit, re-seeds once the stream has subscribed, and
-// follows t.
+// follows t, with the same rule for a t whose payload is not T.
 //
 //	via.Handler(Counter{Hits: via.StateTrack(room, n.Load)})
+//	via.Handler(Room{Count: via.StateTrack(chat.Feed, chat.Len)}) // Feed carries Msg
 //
 // load runs at each init, not here, so a request renders whatever the store
 // holds then; the unit needs no OnInit of its own, and a literal on one that
 // has an OnInit runs first so it reads the seeded value. Use it when the
 // source is fixed at mount time; use Track in OnInit when it depends on the
 // request.
-func StateTrack[T any](t *topic.Topic[T], load func() T) State[T] {
-	return State[T]{lit: true, track: &stateTracking[T]{topic: t, load: load}}
+func StateTrack[T, M any](t *topic.Topic[M], load func() T) State[T] {
+	return State[T]{lit: true, track: stateTracking[T, M]{topic: t, load: load}}
 }
 
 func (*State[T]) checkSeed(raw string) error { return checkJSONSeed[T](raw) }
@@ -122,22 +131,34 @@ func (s *State[T]) Get() T { return s.val }
 func (s *State[T]) Set(v T) { s.val = v }
 
 // Track keeps s equal to a store announced on t: it seeds s from load now,
-// seeds it again once the stream has subscribed, and then applies every
-// publish. Valid only inside OnInit; a later call is ignored and logged. load
-// may return one field of a larger store, in which case t carries that field's
-// type. An action that writes the store and publishes need not Set s too: the
-// publish reaches the acting tab as well, in a push of its own.
-func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
+// seeds it again once the stream has subscribed, and then follows every
+// publish. When t carries T, s takes each published value as is. When it
+// carries anything else — the new message on a feed whose State holds the
+// count — each publish re-runs load instead. Valid only inside OnInit; a later
+// call is ignored and logged.
+//
+// load is any func() T: a method value (store.Len) or a closure over the
+// request (func() int { return rooms.Len(id) }). It runs on the unit's own
+// goroutine, at init, at connect, and per publish when t is not of T, so it
+// must be safe to call alongside the writers of the store it reads. An action
+// that writes the store and publishes need not Set s too: the publish reaches
+// the acting tab as well, in a push of its own.
+func (s *State[T]) Track[M any](ctx *Ctx, t *topic.Topic[M], load func() T) {
 	// No partial seed when refused: a one-shot copy that never follows is the
 	// trap this whole method exists to remove.
 	if !ctx.initOnly("Track") {
 		return
 	}
 	s.Set(load())
+	r := stateReload[T]{s: s, load: load}
 	// The subscribe runs before any OnConnect fn, so this re-read covers every
 	// write between OnInit and it.
-	ctx.OnConnect(stateReload[T]{s: s, load: load}.run)
-	ctx.Listen(t, s.recv)
+	ctx.OnConnect(r.run)
+	if same, ok := any(t).(*topic.Topic[T]); ok {
+		ctx.Listen(same, s.recv)
+		return
+	}
+	ctx.Listen(t, stateNotice[T, M]{r}.recv)
 }
 
 func (s *State[T]) recv(_ *Ctx, v T) { s.Set(v) }
@@ -148,6 +169,11 @@ type stateReload[T any] struct {
 }
 
 func (r stateReload[T]) run() { r.s.Set(r.load()) }
+
+// stateNotice re-reads on a publish whose payload is only a notice of change.
+type stateNotice[T, M any] struct{ r stateReload[T] }
+
+func (n stateNotice[T, M]) recv(*Ctx, M) { n.r.run() }
 
 // Display renders the current value as literal, escaped server text, with no
 // wrapping element, and marks its unit live, so server-held state alone earns
@@ -172,7 +198,7 @@ func (d stateDisplay[T]) RenderTo(r *render.Renderer) {
 // It embeds State[[]E], so Get and Set remain the general door
 // (l.Set(slices.Insert(...))) and Append/Remove/Each spell the common cases.
 // Track is promoted too: l.Track(ctx, t, load) in OnInit keeps the list equal
-// to a store whose topic carries the whole []E.
+// to a store whose topic carries the whole []E or any notice of change.
 // Rows morph by position unless each carries a stable id, so give the row an
 // h.ID(…) when the order can change. Like State, rendering one makes its unit
 // live, and like State it reads a `via:"init=<json>"` field tag —

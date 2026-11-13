@@ -435,3 +435,13 @@ func TestRedirected_readsTheTargetOfAnActionsNavigation(t *testing.T) {
 	act.Fire()
 	assert.Equal(t, "/bye", act.Redirected())
 }
+
+func TestSaw_findsAnEventAnAwaitAlreadyConsumed(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(tally{}))
+	conn := app.Connect()
+	vt.Act(app, tallyInc).Over(conn).Fire()
+	conn.Await("n=1")
+	assert.True(t, conn.Saw("n=1"), "Saw must search events Await already read")
+	assert.False(t, conn.Saw("n=2"), "Saw must not report a push that never came")
+}

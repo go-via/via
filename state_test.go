@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -702,4 +703,66 @@ func TestState_aTaggedMapSeedIsEachRequestsOwn(t *testing.T) {
 
 	_, body := app.Get("/")
 	assert.Contains(t, body, "<div>1<", "a write into one request's seeded map must not reach the next")
+}
+
+// msgLog is a store whose topic carries each new message, while the State
+// that follows it holds only the count.
+type msgLog struct {
+	mu   sync.Mutex
+	msgs []string
+	feed *topic.Topic[string]
+}
+
+func (l *msgLog) add(m string) {
+	l.mu.Lock()
+	l.msgs = append(l.msgs, m)
+	l.mu.Unlock()
+	l.feed.Publish(m)
+}
+
+func (l *msgLog) count() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.msgs)
+}
+
+type msgCount struct{ N via.State[int] }
+
+func (p *msgCount) View() h.H { return h.P(h.Str("msgs: "), p.N.Display()) }
+
+func TestStateTrack_reloadsOnATopicOfAnotherType(t *testing.T) {
+	t.Parallel()
+	log := &msgLog{feed: topic.New[string]()}
+	app := vt.Serve(t, via.Handler(msgCount{N: via.StateTrack(log.feed, log.count)}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	log.add("hi")
+	log.add("there")
+	assert.Contains(t, conn.Await("msgs: 2"), "msgs: 2",
+		"a publish whose payload is not the State's type must re-run load")
+}
+
+type msgCountInit struct {
+	log *msgLog
+	N   via.State[int]
+}
+
+func (p *msgCountInit) OnInit(ctx *via.Ctx) error {
+	p.N.Track(ctx, p.log.feed, p.log.count)
+	return nil
+}
+
+func (p *msgCountInit) View() h.H { return h.P(h.Str("msgs: "), p.N.Display()) }
+
+func TestTrack_reloadsOnATopicOfAnotherType(t *testing.T) {
+	t.Parallel()
+	log := &msgLog{feed: topic.New[string]()}
+	app := vt.Serve(t, via.Handler(msgCountInit{log: log}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	log.add("hi")
+	assert.Contains(t, conn.Await("msgs: 1"), "msgs: 1",
+		"Track from OnInit must accept a topic whose payload is not the State's type")
 }
