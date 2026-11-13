@@ -18,10 +18,11 @@ type Topic[T any] struct {
 	wakes map[chan<- struct{}]struct{} // scratch, reused by Publish
 }
 
-// New builds a Topic with no subscribers. A Topic is safe for concurrent use
-// and is meant to live for the process: declare it as a package-level var and
-// let children subscribe to it with ctx.Listen. It has no Close; a Topic with no
-// subscribers costs one lock per publish.
+// New builds a Topic with no subscribers; the zero Topic is ready too. A Topic
+// is safe for concurrent use and lives as long as what holds it: a field of
+// the store whose changes it carries, so each test that builds a store gets
+// its own. Units subscribe with ctx.Listen or Track. It has no Close; a Topic
+// with no subscribers costs one lock per publish.
 func New[T any]() *Topic[T] { return &Topic[T]{} }
 
 // DefaultLimit bounds how many undelivered values one subscriber may hold. It

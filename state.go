@@ -125,7 +125,8 @@ func (s *State[T]) Set(v T) { s.val = v }
 // seeds it again once the stream has subscribed, and then applies every
 // publish. Valid only inside OnInit; a later call is ignored and logged. load
 // may return one field of a larger store, in which case t carries that field's
-// type.
+// type. An action that writes the store and publishes need not Set s too: the
+// publish reaches the acting tab as well, in a push of its own.
 func (s *State[T]) Track(ctx *Ctx, t *topic.Topic[T], load func() T) {
 	// No partial seed when refused: a one-shot copy that never follows is the
 	// trap this whole method exists to remove.

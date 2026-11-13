@@ -340,7 +340,7 @@ var apiSymbols = []apiSymbol{
 	{"expr", "Rawf", "func", "func Rawf(format string, args ...Expr) Expr", "Rawf splices checked expressions into unchecked text: each %s takes the next Expr verbatim, %% is a literal percent, and any other verb or a wrong argument count panics.", ""},
 	{"expr", "Val", "func", "func Val(v any) Expr", "Val encodes v as a JavaScript literal; an Expr is parenthesized unless it is already one group or a bare name or literal.", ""},
 	{"topic", "DefaultLimit", "const", "const DefaultLimit = 100_000", "DefaultLimit bounds how many undelivered values one subscriber may hold.", ""},
-	{"topic", "New", "func", "func New[T any]() *Topic[T]", "New builds a Topic with no subscribers.", ""},
+	{"topic", "New", "func", "func New[T any]() *Topic[T]", "New builds a Topic with no subscribers; the zero Topic is ready too.", ""},
 	{"topic", "Sub", "type", "type Sub[T any] struct{ … }", "Sub is a subscription.", ""},
 	{"topic", "Sub.Drain", "method", "func (s *Sub[T]) Drain() (batch []T, ok bool)", "Drain removes and returns every queued value in publish order.", ""},
 	{"topic", "Sub.Dropped", "method", "func (s *Sub[T]) Dropped() int", "Dropped reports how many values this subscription lost to its queue limit.", ""},

@@ -14,6 +14,32 @@
 // as an internal wire-name a caller could desync: a handle keeps its fields
 // unexported.
 //
+// # Plain and live units
+//
+// A unit is the mounted root or a field rendered with Child. It is live when
+// its OnInit calls Ctx.Tick or Ctx.Listen, or its View renders a State or
+// List; otherwise it is plain. A page with a live unit opens one SSE stream
+// per tab.
+//
+//   - A plain page is rebuilt for each request: an action runs on a fresh
+//     copy of the mounted value, so a field it sets lasts for that response
+//     only. Keep per-tab state in a Signal, which the browser holds, or in a
+//     State, which makes the unit live.
+//   - A live unit keeps its instance for the tab's stream, and so do the plain
+//     children of a live root. Its actions answer 204 and the patch arrives on
+//     the stream.
+//   - A live unit may not contain another live unit, and liveness must not
+//     depend on a branch an action can open. Both panic.
+//
+// # Sharing state between tabs
+//
+// Each tab gets its own copy of the mounted value, so value fields are per
+// tab. Shared state lives behind a pointer field: a store the mounted value
+// points at. The store publishes each change on a topic.Topic it owns, and
+// each tab's live unit follows it with State.Track or List.Track (or
+// Ctx.Listen) in OnInit. A Topic held by the store, not a package var, gives
+// each test that builds a store its own.
+//
 // # Lifecycle hooks
 //
 // The hooks are duck-typed: opt in by having the method, so a rename or
