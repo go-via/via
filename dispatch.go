@@ -211,32 +211,39 @@ func findUnit(c *Ctx, key string, liveAbove bool) (*Ctx, bool) {
 	return nil, false
 }
 
-// unit returns the connected live unit for dispatch address child. Called on
-// the stream goroutine (see dispatchOverStream) so the lookup is atomic with the
-// dispatch it guards; it still takes replace's lock, so a future caller reading
-// it from elsewhere need not remember to add one.
-func (c *tabStream) unit(child string) *Ctx {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.units[child]
-}
-
-// held returns the unit at dispatch address child and the live unit whose
-// push carries it: a live unit is its own owner, and a plain child of a live
-// root is the root's. A child the last authority render lacked is not held.
-// Called on the stream goroutine, like unit.
+// held returns the unit at dispatch address child and the unit whose push
+// carries it: a held unit is its own owner, and any other unit is found in
+// the render of the nearest held unit above its address. A child that render
+// lacked is not held. Called on the stream goroutine, like unit.
 func (c *tabStream) held(child string) (unit, owner *Ctx) {
-	if u := c.unit(child); u != nil {
-		return u, u
-	}
-	root := c.unit(rootAddr)
-	if root == nil {
+	owner = c.owner(child)
+	if owner == nil {
 		return nil, nil
 	}
-	if u, _ := findUnit(root, child, false); u != nil && !u.unauthorized {
-		return u, root
+	if unitAddr(owner) == child {
+		return owner, owner
+	}
+	if u, _ := findUnit(owner, child, false); u != nil && !u.unauthorized {
+		return u, owner
 	}
 	return nil, nil
+}
+
+// owner returns the held unit registered at the longest '-'-separated prefix
+// of address child, or the root.
+func (c *tabStream) owner(child string) *Ctx {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for addr := child; ; {
+		if u := c.units[addr]; u != nil {
+			return u
+		}
+		i := strings.LastIndexByte(addr, '-')
+		if i < 0 {
+			return c.units[rootAddr]
+		}
+		addr = addr[:i]
+	}
 }
 
 // liveAncestor reports whether any node from bind down to (but excluding) the
@@ -399,18 +406,23 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 		http.Error(ar.w, "no such child", http.StatusGone)
 		return true
 	}
-	// A plain child of a plain root echoes the tab id too, and nothing on
-	// the connection holds it. A live root holds its plain children, so its
-	// tab takes every address; which child exists is resolved on the stream
-	// goroutine (see tabStream.held), since each push may change it.
-	// Registration is stable (a unit is published before the tab id is, and
-	// never removed), so this check is safe here.
-	if lc.unit(ar.child) == nil && lc.unit(rootAddr) == nil {
+	// A native submit replaces the whole document, and the reconnect that
+	// follows builds a fresh instance anyway. Under a plain owner the plain
+	// path answers it with the page its handler rendered; a live owner's
+	// state is the tab's, so it stays on the stream. Which child exists is
+	// resolved on the stream goroutine (see tabStream.held), since each push
+	// may change it.
+	if ar.mode == modeNative && !ownerLive(lc, ar.child) {
 		ticket.leave()
 		return false
 	}
 	m.dispatchOverStream(ar, lc, deadline, ticket)
 	return true
+}
+
+func ownerLive(lc *tabStream, child string) bool {
+	o := lc.owner(child)
+	return o != nil && o.live
 }
 
 // actionTab reads the tab id an action POST echoes, from the form field or the

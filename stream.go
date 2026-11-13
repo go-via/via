@@ -189,16 +189,11 @@ func (s *stream) abort() {
 // push item pushes only its own child's container. It always loops, even with
 // no ticks or subs, so an interactive-only child still receives actions and
 // beats; disposers run on exit.
-// listeners and wake are built by the caller, before any OnConnect runs, so a
-// unit observes its own connect-time publish; runStream only drains them.
-func runStream(reqCtx context.Context, lc *tabStream, listeners []subscription, wake chan struct{}) {
+// attach started every subscription and ticker, before any OnConnect ran, so
+// a unit observes its own connect-time publish; runStream only drains them.
+func runStream(reqCtx context.Context, lc *tabStream) {
 	log, g := lc.mount.cfg.log, lc.guard
-	defer disposeUnits(log, g, lc.handlers)
-	for _, u := range lc.handlers {
-		for _, t := range u.ticks {
-			go runTicker(reqCtx, u, t, lc.pushq)
-		}
-	}
+	defer lc.dispose()
 	beat := time.NewTicker(sseHeartbeat)
 	defer beat.Stop()
 	for {
@@ -207,18 +202,20 @@ func runStream(reqCtx context.Context, lc *tabStream, listeners []subscription, 
 			return
 		case it := <-lc.pushq:
 			runPushItem(log, g, it)
-		case <-wake:
-			sweepListeners(log, g, listeners)
+		case <-lc.wake:
+			sweepListeners(log, g, lc.listeners)
 		case <-beat.C:
 			runPushItem(log, g, pushItem{beat: lc})
 		}
 	}
 }
 
-// disposeUnits runs every unit's disposers, then closes the guard.
-func disposeUnits(log *slog.Logger, g *pushGuard, units []*Ctx) {
-	runDisposers(log, g, units)
-	g.close(log)
+// dispose runs every attached unit's disposers, then closes the guard. It
+// reads handlers when the stream ends, so a child a branch attached
+// mid-stream is disposed too.
+func (c *tabStream) dispose() {
+	runDisposers(c.mount.cfg.log, c.guard, c.handlers)
+	c.guard.close(c.mount.cfg.log)
 }
 
 func runDisposers(log *slog.Logger, g *pushGuard, units []*Ctx) {

@@ -21,9 +21,9 @@
   `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.
 - The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
   longer panics on its first Subscribe or Publish. `topic.New` still works.
-- Mount panics on a `topic.Topic` held by value in a page or child. Each
-  tab runs on a copy of the page, so each got a topic of its own and a
-  publish reached only the tab that made it.
+- Mount panics on a `topic.Topic` held by value in a page or child, or an
+  array of them. Each tab runs on a copy of the page, so each got a topic
+  of its own and a publish reached only the tab that made it.
 - Mount warns about a non-nil map or slice in the mounted literal: every
   request and tab shares it through its shallow copy of the page.
 - A method shaped like the v0.7 `OnDispose(ctx)` hook logs a warning at
@@ -34,10 +34,17 @@
 
 ### Changed
 
-- **Breaking:** an action on a plain child of a live root runs on the tab's
-  instance and its patch rides the stream (204), as the root's own actions
-  do. It used to run on a fresh copy, so the child's fields reset on every
-  click and the tab never saw the change.
+- **Breaking:** on a page that streams, every action the tab fires runs on
+  the tab's instance and its patch rides the stream (204): a plain root's,
+  a plain child's and a live unit's alike. A plain root or plain child used
+  to run on a fresh copy, so its fields reset on every click and the tab
+  never saw the change. A `PostForm` under a plain unit still answers with
+  the page its handler rendered on a fresh copy, since it replaces the
+  document. A plain root's OnConnect and OnDispose now run once per tab.
+- On a page that streams, a live child a `via.When` branch opens joins the
+  stream at its first render: its Ticks and Listens start, and it keeps its
+  state while the branch is closed. A root action's patch shows what it
+  wrote to a live child.
 - **Breaking:** `via.Child` takes the field's address, `via.Child(&p.Chat)`,
   and keys the child by its field path (`Chat`, `Stats-A`, `Rows-1`,
   `Outer-Kid`) instead of its position among the parent's `Child` calls. A

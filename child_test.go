@@ -1141,9 +1141,10 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, patch := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Search }).Over(conn).Fire()
-	require.Equal(t, http.StatusOK, status)
+	status, _ := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Search }).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status, "the tab holds the plain root, so the stream carries the patch")
 	assert.Equal(t, int64(1), hits.Load(), "the left panel's own action ran")
+	patch := conn.Await("hits=1")
 
 	assert.Len(t, regexp.MustCompile(`id="via-iLeft"`).FindAllString(patch, -1), 1,
 		"the patch must carry the acted child's container exactly once")

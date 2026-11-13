@@ -781,6 +781,20 @@ func TestMount_panicsOnATopicHeldByValue(t *testing.T) {
 	})
 }
 
+type topicArray struct {
+	Feeds [2]topic.Topic[int]
+	N     via.State[int]
+}
+
+func (p *topicArray) View() h.H { return h.Div(p.N.Display()) }
+
+func TestMount_panicsOnAnArrayOfTopicsHeldByValue(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "via: via_test.topicArray.Feeds holds a [2]topic.Topic[int] by value", func() {
+		via.Mount(via.NewRouter(), "/", topicArray{})
+	})
+}
+
 type footer struct{}
 
 func (*footer) View() h.H { return h.P(h.Str("footer")) }

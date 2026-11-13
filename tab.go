@@ -24,7 +24,18 @@ type tabStream struct {
 	mu       sync.Mutex      // replace runs on the stream goroutine, unit is read from the dispatching request's
 	units    map[string]*Ctx // dispatch address → current unit Ctx, at any embedding depth
 	sess     string          // the bound session's stable sid; "" when anonymous. An sid, not the cookie id, so a Rotate (which re-ids) and another pod both still match
-	handlers []*Ctx          // the connect-time unit Ctxs, which every Tick and Listen handler is handed for the connection's life
+	handlers []*Ctx          // the Ctx each unit attached with, which every Tick and Listen handler is handed for the connection's life
+
+	// Attachment state, touched only on this connection's own goroutine. A
+	// live child a branch opens attaches mid-stream (adoptKids), so its
+	// subscriptions and ticks need the stream's own context and wake channel.
+	streamCtx context.Context
+	wake      chan struct{} // one coalescing token for every subscription, so a Listen costs no goroutine of its own
+	listeners []subscription
+	base      string
+	root      *unitPusher            // the root's pusher; its push carries every unit below it
+	kids      map[string]*unitPusher // live children's pushers by child key, kept while their branch is closed
+	opened    []*unitPusher          // kids attached by the current root push, pushed after its frame
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
@@ -257,6 +268,14 @@ func (c *tabStream) replace(u *Ctx) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.units[unitAddr(u)] = u
+}
+
+// forget unregisters the unit at addr, so an action addressed to it finds
+// nothing held.
+func (c *tabStream) forget(addr string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.units, addr)
 }
 
 // runOutcome says why a dispatch did not produce a result. A closed tab, a

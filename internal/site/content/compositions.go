@@ -76,10 +76,10 @@ func (p *Compositions) View() h.H {
 			[]h.H{h.Str("Stream connect, when a unit is live"), h.Span(Code("OnInit"), h.Str(" on every unit again. Then each "),
 				API("via.Ctx.Listen"), h.Str(" subscribes and each "), API("via.Ctx.OnConnect"), h.Str(" function runs.")),
 				h.Str("fresh, kept for the connection")},
-			[]h.H{h.Str("Action on a plain unit"), h.Span(Code("OnInit"), h.Str(" on every unit of the page, the handler, "),
+			[]h.H{h.Str("Action, page with no stream"), h.Span(Code("OnInit"), h.Str(" on every unit of the page, the handler, "),
 				Code("OnReload"), h.Str(" on the acted unit, then that unit's "), Code("View"), h.Str(".")),
 				h.Str("fresh, dropped after the response")},
-			[]h.H{h.Str("Action on a live unit"), h.Span(h.Str("The handler, "), Code("OnReload"), h.Str(", "), Code("View"),
+			[]h.H{h.Str("Action, page that streams"), h.Span(h.Str("The handler, "), Code("OnReload"), h.Str(", "), Code("View"),
 				h.Str("; the patch goes down the stream. No "), Code("OnInit"), h.Str(".")),
 				h.Str("the connection's")},
 			[]h.H{h.Str("Tick or Listen value"), h.Span(h.Str("The handler, then "), Code("View"), h.Str(".")), h.Str("the connection's")},
@@ -166,9 +166,10 @@ func (p *Compositions) View() h.H {
 			h.P(h.Str("The picker and the summary are siblings that share one topic and nothing else.")),
 			via.Child(&p.Relay), "compositions_relay.go",
 			demo.Try(h.Str("Pick a language. The Wire pane shows one POST for the picker, then an SSE patch for the summary."))),
-		Callout(Caveat, "Both ends must be live",
-			h.P(h.Str("The picker renders a State, which keeps its instance, and the topic it holds, for the connection. "+
-				"A plain picker's action would run on a fresh instance holding a fresh topic that nothing listens to."))),
+		Callout(Caveat, "The page must stream",
+			h.P(h.Str("The summary renders a State, so the page streams and every unit keeps its instance, and the topic "+
+				"it holds, for the connection. On a page with no live unit, the picker's action would run on a fresh "+
+				"instance holding a fresh topic that nothing listens to."))),
 
 		d.H3("Lifting state"),
 		Compare("React", snippet.Text("", reactLift), "via", snippet.Region("compositions/recipes.go", "lift", snippet.Title(""))),

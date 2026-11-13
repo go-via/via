@@ -21,6 +21,18 @@ func liveUnits(bind *Ctx) []*Ctx {
 	return units
 }
 
+// tabUnits collects the units a streaming tab holds: the root, live or plain,
+// then its live children. A plain root is held too, so its actions run on the
+// tab's instance like every other action the tab fires, not on a fresh copy.
+// Nil when nothing is live: that page does not stream.
+func tabUnits(bind *Ctx) []*Ctx {
+	units := liveUnits(bind)
+	if len(units) == 0 || bind.live {
+		return units
+	}
+	return append([]*Ctx{bind}, units...)
+}
+
 // appendLiveChildren recurses: a live grandchild gets no stream wiring unless
 // discovery descends past its (live or plain) parent too.
 func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
@@ -32,20 +44,106 @@ func appendLiveChildren(ctx *Ctx, out *[]*Ctx) {
 	}
 }
 
-// connectUnit wires unit's push to stream (whole-page at #root for the root,
-// its own #via-i{key} container for a child) and registers it on lc. The
+// connectUnit wires unit's push to the stream (whole-page at #root for the
+// root, its own #via-i{key} container for a child) and registers it on lc. The
 // returned pusher's baseline renders the unit as the push would and records the
 // bytes without framing them, so a later push ships only what actually changed.
-func connectUnit(unit *Ctx, stream *stream, base string, lc *tabStream) *unitPusher {
+func connectUnit(unit *Ctx, lc *tabStream) *unitPusher {
 	lc.replace(unit)
 	unit.guard = lc.guard
-	p := &unitPusher{lc: lc, stream: stream, inst: unit.unitV, base: base, from: unit, last: unit}
+	unit.streamCtx = lc.streamCtx
+	p := &unitPusher{lc: lc, stream: lc.wire, inst: unit.unitV, base: lc.base, from: unit, last: unit}
 	if unit.isChild {
 		p.childKey = unit.childKey
 		p.frameID = "via-i" + unit.childKey
+		lc.kids[p.childKey] = p
+	} else {
+		lc.root = p
 	}
 	unit.pusher = p
 	return p
+}
+
+// attach joins units to the stream: each gets its pusher and starts its
+// subscriptions and ticks, then each runs its OnConnect fns. Every
+// subscription starts before any OnConnect runs, so a unit that publishes on
+// connect (the "join a room" pattern) sees its own join. It returns the
+// pushers whose OnConnect fns ran: their frame has yet to ship.
+func (c *tabStream) attach(units []*Ctx) []*unitPusher {
+	for _, u := range units {
+		connectUnit(u, c)
+		c.handlers = append(c.handlers, u)
+		c.start(u)
+	}
+	var moved []*unitPusher
+	for _, u := range units {
+		if len(u.onConnect) > 0 {
+			// The push after the fns compares against this, so fns that change
+			// nothing ship no frame.
+			u.pusher.baseline()
+			for _, fn := range u.onConnect {
+				fn()
+			}
+			moved = append(moved, u.pusher)
+		}
+		// OnInit or OnConnect may have minted a session where the connect
+		// cookie left none, so the tab is not left on a bare-tab-id credential.
+		c.bindSession(u.session.sid())
+	}
+	return moved
+}
+
+func (c *tabStream) start(u *Ctx) {
+	for _, l := range u.subs {
+		l.start(c.wake)
+		c.listeners = append(c.listeners, l)
+	}
+	for _, t := range u.ticks {
+		go runTicker(c.streamCtx, u, t, c.pushq)
+	}
+}
+
+// adoptKids points each live child's pusher at its Ctx in bind, a fresh
+// render of the root. That render re-bound the child's handles, so a later Set
+// by the child's own Tick or Listen lands there. A live child bind shows for
+// the first time — a branch an action opened — attaches; one bind lacks is
+// hidden until a render shows it again, keeping its instance and listeners.
+func (c *tabStream) adoptKids(bind *Ctx) {
+	var live []*Ctx
+	appendLiveChildren(bind, &live)
+	shown := make(map[string]bool, len(live))
+	var fresh []*Ctx
+	for _, k := range live {
+		shown[k.childKey] = true
+		if p := c.kids[k.childKey]; p != nil {
+			p.adopt(k)
+		} else {
+			fresh = append(fresh, k)
+		}
+	}
+	for key, p := range c.kids {
+		if !shown[key] {
+			p.hide()
+		}
+	}
+	c.opened = append(c.opened, c.attach(fresh)...)
+}
+
+func (p *unitPusher) adopt(k *Ctx) {
+	k.pusher = p
+	k.guard = p.lc.guard
+	k.streamCtx = p.lc.streamCtx
+	p.last = k
+	p.hidden = false
+	p.lastBody = nil // the root's frame just replaced this child's container
+	p.lc.replace(k)
+}
+
+// hide stops a child whose branch closed from framing into a container the
+// page no longer has, and from taking actions.
+func (p *unitPusher) hide() {
+	p.hidden = true
+	p.lc.forget(p.childKey)
 }
 
 // livePush renders one live unit under dispatchPlain's two-phase rule (I1/I2):
@@ -123,6 +221,7 @@ type unitPusher struct {
 	childKey    string // empty for the root
 	frameID     string // the child's container id; empty for the root
 	lastBody    []byte // nil until the first frame, so the first push always ships
+	hidden      bool   // a child whose branch the root's last render closed
 	fatalLogged bool
 }
 
@@ -156,16 +255,50 @@ func (p *unitPusher) rerender(rev *revertSet) rerender {
 // ahead of this check too. The connect handshake's signals frame and the
 // keepalive are untouched, so a half-open peer is still detected on the beat.
 func (p *unitPusher) push() {
+	if p.hidden {
+		return
+	}
+	if p.frameID == "" {
+		p.lc.flushKids() // the root's render carries the children's handles from here on
+	}
 	p.lc.flushDirty(p.last)
 	defer p.recoverFatal()
 	prev := p.last
 	body := p.rebind()
 	p.lc.declareOpened(prev, p.last)
-	if bytes.Equal(body, p.lastBody) {
-		return
+	if !bytes.Equal(body, p.lastBody) {
+		p.lastBody = append(p.lastBody[:0], body...)
+		p.stream.patch(p.frameID, body)
+		p.lc.framed(p)
 	}
-	p.lastBody = append(p.lastBody[:0], body...)
-	p.stream.patch(p.frameID, body)
+	p.lc.pushOpened()
+}
+
+// flushKids ships the signals the live children wrote through their own
+// binds before the root's render re-binds their handles.
+func (c *tabStream) flushKids() {
+	for _, k := range c.kids {
+		c.flushDirty(k.last)
+	}
+}
+
+// framed notes that p shipped a frame. A child's frame moved the DOM under
+// the root's last frame, so the root's next push must ship even if its render
+// matches that frame.
+func (c *tabStream) framed(p *unitPusher) {
+	if p.frameID != "" && c.root != nil {
+		c.root.lastBody = nil
+	}
+}
+
+// pushOpened ships the frames of children the root's push attached whose
+// OnConnect fns ran, once the root's frame has given them a container.
+func (c *tabStream) pushOpened() {
+	opened := c.opened
+	c.opened = nil
+	for _, k := range opened {
+		k.push()
+	}
 }
 
 // baseline records the unit's current render as the last framed body without
@@ -186,6 +319,9 @@ func (p *unitPusher) rebind() []byte {
 	bind.streamCtx = p.last.streamCtx
 	p.last = bind
 	p.lc.replace(bind)
+	if p.frameID == "" {
+		p.lc.adoptKids(bind)
+	}
 	return body
 }
 
@@ -285,7 +421,8 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 		connSID = sessDat.sid
 	}
 	lc := m.newTabStream(id, connSID, bind, connectSig, stream)
-	units, guard := lc.handlers, lc.guard
+	lc.streamCtx, lc.base = streamCtx, base
+	units := tabUnits(bind)
 	if len(units) == 0 {
 		http.Error(w, "no stream for this tab", http.StatusNotFound)
 		return
@@ -297,22 +434,15 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// here and handed over at the call, and deferred after the recover above so
 	// it runs first.
 	streaming := false
-	defer disposeUnstreamed(m.cfg.log, guard, units, &streaming)
+	defer lc.disposeUnstreamed(&streaming)
 
-	// Subscriptions are started before any OnConnect runs, and their queued
-	// values are drained by runStream below. A unit whose OnConnect publishes
-	// (the "join a room" pattern the hook's doc names) would otherwise publish its
-	// join into a topic it had not subscribed to yet, and the first frame would
-	// show the pre-join world. The subscriptions stay off the plain-GET path — this is the SSE handler, and
-	// Ctx.Listen only records one at OnInit time.
-	//
-	// One wake channel shared by every subscription, so a Listen costs no
-	// goroutine of its own to reach runStream's select. Capacity 1 and
-	// coalescing, so a publisher never blocks and N pending values still cost
-	// one sweep.
-	wake := make(chan struct{}, 1)
-	listeners := startListeners(units, streamCtx, wake)
-	runOnConnect(units, stream, base, lc)
+	// attach starts the subscriptions before any OnConnect runs, and runStream
+	// drains what they queued: a unit whose OnConnect publishes (the "join a
+	// room" pattern the hook's doc names) would otherwise publish its join into
+	// a topic it had not subscribed to yet, and the first frame would show the
+	// pre-join world. The subscriptions stay off the plain-GET path — this is
+	// the SSE handler, and Ctx.Listen only records one at OnInit time.
+	moved := lc.attach(units)
 
 	// Watched before the first sweep and the OnConnect pushes, which run app
 	// handlers: a Rotate elsewhere while they run must end this stream. Not
@@ -335,53 +465,21 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// would let its Session().Put SetCookie on a dead response: no error, no
 	// cookie, a session minted and orphaned until TTL (I4). Clearing it makes
 	// Session.ensure's "no cookie can be set" warning fire, as documented.
-	detachResponse(units)
+	detachResponse(lc.handlers)
 
 	// Whatever an OnConnect published is drained first, so the connect's own
 	// frame carries it rather than a pre-handler render the next sweep would
 	// immediately correct.
-	guard.watchPin(m.cfg.pinnedDeadline, lc.warnPinTimer)
-	sweepListeners(m.cfg.log, guard, listeners)
+	lc.guard.watchPin(m.cfg.pinnedDeadline, lc.warnPinTimer)
+	sweepListeners(m.cfg.log, lc.guard, lc.listeners)
 
 	// A Set inside an OnConnect fn has no push to ride — runStream does no
 	// initial push — so it must be pushed explicitly here. It ships a frame
 	// only if the render moved off the baseline taken before the fns ran.
-	pushOnConnect(m.cfg.log, guard, units)
+	pushMoved(m.cfg.log, lc.guard, moved)
 
 	streaming = true
-	runStream(streamCtx, lc, listeners, wake)
-}
-
-func startListeners(units []*Ctx, streamCtx context.Context, wake chan struct{}) []subscription {
-	var listeners []subscription
-	for _, u := range units {
-		u.streamCtx = streamCtx
-		for _, l := range u.subs {
-			l.start(wake)
-			listeners = append(listeners, l)
-		}
-	}
-	return listeners
-}
-
-// runOnConnect wires each unit's pusher and runs its OnConnect fns.
-func runOnConnect(units []*Ctx, stream *stream, base string, lc *tabStream) {
-	for _, u := range units {
-		p := connectUnit(u, stream, base, lc)
-		// pushOnConnect compares against the unit's last framed body; without
-		// this it would be empty and that push would ship a full frame even for
-		// an OnConnect fn that changed nothing.
-		if len(u.onConnect) > 0 {
-			p.baseline()
-		}
-		for _, fn := range u.onConnect {
-			fn()
-		}
-		// OnInit may have minted a session where the connect cookie left
-		// lc.sess empty — bind it now so the connection isn't left as a
-		// bare-tab-id credential.
-		lc.bindSession(u.session.sid())
-	}
+	runStream(streamCtx, lc)
 }
 
 func detachResponse(units []*Ctx) {
@@ -393,13 +491,11 @@ func detachResponse(units []*Ctx) {
 	}
 }
 
-// pushOnConnect ships a frame for each unit whose render moved off the
-// baseline runOnConnect took before its OnConnect fns ran.
-func pushOnConnect(log *slog.Logger, g *pushGuard, units []*Ctx) {
-	for _, u := range units {
-		if len(u.onConnect) > 0 {
-			runPushItem(log, g, pushItem{push: u.pusher})
-		}
+// pushMoved ships a frame for each unit whose render moved off the baseline
+// attach took before its OnConnect fns ran.
+func pushMoved(log *slog.Logger, g *pushGuard, moved []*unitPusher) {
+	for _, p := range moved {
+		runPushItem(log, g, pushItem{push: p})
 	}
 }
 
@@ -452,7 +548,8 @@ func (m *mount) newTabStream(id, sid string, bind *Ctx, connectSig map[string]js
 		done:            s.done,
 		units:           map[string]*Ctx{},
 		sess:            sid,
-		handlers:        liveUnits(bind),
+		kids:            map[string]*unitPusher{},
+		wake:            make(chan struct{}, 1),
 		client:          connectClient(bind, connectSig),
 		rev:             bind.rev,
 		badDecodeLogged: bind.badDecodeLogged,
@@ -550,9 +647,9 @@ func (m *mount) releaseUnregistered(id string, s *stream, registered *bool) {
 
 // disposeUnstreamed runs the disposers runStream would have, for a connect
 // that failed before handing them over.
-func disposeUnstreamed(log *slog.Logger, g *pushGuard, units []*Ctx, streaming *bool) {
+func (c *tabStream) disposeUnstreamed(streaming *bool) {
 	if *streaming {
 		return
 	}
-	runDisposers(log, g, units)
+	runDisposers(c.mount.cfg.log, c.guard, c.handlers)
 }

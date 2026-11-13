@@ -50,15 +50,20 @@
 // List; otherwise it is plain. A page with a live unit opens one SSE stream
 // per tab.
 //
-//   - A plain page is rebuilt for each request: an action runs on a fresh
-//     copy of the mounted value, so a field it sets lasts for that response
-//     only. Keep per-tab state in a Signal, which the browser holds, or in a
-//     State, which makes the unit live.
-//   - A live unit keeps its instance for the tab's stream, and so do the plain
-//     children of a live root. Their actions answer 204 and the patch arrives
-//     on the stream.
-//   - A live unit may not contain another live unit, and liveness must not
-//     depend on a branch an action can open. Both panic.
+//   - A page with no live unit is rebuilt for each request: an action runs
+//     on a fresh copy of the mounted value, so a field it sets lasts for that
+//     response only. Keep per-tab state in a Signal, which the browser holds,
+//     or in a State, which makes the unit live.
+//   - A page that streams keeps its whole tree for the tab: the root and
+//     every child, plain or live. Every action the tab fires runs on that
+//     instance, answers 204, and its patch arrives on the stream. A PostForm
+//     under a plain unit is the exception: it replaces the document, so it
+//     answers with the page its handler rendered on a fresh copy.
+//   - A live unit may not contain another live unit, and on a page served
+//     plain, liveness must not depend on a branch an action can open. Both
+//     panic. On a page that streams, a live child a branch opens joins the
+//     stream at its first render and keeps its state while the branch is
+//     closed.
 //
 // # Sharing state between tabs
 //
@@ -322,6 +327,7 @@ func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, d
 			walkSignals(ts, f.Type, off, name+"_", depth+1)
 		default:
 			checkNoSeedTag(t, f)
+			checkNotTopic(t, f)
 			checkSignalReachable(t, f)
 		}
 	}
@@ -330,11 +336,16 @@ func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, d
 // checkNotTopic panics on a topic.Topic held by value. Each tab and request
 // runs on a shallow copy of the mounted literal, so each would get a topic of
 // its own and a publish would reach only the tab that made it.
+// An array of topics is copied with the page just the same.
 func checkNotTopic(owner reflect.Type, f reflect.StructField) {
-	if f.Type.PkgPath() == topicPkg && strings.HasPrefix(f.Type.Name(), "Topic[") {
+	t := f.Type
+	for t.Kind() == reflect.Array {
+		t = t.Elem()
+	}
+	if t.PkgPath() == topicPkg && strings.HasPrefix(t.Name(), "Topic[") {
 		panic(render.Miswired("via: " + owner.String() + "." + f.Name + " holds a " + f.Type.String() +
 			" by value, so every tab's copy of the page gets its own topic and a publish reaches only the tab " +
-			"that made it. Hold a *" + f.Type.String() + " (topic.New), or put the topic in the store the page points at."))
+			"that made it. Hold a *" + t.String() + " (topic.New), or put the topic in the store the page points at."))
 	}
 }
 

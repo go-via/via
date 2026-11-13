@@ -977,8 +977,9 @@ spelling outright.
 
 ## Upgrading from v0.10.0
 
-- **A plain child of a live root keeps its state**: Runtime. Its action now
-  mutates the tab's instance and answers 204, with the patch on the stream.
+- **A plain unit on a streaming page keeps its state**: Runtime. An action
+  on a plain root or plain child of a page with any live unit now mutates
+  the tab's instance and answers 204, with the patch on the stream.
   A test that asserted 200 and read the patch from the POST body awaits it on
   the `Conn` instead.
 - **`via.Child` takes the field's address**: `via.Child(p.Chat)` →
