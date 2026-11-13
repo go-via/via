@@ -35,7 +35,6 @@ type tabStream struct {
 	base      string
 	root      *unitPusher            // the root's pusher; its push carries every unit below it
 	kids      map[string]*unitPusher // live children's pushers by child key, kept while their branch is closed
-	opened    []*unitPusher          // kids attached by the current root push, pushed after its frame
 
 	// client and rev are touched only on this connection's own goroutine —
 	// connect builds them before runStream, and every push and every live
@@ -213,13 +212,17 @@ func (c *tabStream) flushDirty(u *Ctx) {
 
 // declareOpened seeds the slots cur declares and prev did not: a branch the
 // push opened. The element push omits data-signals, so without this the client
-// store has no value for them and a Display reads undefined.
-func (c *tabStream) declareOpened(prev, cur *Ctx) {
+// store has no value for them and a Display reads undefined. also names binds
+// whose slots the client holds already: for the root, its live children's.
+func (c *tabStream) declareOpened(cur, prev *Ctx, also ...*Ctx) {
 	if sameSlots(prev, cur) {
 		return
 	}
 	had := map[string]bool{}
 	prev.collectSlots(had)
+	for _, b := range also {
+		b.collectSlots(had)
+	}
 	opened := map[string]any{}
 	openedSlots(cur, had, opened)
 	if len(opened) == 0 {

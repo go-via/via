@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -329,4 +330,214 @@ func TestHeldRoot_aBranchALoginOpensReadsTheNewSession(t *testing.T) {
 	conn.Await("heldDash-who=ann")
 	status, _ := vt.Act(app, func(p *heldLoginRoot) func(*via.Ctx) { return p.Noop }).Over(conn).Fire()
 	assert.Equal(t, http.StatusNoContent, status)
+}
+
+// boundGateRoot binds a signal, so every push that carries the client's
+// store renders twice (livePush): the branch-opened child must attach from
+// the render that ran its OnInit.
+type boundGateRoot struct {
+	Name  via.Signal[string]
+	Open  bool
+	Keep  heldKid
+	Gated heldKid
+}
+
+func (p *boundGateRoot) Toggle(*via.Ctx) { p.Open = !p.Open }
+func (p *boundGateRoot) View() h.H {
+	return h.Div(h.Input(p.Name.Bind()), h.P(h.Str("open="+strconv.FormatBool(p.Open))), h.Button(on.Click(p.Toggle)),
+		via.Child(&p.Keep), via.When(p.Open, func() h.H { return via.Child(&p.Gated) }))
+}
+
+func TestHeldRoot_aBranchOpenedChildListensWhenThePushRendersTwice(t *testing.T) {
+	t.Parallel()
+	feed := topic.New[string]()
+	app := vt.Serve(t, via.Handler(boundGateRoot{Keep: heldKid{feed: topic.New[string]()}, Gated: heldKid{feed: feed}}))
+	conn := app.Connect()
+	defer conn.Close()
+	name := vt.Sig(func(p *boundGateRoot) *via.Signal[string] { return &p.Name }, "bob")
+
+	vt.Act(app, func(p *boundGateRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Set(name).Fire()
+	conn.Await("open=true")
+	feed.Publish("hello")
+	conn.Await("last=hello")
+}
+
+func TestHeldRoot_aRootWriteToALiveChildReachesItsContainer(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(heldResetRoot{Kid: heldKid{feed: topic.New[string]()}}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *heldResetRoot) func(*via.Ctx) { return p.Reset }).Over(conn).Fire()
+	conn.Await("kid-n=42")
+	// The browser keeps a live child's container through the root's morph
+	// (data-ignore-morph), so only a frame of the child's own shows the write.
+	conn.Await("selector #via-iKid")
+	conn.Await("kid-n=42")
+}
+
+type secretKid struct {
+	N   via.State[int]
+	ran *atomic.Int32
+}
+
+func (k *secretKid) Do(*via.Ctx) { k.ran.Add(1) }
+func (k *secretKid) View() h.H   { return h.Div(k.N.Display(), h.Button(on.Click(k.Do))) }
+
+type signalGateRoot struct {
+	Show   via.Signal[bool]
+	Keep   heldKid
+	Secret secretKid
+}
+
+func (p *signalGateRoot) Noop(*via.Ctx) {}
+func (p *signalGateRoot) View() h.H {
+	return h.Div(h.Input(p.Show.Bind()), h.Button(on.Click(p.Noop)), via.Child(&p.Keep),
+		via.When(p.Show.Get(), func() h.H { return via.Child(&p.Secret) }))
+}
+
+func TestHeldRoot_aLiveChildOnlyAPostedSignalOpensTakesNoActions(t *testing.T) {
+	t.Parallel()
+	ran := new(atomic.Int32)
+	app := vt.Serve(t, via.Handler(signalGateRoot{Keep: heldKid{feed: topic.New[string]()}, Secret: secretKid{ran: ran}}))
+	conn := app.Connect()
+	defer conn.Close()
+	show := vt.Sig(func(p *signalGateRoot) *via.Signal[bool] { return &p.Show }, true)
+
+	vt.Act(app, func(p *signalGateRoot) func(*via.Ctx) { return p.Noop }).Over(conn).Set(show).Fire()
+	linesUntil(t, conn, `id="via-iSecret"`)
+	vt.Act(app, func(p *signalGateRoot) func(*via.Ctx) { return p.Secret.Do }).Over(conn).Set(show).Expect(http.StatusGone).Fire()
+	assert.Zero(t, ran.Load(), "the server's own render never opened it, so it is not dispatchable (I1)")
+}
+
+type mintKid struct{ N via.State[int] }
+
+func (m *mintKid) OnInit(ctx *via.Ctx) error { ctx.Session().Put(heldUser{Name: "minted"}); return nil }
+func (m *mintKid) View() h.H                 { return h.Div(h.Str("mint="), m.N.Display()) }
+
+type mintGateRoot struct {
+	Open bool
+	Keep heldKid
+	M    mintKid
+}
+
+func (p *mintGateRoot) Toggle(*via.Ctx) { p.Open = true }
+func (p *mintGateRoot) View() h.H {
+	return h.Div(h.Button(on.Click(p.Toggle)), via.Child(&p.Keep), via.When(p.Open, func() h.H { return via.Child(&p.M) }))
+}
+
+func TestHeldRoot_aBranchOpenedChildMintingASessionLeavesTheTabUsable(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(mintGateRoot{Keep: heldKid{feed: topic.New[string]()}}))
+	conn := app.Connect()
+	defer conn.Close()
+	toggle := func(p *mintGateRoot) func(*via.Ctx) { return p.Toggle }
+
+	vt.Act(app, toggle).Over(conn).Fire()
+	conn.Await("mint=")
+	status, _ := vt.Act(app, toggle).Over(conn).Fire()
+	assert.Equal(t, http.StatusNoContent, status, "a session minted with no response to carry its cookie must not bind the tab")
+}
+
+type draftKid struct {
+	N     via.State[int]
+	Open  bool
+	Draft via.Signal[string]
+}
+
+func (k *draftKid) OpenIt(*via.Ctx) { k.Open = true }
+func (k *draftKid) View() h.H {
+	return h.Div(k.N.Display(), h.Button(on.Click(k.OpenIt)), via.When(k.Open, func() h.H { return h.Input(k.Draft.Bind()) }))
+}
+
+type draftRoot struct {
+	hits int
+	Kid  draftKid
+}
+
+func (p *draftRoot) Bump(*via.Ctx) { p.hits++ }
+func (p *draftRoot) View() h.H {
+	return h.Div(h.P(h.Str("hits="+strconv.Itoa(p.hits))), h.Button(on.Click(p.Bump)), via.Child(&p.Kid))
+}
+
+func TestHeldRoot_aRootPushKeepsASlotTheChildOpened(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(draftRoot{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *draftRoot) func(*via.Ctx) { return p.Kid.OpenIt }).Over(conn).Fire()
+	conn.Await(`"kid__draft":""`)
+	vt.Act(app, func(p *draftRoot) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+	assert.NotContains(t, linesUntil(t, conn, "hits=1"), `"kid__draft":`, "the root's push must not re-seed what the user typed")
+}
+
+// linesUntil reads conn's lines up to and including the first holding
+// needle, so a test can assert what a push did not send before it.
+func linesUntil(t *testing.T, conn *vt.Conn, needle string) string {
+	t.Helper()
+	var read strings.Builder
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		line, ok := conn.Peek()
+		if !ok {
+			time.Sleep(5 * time.Millisecond)
+			continue
+		}
+		read.WriteString(line + "\n")
+		if strings.Contains(line, needle) {
+			return read.String()
+		}
+	}
+	require.Failf(t, "no line held the needle", "%q; read:\n%s", needle, read.String())
+	return ""
+}
+
+type statsA struct{ hits int }
+
+func (a *statsA) Hit(*via.Ctx) { a.hits++ }
+func (a *statsA) View() h.H {
+	return h.Div(h.Str("a-hits="+strconv.Itoa(a.hits)), h.Button(on.Click(a.Hit)))
+}
+
+type liveStats struct {
+	N via.State[int]
+	A statsA
+}
+
+func (s *liveStats) View() h.H { return h.Div(s.N.Display()) }
+
+type statsRoot struct{ Stats liveStats }
+
+func (p *statsRoot) View() h.H { return h.Div(via.Child(&p.Stats), via.Child(&p.Stats.A)) }
+
+func TestHeldRoot_aPlainChildIsFoundInTheRenderThatHoldsIt(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(statsRoot{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := vt.Act(app, func(p *statsRoot) func(*via.Ctx) { return p.Stats.A.Hit }).Over(conn).Fire()
+	assert.Equal(t, http.StatusNoContent, status, "the root rendered Stats-A, not the live Stats its key extends")
+	conn.Await("a-hits=1")
+}
+
+type liveBranchRoot struct {
+	Open bool
+	N    via.State[int]
+	Keep heldKid
+}
+
+func (p *liveBranchRoot) Toggle(*via.Ctx) { p.Open = true }
+func (p *liveBranchRoot) View() h.H {
+	return h.Div(h.Button(on.Click(p.Toggle)), via.Child(&p.Keep), via.When(p.Open, func() h.H { return p.N.Display() }))
+}
+
+func TestHeldRoot_aPlainRootTurningLiveEndsTheStream(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(liveBranchRoot{Keep: heldKid{feed: topic.New[string]()}}, via.WithLogger(vt.Logger(t))))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *liveBranchRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Fire()
+	require.NoError(t, conn.AwaitClose(), "the client reloads and gets a page that tells the truth")
 }

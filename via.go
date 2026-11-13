@@ -63,7 +63,8 @@
 //     plain, liveness must not depend on a branch an action can open. Both
 //     panic. On a page that streams, a live child a branch opens joins the
 //     stream at its first render and keeps its state while the branch is
-//     closed.
+//     closed; a plain root a branch makes live ends the stream, so the tab
+//     reloads.
 //
 // # Sharing state between tabs
 //

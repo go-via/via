@@ -213,37 +213,46 @@ func findUnit(c *Ctx, key string, liveAbove bool) (*Ctx, bool) {
 
 // held returns the unit at dispatch address child and the unit whose push
 // carries it: a held unit is its own owner, and any other unit is found in
-// the render of the nearest held unit above its address. A child that render
-// lacked is not held. Called on the stream goroutine, like unit.
+// the render of a held unit above its address, the nearest first, then the
+// root's. An address extends the key of the field it lives in, not of the
+// unit that rendered it, so the nearest may not hold it. A child no render
+// holds, or one only the client's signals opened, is not held. Called on the
+// stream goroutine.
 func (c *tabStream) held(child string) (unit, owner *Ctx) {
-	owner = c.owner(child)
-	if owner == nil {
-		return nil, nil
-	}
-	if unitAddr(owner) == child {
-		return owner, owner
-	}
-	if u, _ := findUnit(owner, child, false); u != nil && !u.unauthorized {
-		return u, owner
+	for _, o := range c.owners(child) {
+		if unitAddr(o) == child {
+			return o, o
+		}
+		if u, _ := findUnit(o, child, false); u != nil {
+			if u.unauthorized {
+				return nil, nil
+			}
+			return u, o
+		}
 	}
 	return nil, nil
 }
 
-// owner returns the held unit registered at the longest '-'-separated prefix
-// of address child, or the root.
-func (c *tabStream) owner(child string) *Ctx {
+// owners returns the held units registered at each '-'-separated prefix of
+// address child, longest first, then the root.
+func (c *tabStream) owners(child string) []*Ctx {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	var out []*Ctx
 	for addr := child; ; {
-		if u := c.units[addr]; u != nil {
-			return u
+		if u := c.units[addr]; u != nil && addr != rootAddr {
+			out = append(out, u)
 		}
 		i := strings.LastIndexByte(addr, '-')
 		if i < 0 {
-			return c.units[rootAddr]
+			break
 		}
 		addr = addr[:i]
 	}
+	if root := c.units[rootAddr]; root != nil {
+		out = append(out, root)
+	}
+	return out
 }
 
 // liveAncestor reports whether any node from bind down to (but excluding) the
@@ -420,9 +429,12 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 	return true
 }
 
+// ownerLive reports whether the nearest held unit above child is live. The
+// native-submit routing reads it off the stream goroutine, so it goes by
+// address alone.
 func ownerLive(lc *tabStream, child string) bool {
-	o := lc.owner(child)
-	return o != nil && o.live
+	owners := lc.owners(child)
+	return len(owners) > 0 && owners[0].live
 }
 
 // actionTab reads the tab id an action POST echoes, from the form field or the

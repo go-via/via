@@ -86,9 +86,6 @@ func (c *tabStream) attach(units []*Ctx) []*unitPusher {
 			}
 			moved = append(moved, u.pusher)
 		}
-		// OnInit or OnConnect may have minted a session where the connect
-		// cookie left none, so the tab is not left on a bare-tab-id credential.
-		c.bindSession(u.session.sid())
 	}
 	return moved
 }
@@ -112,21 +109,33 @@ func (c *tabStream) adoptKids(bind *Ctx) {
 	var live []*Ctx
 	appendLiveChildren(bind, &live)
 	shown := make(map[string]bool, len(live))
-	var fresh []*Ctx
 	for _, k := range live {
-		shown[k.childKey] = true
-		if p := c.kids[k.childKey]; p != nil {
-			p.adopt(k)
-		} else {
-			fresh = append(fresh, k)
+		if k.unauthorized {
+			continue // only the client's posted signals opened it, which may widen what it sees, never what it may call (I1)
 		}
+		shown[k.childKey] = true
+		p := c.kids[k.childKey]
+		if p == nil {
+			c.attach([]*Ctx{initedAs(bind, k)})
+			p = c.kids[k.childKey]
+		}
+		p.adopt(k)
 	}
 	for key, p := range c.kids {
 		if !shown[key] {
 			p.hide()
 		}
 	}
-	c.opened = append(c.opened, c.attach(fresh)...)
+}
+
+// initedAs returns the Ctx whose OnInit ran for k's key: it holds the unit's
+// Ticks, Listens and hooks. A push that renders twice (livePush) hands
+// adoptKids the second render's Ctx, which holds none.
+func initedAs(bind, k *Ctx) *Ctx {
+	if o := bind.inited[k.childKey]; o != nil {
+		return o
+	}
+	return k
 }
 
 func (p *unitPusher) adopt(k *Ctx) {
@@ -135,7 +144,6 @@ func (p *unitPusher) adopt(k *Ctx) {
 	k.streamCtx = p.lc.streamCtx
 	p.last = k
 	p.hidden = false
-	p.lastBody = nil // the root's frame just replaced this child's container
 	p.lc.replace(k)
 }
 
@@ -263,15 +271,29 @@ func (p *unitPusher) push() {
 	}
 	p.lc.flushDirty(p.last)
 	defer p.recoverFatal()
-	prev := p.last
+	prev, kids := p.last, p.lc.kidBinds(p)
 	body := p.rebind()
-	p.lc.declareOpened(prev, p.last)
+	p.lc.declareOpened(p.last, prev, kids...)
 	if !bytes.Equal(body, p.lastBody) {
 		p.lastBody = append(p.lastBody[:0], body...)
 		p.stream.patch(p.frameID, body)
 		p.lc.framed(p)
 	}
-	p.lc.pushOpened()
+	p.lc.pushKids(p)
+}
+
+// kidBinds returns, for the root's push, the binds the live children last
+// rendered on. A slot a child opened through its own push is in the client
+// store already, though the root's previous tree lacks it.
+func (c *tabStream) kidBinds(p *unitPusher) []*Ctx {
+	if p.frameID != "" {
+		return nil
+	}
+	binds := make([]*Ctx, 0, len(c.kids))
+	for _, k := range c.kids {
+		binds = append(binds, k.last)
+	}
+	return binds
 }
 
 // flushKids ships the signals the live children wrote through their own
@@ -291,12 +313,15 @@ func (c *tabStream) framed(p *unitPusher) {
 	}
 }
 
-// pushOpened ships the frames of children the root's push attached whose
-// OnConnect fns ran, once the root's frame has given them a container.
-func (c *tabStream) pushOpened() {
-	opened := c.opened
-	c.opened = nil
-	for _, k := range opened {
+// pushKids follows the root's frame with each shown child's own. The
+// browser keeps a live child's container through the root's morph
+// (data-ignore-morph), so a root action's write to a child shows only
+// through the child's frame; one that changed nothing ships none.
+func (c *tabStream) pushKids(p *unitPusher) {
+	if p.frameID != "" {
+		return
+	}
+	for _, k := range c.kids {
 		k.push()
 	}
 }
@@ -352,13 +377,19 @@ func (p *unitPusher) recoverFatal() {
 			"stream down so the client reloads and gets the real answer"
 		attrs = []any{"err", v.err, "redirect", v.redirect}
 	case liveNestingViolation:
-		if p.frameID == "" {
-			panic(rec)
-		}
-		msg = "via: live push aborted — this child grew a live descendant of its " +
+		msg = "via: live push aborted — this unit grew a live descendant of its " +
 			"own, which via.Child cannot host; tearing the stream down so the client reloads and " +
 			"gets the real answer"
 		attrs = []any{"err", v.msg}
+	case string:
+		// The root's own render checks nesting with checkLiveNesting, whose
+		// panic is the GET's message: a held plain root a branch made live.
+		if v != liveUnderLiveMsg {
+			panic(rec)
+		}
+		msg = "via: live push aborted — the root turned live in a branch an action opened, " +
+			"over live children; tearing the stream down so the client reloads and gets the real answer"
+		attrs = []any{"err", v}
 	default:
 		panic(rec)
 	}
@@ -443,6 +474,14 @@ func (m *mount) connect(w http.ResponseWriter, req *http.Request) {
 	// pre-join world. The subscriptions stay off the plain-GET path — this is
 	// the SSE handler, and Ctx.Listen only records one at OnInit time.
 	moved := lc.attach(units)
+	for _, u := range units {
+		// OnInit or OnConnect may have minted a session where the connect
+		// cookie left none, so the tab is not left on a bare-tab-id
+		// credential. Only here: a child attached mid-stream has no response
+		// to carry a cookie, so binding the tab to its session would refuse
+		// every later action as a session mismatch.
+		lc.bindSession(u.session.sid())
+	}
 
 	// Watched before the first sweep and the OnConnect pushes, which run app
 	// handlers: a Rotate elsewhere while they run must end this stream. Not
