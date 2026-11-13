@@ -41,6 +41,8 @@
 - **Breaking:** `vt.Action.Fire` no longer follows redirects: it answers a
   form's 303 itself, and `Action.Redirected()` reports where the last `Fire`
   navigates, a 303's `Location` or an action's navigation target.
+- **Breaking:** `vt.App.ConnectAt` takes only the path; a forged connect
+  body goes through `ConnectWith`.
 - `Action.Form(fields)` submits a `via.PostForm` as a browser does.
 - `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
   via gives it, so a test names `&p.Chat.Draft` instead of writing

@@ -2468,7 +2468,7 @@ func (*Action) Tab(string) *Action
 func (*Action) URL() string
 func (*App) Client() *http.Client
 func (*App) Connect() *Conn
-func (*App) ConnectAt(string, string) *Conn
+func (*App) ConnectAt(string) *Conn
 func (*App) ConnectWith(string) *Conn
 func (*App) Get(string) (int, string)
 func (*App) Post(string) *Action

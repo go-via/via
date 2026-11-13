@@ -817,7 +817,8 @@ type paramMiss struct {
 // so load params in OnInit into a field instead.
 //
 // A segment that cannot decode into T answers 404 — never a silent zero value.
-// Naming a segment the mount pattern doesn't have panics.
+// Naming a segment the mount pattern doesn't have panics. A child's Ctx reads
+// its page's params too.
 //
 // In a [WithErrorPage] handler it returns the zero value instead, for every
 // name: that Ctx is answering a failure that may have happened before any route

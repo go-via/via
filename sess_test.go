@@ -1878,7 +1878,7 @@ func TestSession_aRotateElsewhereWhileTheConnectRunsItsHandlersEndsTheStream(t *
 	c := app.Client()
 
 	fireAction(t, c, app.URL(), 0) // SignIn
-	conn := app.ConnectAt("/live", "{}")
+	conn := app.ConnectAt("/live")
 	select {
 	case <-jh.held:
 	case <-time.After(5 * time.Second):
@@ -1907,7 +1907,7 @@ func TestSession_listenHandlerPutAfterARotateElsewhereDoesNotReviveTheOldID(t *t
 	require.NoError(t, err)
 	old := jar.Cookies(u)
 	require.NotEmpty(t, old)
-	conn := app.ConnectAt("/live", "{}")
+	conn := app.ConnectAt("/live")
 
 	names.Publish("mallory")
 	<-np.held

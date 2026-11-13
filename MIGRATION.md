@@ -1017,6 +1017,8 @@ spelling outright.
 - **`Fire` fails on a non-2xx status.** Runtime. A test that asserts a
   refusal adds `.Expect(code)` before `.Fire()`; a helper that only checked
   for 2xx can go.
+- **`ConnectAt` takes only a path**: `app.ConnectAt("/live", "{}")` →
+  `app.ConnectAt("/live")`. Compiler.
 - **A `vt.App` keeps cookies.** Runtime. A session one request mints
   carries to the next `Get`, `Fire` and `Connect`, so two `Connect`s are two
   tabs of one visitor. A test that relied on each request starting without a

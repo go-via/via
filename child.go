@@ -14,7 +14,9 @@ import (
 )
 
 // Child renders a child composition — a struct field of the parent, passed by
-// address — into its own container. The child gets its own OnInit (once per
+// address — into its own container, a <div id="via-i{key}">, so a child that
+// sits in a <ul> renders the <ul> and its rows itself. The child gets its own
+// OnInit (once per
 // request, or once per connection on a live page, before its first View) and
 // may be plain or live; liveness is what the child does, never a separate
 // type. One live child anywhere makes the page stream.

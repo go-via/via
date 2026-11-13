@@ -149,8 +149,9 @@ type stateReload[T any] struct {
 
 func (r stateReload[T]) run() { r.s.Set(r.load()) }
 
-// Display renders the current value as literal, escaped server text and marks
-// its unit live, so server-held state alone earns a connection.
+// Display renders the current value as literal, escaped server text, with no
+// wrapping element, and marks its unit live, so server-held state alone earns
+// a connection.
 //
 // trap: liveness must be render-invariant. Only the GET's verdict bootstraps an
 // SSE stream, so a Display reached through a branch closed at GET wires the page

@@ -1586,7 +1586,7 @@ func TestDispatch_paramMissIsA404OnBothPaths(t *testing.T) {
 	require.Contains(t, body, "not found")
 
 	_, live := app.Get("/l/notanint")
-	conn := app.ConnectAt("/l/notanint", "{}")
+	conn := app.ConnectAt("/l/notanint")
 	code, body = app.Post(actionURL(t, live, "_", 0)).Over(conn).Expect(http.StatusNotFound).Fire()
 	assert.Equal(t, http.StatusNotFound, code, "the live path must answer a paramMiss the way the plain path does")
 	assert.Contains(t, body, "not found")
@@ -1968,7 +1968,7 @@ func TestDispatchLive_aGatedActionStillDispatchesWhenTheBranchIsGenuinelyOpen(t 
 			_, page := app.Get("/admin")
 			require.Contains(t, page, ">nuke<", "the privileged mount must bind the gated action")
 			url := actionURL(t, page, shape.liveChild, shape.gatedN)
-			conn := app.ConnectAt("/admin", "{}")
+			conn := app.ConnectAt("/admin")
 
 			code, body := app.Post(url).Over(conn).Fire()
 			require.Equal(t, http.StatusNoContent, code, "the privileged dispatch was refused: %s", body)
