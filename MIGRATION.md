@@ -1014,9 +1014,9 @@ spelling outright.
   `app.Action(n).Raw(url)` → `app.Post(url)`;
   `conn.ActionURL(key, n)` → `vt.Act(app, fn).Over(conn).URL()`. A string
   child key, where a test still needs one, is `vt.Key(fn)`.
-- **`Fire` fails on a non-2xx status.** Runtime. A test that asserts a
-  refusal adds `.Expect(code)` before `.Fire()`; a helper that only checked
-  for 2xx can go.
+- **`Fire` fails on a status other than 2xx or 303.** Runtime. A test that
+  asserts a refusal adds `.Expect(code)` before `.Fire()`; a helper that only
+  checked for 2xx can go.
 - **`ConnectAt` takes only a path**: `app.ConnectAt("/live", "{}")` →
   `app.ConnectAt("/live")`. Compiler.
 - **A `vt.App` keeps cookies.** Runtime. A session one request mints

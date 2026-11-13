@@ -362,9 +362,16 @@ func (a *Action) Tab(id string) *Action { a.tab, a.tabSet = id, true; return a }
 //
 // On a page that streams, use Over for every action the tab fires: the root's,
 // a live child's and a plain child's alike all run on the tab's instance. One
-// fired without Over runs on a fresh instance, as from a tab with no stream.
+// fired without Over carries no tab id: a live unit answers 410, and a plain
+// child of a live root runs on a fresh instance.
+//
+// Over also acts on the page c connected to, so a Conn from ConnectAt needs no
+// At.
 func (a *Action) Over(c *Conn) *Action {
 	a.conn = c
+	if a.path == "" {
+		a.path = c.path
+	}
 	return a.Tab(c.tabID)
 }
 
@@ -523,7 +530,12 @@ func (a *Action) check(code int, body string) {
 	if len(a.expect) > 0 {
 		a.app.t.Fatalf("vt.Action.Fire: %s answered %d, want one of %v: %s", a.label(), code, a.expect, body)
 	}
-	a.app.t.Fatalf("vt.Action.Fire: %s answered %d: %s; chain .Expect(%d) to assert a refusal", a.label(), code, body, code)
+	hint := fmt.Sprintf("chain .Expect(%d) to assert a refusal", code)
+	if code == http.StatusGone && a.conn == nil {
+		hint = "a live unit takes its actions over the tab's stream, so chain .Over(conn); " +
+			"or chain .Expect(410) to assert the refusal"
+	}
+	a.app.t.Fatalf("vt.Action.Fire: %s answered %d: %s; %s", a.label(), code, body, hint)
 }
 
 // label names the action in a failure: its handler as T.M, or the URL Post
@@ -577,6 +589,7 @@ type Conn struct {
 	frames   <-chan string
 	cancel   context.CancelFunc
 	tabID    string
+	path     string        // the page this stream belongs to
 	closed   chan struct{} // closed when the server ended the stream
 	readErr  error         // what ended it; nil for a clean end-of-response
 	mu       sync.Mutex
@@ -707,7 +720,7 @@ func (a *App) connect(path, body string) *Conn {
 	}
 
 	frames := make(chan string, 256)
-	c := &Conn{t: a.t, app: a, frames: frames, cancel: cancel, closed: make(chan struct{})}
+	c := &Conn{t: a.t, app: a, path: path, frames: frames, cancel: cancel, closed: make(chan struct{})}
 	go c.read(ctx, resp, frames)
 
 	a.t.Cleanup(c.Close)

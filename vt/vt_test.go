@@ -445,3 +445,21 @@ func TestSaw_findsAnEventAnAwaitAlreadyConsumed(t *testing.T) {
 	assert.True(t, conn.Saw("n=1"), "Saw must search events Await already read")
 	assert.False(t, conn.Saw("n=2"), "Saw must not report a push that never came")
 }
+
+func TestOver_actsOnThePageItsConnConnectedTo(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", actPage{})
+	via.Mount(r, "/live", tally{})
+	app := vt.Serve(t, r)
+	conn := app.ConnectAt("/live")
+	vt.Act(app, tallyInc).Over(conn).Fire()
+	conn.Await("n=1")
+}
+
+func TestFire_pointsAnActionWithoutATabAtOver(t *testing.T) {
+	t.Parallel()
+	rec := &recorder{TB: t}
+	got := rec.failure(func() { vt.Act(vt.Serve(rec, via.Handler(tally{})), tallyInc).Fire() })
+	assert.Contains(t, got, "chain .Over(conn)")
+}

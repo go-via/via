@@ -83,7 +83,7 @@ func childLocalKey(parent *Ctx, inst instance) string {
 	if !ok {
 		panic(render.Miswired("via: via.Child(&x) needs x to be a field of " + unitTypeName(k.parent) +
 			", the composition whose View renders it; the " + inst.typ.String() + " passed is not one of its " +
-			"fields. Hold the child as a struct field (or an element of an array field) and pass its address."))
+			"fields. Hold the child by value as a struct field (or an element of an array field), not behind a pointer, slice or map, and pass its address."))
 	}
 	checkChildPrefix(k.parent, actionid.SlotName(path))
 	childPaths.Store(k, path)
@@ -113,16 +113,7 @@ func childViewer(r *render.Renderer, inst instance) {
 	if parent.isChild {
 		key = parent.childKey + "-" + local
 	}
-	// Keys are field paths from the root, so an equal key anywhere in the tree
-	// is the same field: the root's Child(&p.Stats.A) and Stats' Child(&s.A).
-	root := parent
-	for root.parent != nil {
-		root = root.parent
-	}
-	if dup, _ := findUnit(root, key, false); dup != nil {
-		panic(render.Miswired("via: " + unitTypeName(root.unitV.typ) + "." + strings.ReplaceAll(key, "-", ".") +
-			" is passed to via.Child twice; a child has one container, so render it once"))
-	}
+	checkChildOnce(parent, key, inst)
 	// Stamped onto the instance because a live child's push re-renders with
 	// no parent in scope.
 	inst.slotPrefix = parent.scopePrefix() + actionid.SlotName(local) + "__"
@@ -161,6 +152,26 @@ func childViewer(r *render.Renderer, inst instance) {
 	r.WriteString(`>`)
 	r.WriteString(string(child.rendered))
 	r.WriteString(`</div>`)
+}
+
+// checkChildOnce panics when key is already rendered anywhere in parent's
+// tree.
+func checkChildOnce(parent *Ctx, key string, inst instance) {
+	// Keys are field paths from the root, so an equal key anywhere in the tree
+	// is the same field: the root's Child(&p.Stats.A) and Stats' Child(&s.A).
+	root := parent
+	for root.parent != nil {
+		root = root.parent
+	}
+	if dup, _ := findUnit(root, key, false); dup != nil {
+		if inst.size == 0 {
+			panic(render.Miswired("via: " + inst.typ.String() + " has no fields, so two fields of that type share " +
+				"one address and via.Child cannot tell them apart; give it a field, or render it as a plain " +
+				"func returning h.H"))
+		}
+		panic(render.Miswired("via: " + unitTypeName(root.unitV.typ) + "." + strings.ReplaceAll(key, "-", ".") +
+			" is passed to via.Child twice; a child has one container, so render it once"))
+	}
 }
 
 // checkChildHooks warns about hooks the child type declares that never run,

@@ -276,7 +276,7 @@ func TestMount_panicsAtStartup(t *testing.T) {
 		func() { via.Mount(via.NewRouter(), "/files/{path...}", NoErrInit{}) })
 	assert.PanicsWithValue(t, "via: found at Mount, rendering *troubleshooting_test.LocalParent as mounted: "+
 		"via: via.Child(&x) needs x to be a field of troubleshooting_test.LocalParent, the composition whose View "+
-		"renders it; the troubleshooting.Chat passed is not one of its fields. Hold the child as a struct field "+
-		"(or an element of an array field) and pass its address.",
+		"renders it; the troubleshooting.Chat passed is not one of its fields. Hold the child by value as a struct "+
+		"field (or an element of an array field), not behind a pointer, slice or map, and pass its address.",
 		func() { via.Handler(LocalParent{}) })
 }

@@ -21,7 +21,9 @@ type Topic[T any] struct {
 // New builds a Topic with no subscribers; the zero Topic is ready too. A Topic
 // is safe for concurrent use and lives as long as what holds it: a field of
 // the store whose changes it carries, so each test that builds a store gets
-// its own. Units subscribe with ctx.Listen or Track. It has no Close; a Topic
+// its own. A page or child that holds a Topic by value panics at Mount: every
+// tab runs on a copy of the page, so each would get a topic of its own. Units
+// subscribe with ctx.Listen or Track. It has no Close; a Topic
 // with no subscribers costs one lock per publish.
 func New[T any]() *Topic[T] { return &Topic[T]{} }
 

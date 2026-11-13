@@ -1283,3 +1283,15 @@ func TestDataSignals_nilSliceOrMapReachesTheClientEmptyNotNull(t *testing.T) {
 	assert.Contains(t, body, `"reset":[]`, "Set(nil) must not delete the client signal")
 	assert.NotContains(t, body, "null")
 }
+
+type anySig struct{ V via.Signal[any] }
+
+func (p *anySig) View() h.H { return h.Div(h.Input(p.V.Bind())) }
+
+func TestSignal_aZeroSignalOfAnyRendersNull(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(anySig{}))
+	status, body := app.Get("/")
+	require.Equal(t, http.StatusOK, status, "a zero Signal[any] must render, not fail: %s", body)
+	assert.Contains(t, body, `"v":null`)
+}

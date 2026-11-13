@@ -37,7 +37,7 @@ level=ERROR msg="via: action panic" err="via: this action made a unit live on a 
 const tsLiveNested = `500 render failed
 level=ERROR msg="via: render panic" err="via: via.Child: a live unit cannot sit inside another live unit — embed it directly from a plain ancestor instead"`
 
-const tsChildNotField = `panic: via: found at Mount, rendering *main.Page as mounted: via: via.Child(&x) needs x to be a field of main.Page, the composition whose View renders it; the main.Chat passed is not one of its fields. Hold the child as a struct field (or an element of an array field) and pass its address.`
+const tsChildNotField = `panic: via: found at Mount, rendering *main.Page as mounted: via: via.Child(&x) needs x to be a field of main.Page, the composition whose View renders it; the main.Chat passed is not one of its fields. Hold the child by value as a struct field (or an element of an array field), not behind a pointer, slice or map, and pass its address.`
 
 const tsMisnamed = `level=WARN msg="via: main.Room.Oninit looks like a mis-named OnInit — it has the hook's exact signature but main.Room has no OnInit func(*via.Ctx) error, so nothing will ever call it. Rename it to OnInit."`
 

@@ -163,6 +163,7 @@ import (
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/internal/actionid"
 	"github.com/go-via/via/internal/render"
+	"github.com/go-via/via/topic"
 )
 
 // datastarJS is the vendored Datastar client, served at /_via/datastar.js.
@@ -317,6 +318,7 @@ func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, d
 			checkNoSeedTag(t, f)
 		case f.Type.Kind() == reflect.Struct:
 			checkNoSeedTag(t, f)
+			checkNotTopic(t, f)
 			walkSignals(ts, f.Type, off, name+"_", depth+1)
 		default:
 			checkNoSeedTag(t, f)
@@ -324,6 +326,19 @@ func walkSignals(ts *typeSignals, t reflect.Type, base uintptr, prefix string, d
 		}
 	}
 }
+
+// checkNotTopic panics on a topic.Topic held by value. Each tab and request
+// runs on a shallow copy of the mounted literal, so each would get a topic of
+// its own and a publish would reach only the tab that made it.
+func checkNotTopic(owner reflect.Type, f reflect.StructField) {
+	if f.Type.PkgPath() == topicPkg && strings.HasPrefix(f.Type.Name(), "Topic[") {
+		panic(render.Miswired("via: " + owner.String() + "." + f.Name + " holds a " + f.Type.String() +
+			" by value, so every tab's copy of the page gets its own topic and a publish reaches only the tab " +
+			"that made it. Hold a *" + f.Type.String() + " (topic.New), or put the topic in the store the page points at."))
+	}
+}
+
+var topicPkg = reflect.TypeOf(topic.Topic[struct{}]{}).PkgPath()
 
 // addSignalField registers f, a Signal or SignalCS field of t, under its wire
 // slot, with the seed its tag or client zero declares.
@@ -1022,7 +1037,11 @@ func Handler[T any, PT ptrViewer[T]](root T, opts ...Option) *Router {
 // Only a value that already marshalled to null reaches it, so the render path
 // stays reflection-free.
 func emptyForNil(v any, null []byte) []byte {
-	switch t := reflect.TypeOf(v); t.Kind() {
+	t := reflect.TypeOf(v)
+	if t == nil { // a nil interface, as a zero Signal[any] holds
+		return null
+	}
+	switch t.Kind() {
 	case reflect.Slice:
 		if t.Elem().Kind() == reflect.Uint8 {
 			return []byte(`""`) // encoding/json sends a non-nil []byte as a base64 string

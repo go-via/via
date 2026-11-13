@@ -48,7 +48,7 @@ func (p *Live) View() h.H {
 			[]h.H{APIText("via.Ctx.Tick", "ctx.Tick(d, fn)"), h.Str("OnInit"), h.Str("Runs fn every d, then re-renders the unit and pushes the patch.")},
 			[]h.H{APIText("via.Ctx.Listen", "ctx.Listen(t, fn)"), h.Str("OnInit"), h.Str("Runs fn for every value published on t, then re-renders and pushes. Unsubscribes when the tab goes away.")},
 			[]h.H{h.Span(APIText("via.State.Display", "State.Display()"), h.Str(", "), APIText("via.List.Each", "List.Each(row)")), h.Str("View"), h.Str("Renders server state; a change pushes a patch on the tab's stream.")},
-			[]h.H{APIText("via.StateTrack", "via.StateTrack(t, load)"), h.Str("field literal"), h.Str("Seeds from load, seeds again once the stream has subscribed, then follows t. For a source fixed at mount.")},
+			[]h.H{APIText("via.StateTrack", "via.StateTrack(t, load)"), h.Str("field literal"), h.Str("Seeds from load, seeds again once the stream has subscribed, then loads again on every publish to t. For a source fixed at mount.")},
 			[]h.H{APIText("via.State.Track", "State.Track(ctx, t, load)"), h.Str("OnInit"), h.Str("The same, for a source that depends on the request, such as a path param.")},
 		),
 
@@ -115,7 +115,7 @@ func (p *Live) View() h.H {
 					"own, here an int64 behind a mutex held across the change and the publish, so tabs never "+
 					"settle on an older value. The topic only announces that the store moved. "),
 					API("via.StateTrack"), h.Str(" keeps this tab's State equal to it: seed at init, seed again "+
-						"once the stream has subscribed, then follow every publish.")),
+						"once the stream has subscribed, then load again on every publish.")),
 				h.P(h.Str("The literal form is for a source fixed at mount, as here, and needs no OnInit. "),
 					API("via.State.Track"), h.Str(" in OnInit is for a source that depends on the request, such "+
 						"as the room named by a path param. The counter resets to zero every 15 minutes, through "+
@@ -125,10 +125,10 @@ func (p *Live) View() h.H {
 			demo.Try(d.SecondTabLink("/live#shared-counter"),
 				h.Str("Click +1 in one tab and watch the other follow."))),
 		h.P(APIText("via.State.Track", "Track"), h.Str(" works on a "), API("via.List"),
-			h.Str(" too. The store publishes a copy of the whole slice on every change, and each tab's list follows it:")),
-		h.P(h.Str("The topic need not carry the State's type. When it carries something else, such as the new message "+
-			"on a feed whose State holds the count, each publish re-runs load. load may be a method value or a "+
-			"closure; it runs on the unit's goroutine, so it must be safe beside the store's writers.")),
+			h.Str(" too. The store announces each new note, and each tab reloads its list from the store:")),
+		h.P(h.Str("Track never reads the payload: every publish re-runs load, so the topic may carry anything, such as "+
+			"the new message on a feed whose State holds the count. load may be a method value or a closure; it runs "+
+			"on the unit's goroutine once per publish, so keep it cheap and safe beside the store's writers.")),
 		snippet.Region("live/track.go", "track", snippet.Title("wall.go"), snippet.Mark("Track(", "Publish(")),
 
 		d.H2("Per-session delivery"),

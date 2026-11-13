@@ -766,3 +766,32 @@ func TestTrack_reloadsOnATopicOfAnotherType(t *testing.T) {
 	assert.Contains(t, conn.Await("msgs: 1"), "msgs: 1",
 		"Track from OnInit must accept a topic whose payload is not the State's type")
 }
+
+type topicByValue struct {
+	Feed topic.Topic[string]
+	N    via.State[int]
+}
+
+func (p *topicByValue) View() h.H { return h.P(p.N.Display()) }
+
+func TestMount_panicsOnATopicHeldByValue(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "via: via_test.topicByValue.Feed holds a topic.Topic[string] by value", func() {
+		via.Mount(via.NewRouter(), "/", topicByValue{})
+	})
+}
+
+type footer struct{}
+
+func (*footer) View() h.H { return h.P(h.Str("footer")) }
+
+type twins struct{ Top, Bottom footer }
+
+func (p *twins) View() h.H { return h.Div(via.Child(&p.Top), via.Child(&p.Bottom)) }
+
+func TestChild_namesTheCauseWhenZeroSizeChildrenShareAnAddress(t *testing.T) {
+	t.Parallel()
+	assertMountPanic(t, "via_test.footer has no fields, so two fields of that type share one address", func() {
+		via.Mount(via.NewRouter(), "/", twins{})
+	})
+}

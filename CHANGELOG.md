@@ -4,13 +4,33 @@
 
 ### New
 
-- `State.Track` and `via.StateTrack` take a topic of any payload type. When
-  it is not the State's type, each publish re-runs load, so a message count
-  can follow the feed that carries the messages. Existing calls compile as
-  before.
+- `State.Track` and `via.StateTrack` take a topic of any payload type and
+  re-run load on every publish; the payload is not read. A message count can
+  follow the feed that carries the messages, and an out-of-order publish can
+  no longer leave a tab on an older value. Existing calls compile as before;
+  load now runs once per publish, so keep it cheap.
 - `vt.Conn.Saw(needle)` reports whether any event so far, consumed or not,
   carried needle. Await a later push, then check `!Saw` to prove one did not
   arrive.
+- `vt.Act` reads the page again when the handler is not on the copy it
+  cached, so a row an earlier action added is found, and `Action.At(path)`
+  reads a page mounted at another path.
+- `Action.Form(fields)` submits a `via.PostForm` as a browser does.
+- `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
+  via gives it, so a test names `&p.Chat.Draft` instead of writing
+  `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.
+- The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
+  longer panics on its first Subscribe or Publish. `topic.New` still works.
+- Mount panics on a `topic.Topic` held by value in a page or child. Each
+  tab runs on a copy of the page, so each got a topic of its own and a
+  publish reached only the tab that made it.
+- Mount warns about a non-nil map or slice in the mounted literal: every
+  request and tab shares it through its shallow copy of the page.
+- A method shaped like the v0.7 `OnDispose(ctx)` hook logs a warning at
+  Mount; v0.8 never calls it.
+- `vt.Action.Over` acts on the page its `Conn` connected to, so a Conn from
+  `ConnectAt` needs no `At`. A 410 from an action fired without `Over` says
+  to chain it.
 
 ### Changed
 
@@ -45,23 +65,18 @@
   an action mints or logs in carries to the next `Get`, `Fire` and
   `Connect`. A test that needs a cookieless request copies `App.Client` and
   clears its `Jar`.
-- `vt.Act` reads the page again when the handler is not on the copy it
-  cached, so a row an earlier action added is found, and `Action.At(path)`
-  reads a page mounted at another path.
 - **Breaking:** `vt.Action.Fire` no longer follows redirects: it answers a
   form's 303 itself, and `Action.Redirected()` reports where the last `Fire`
   navigates, a 303's `Location` or an action's navigation target.
 - **Breaking:** `vt.App.ConnectAt` takes only the path; a forged connect
   body goes through `ConnectWith`.
-- `Action.Form(fields)` submits a `via.PostForm` as a browser does.
-- `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
-  via gives it, so a test names `&p.Chat.Draft` instead of writing
-  `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.
-- **Breaking:** `vt.Action.Fire` fails the test on a status outside 2xx. A
-  test that asserts a refusal chains `.Expect(code)`, which takes one or more
-  codes. The failure names the handler (`Page.Save`) and quotes the body.
-- The zero `topic.Topic` is ready to use: `var feed topic.Topic[Msg]` no
-  longer panics on its first Subscribe or Publish. `topic.New` still works.
+- **Breaking:** `vt.Action.Fire` fails the test on a status other than 2xx
+  or 303. A test that asserts a refusal chains `.Expect(code)`, which takes
+  one or more codes. The failure names the handler (`Page.Save`) and quotes
+  the body.
+- **Breaking:** a nil slice or map Signal reaches the client as `[]` or
+  `{}`, not `null`. A `Set(nil)` that relied on null deleting the signal now
+  leaves it empty.
 
 ## v0.10.0 — SignalCS.Set, Meta.Lang, plain-action signal frames (2026-10-24)
 

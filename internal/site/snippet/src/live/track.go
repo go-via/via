@@ -11,18 +11,18 @@ import (
 
 // snippet:start track
 type Board struct {
-	mu      sync.Mutex
-	notes   []string
-	changed *topic.Topic[[]string]
+	mu    sync.Mutex
+	notes []string
+	added *topic.Topic[string] // announces each new note
 }
 
-func NewBoard() *Board { return &Board{changed: topic.New[[]string]()} }
+func NewBoard() *Board { return &Board{added: topic.New[string]()} }
 
 func (b *Board) Add(note string) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.notes = append(b.notes, note)
-	b.changed.Publish(slices.Clone(b.notes))
+	b.mu.Unlock()
+	b.added.Publish(note)
 }
 
 func (b *Board) Notes() []string {
@@ -37,7 +37,7 @@ type Wall struct {
 }
 
 func (w *Wall) OnInit(ctx *via.Ctx) error {
-	w.Notes.Track(ctx, w.Board.changed, w.Board.Notes)
+	w.Notes.Track(ctx, w.Board.added, w.Board.Notes)
 	return nil
 }
 
