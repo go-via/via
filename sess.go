@@ -728,8 +728,8 @@ func (s *Session) Ensure() string {
 //
 // Every other open tab on the session reloads: its stream ends, since what it
 // rendered was decided under the old auth state. The tab a live action
-// rotated from keeps its stream; an action on a plain child of a live page is
-// not a live action, so that tab reloads too. Rotate on auth changes, not on
+// rotated from keeps its stream, including an action on a plain child of a
+// live root. Rotate on auth changes, not on
 // every request, or every tab of the session reloads each time.
 func (s *Session) Rotate() string {
 	if s.mgr == nil || s.w == nil {

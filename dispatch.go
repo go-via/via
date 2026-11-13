@@ -221,11 +221,29 @@ func (c *tabStream) unit(child string) *Ctx {
 	return c.units[child]
 }
 
+// held returns the unit at dispatch address child and the live unit whose
+// push carries it: a live unit is its own owner, and a plain child of a live
+// root is the root's. A child the last authority render lacked is not held.
+// Called on the stream goroutine, like unit.
+func (c *tabStream) held(child string) (unit, owner *Ctx) {
+	if u := c.unit(child); u != nil {
+		return u, u
+	}
+	root := c.unit(rootAddr)
+	if root == nil {
+		return nil, nil
+	}
+	if u, _ := findUnit(root, child, false); u != nil && !u.unauthorized {
+		return u, root
+	}
+	return nil, nil
+}
+
 // liveAncestor reports whether any node from bind down to (but excluding) the
 // unit at child is itself live — "every ancestor on the path is plain" is
 // Child's own liveness rule, and a plain child dispatched through
-// dispatchPlain can still sit beneath an already-live root (a live page's
-// plain child never gets its own stream registration, see connectUnit), so
+// dispatchPlain can still sit beneath an already-live root (a native form
+// post carries no tab id, so it never reaches the root's stream), so
 // the re-render at child needs this to seed checkLiveUnderLive correctly.
 func liveAncestor(bind *Ctx, child string) bool {
 	_, live := findUnit(bind, child, false)
@@ -380,12 +398,13 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 		http.Error(ar.w, "no such child", http.StatusGone)
 		return true
 	}
-	// A streaming page's plain child echoes the tab id too, and its address
-	// was never registered on the connection. Membership is stable (a unit
-	// is published before the tab id is, and never removed), so this check
-	// is safe off the stream goroutine, unlike the staleness lookup
-	// dispatchOverStream still does there.
-	if lc.unit(ar.child) == nil {
+	// A plain child of a plain root echoes the tab id too, and nothing on
+	// the connection holds it. A live root holds its plain children, so its
+	// tab takes every address; which child exists is resolved on the stream
+	// goroutine (see tabStream.held), since each push may change it.
+	// Registration is stable (a unit is published before the tab id is, and
+	// never removed), so this check is safe here.
+	if lc.unit(ar.child) == nil && lc.unit(rootAddr) == nil {
 		ticket.leave()
 		return false
 	}
@@ -650,17 +669,13 @@ func keepSignalValues(c *Ctx, in, keep map[string]json.RawMessage) {
 //
 // Walked by child key, since that is the dispatch address.
 //
-// The top-level handler and per-arg intersection are load-bearing: they are
-// what a live action actually dispatches through. The child recursion below
-// them is a backstop whose output no current dispatch path reads —
-// dispatchOverStream addresses only a top-level unit, and dispatchPlain
-// rebinds its own tree from scratch — because live-unit registration is
-// frozen at connect time and a nested child's key can never alias a
-// registered unit address. It becomes load-bearing the day live-under-live is
-// permitted, or registration ever descends into a pushed bind.
+// The recursion is load-bearing: a live root's plain children dispatch on
+// the bind it prunes (see tabStream.held), so a child the authority render
+// lacks is marked unauthorized, not just stripped of its actions.
 func pruneToAuthority(bind, auth *Ctx) {
 	if auth == nil {
 		clear(bind.actions)
+		bind.unauthorized = true
 		for _, child := range bind.children {
 			pruneToAuthority(child, nil)
 		}

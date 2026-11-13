@@ -591,14 +591,17 @@ type unitPass struct {
 	actions   map[string]action          // content-addressed action table, keyed by handler identity
 	hydrators map[string]render.Hydrator // per-slot updater, kept from the last render so a live action hydrates without re-rendering
 	dirty     map[string]any
-	children  []*Ctx      // children, in render order (parent binder only)
-	rendered  []byte      // inner HTML from the discovery render (for the 204 compare)
-	pusher    *unitPusher // live only: re-renders this unit and frames it on the stream
-	redirect  redirectTo
-	ticks     []tickReg
-	subs      []subscription
-	onConnect []func() // run once when the stream opens
-	disposers []func() // run on disconnect
+	children  []*Ctx // children, in render order (parent binder only)
+	// unauthorized marks a child the last push's authority render lacks: a
+	// branch only a posted signal opened, shown but never dispatchable.
+	unauthorized bool
+	rendered     []byte      // inner HTML from the discovery render (for the 204 compare)
+	pusher       *unitPusher // live only: re-renders this unit and frames it on the stream
+	redirect     redirectTo
+	ticks        []tickReg
+	subs         []subscription
+	onConnect    []func() // run once when the stream opens
+	disposers    []func() // run on disconnect
 }
 
 func newUnitPass() unitPass {

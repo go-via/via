@@ -115,7 +115,7 @@ func (a *liveAction) apply() actionResult {
 	// is more than an address mismatch — Signal.bind stamps the dirty sink
 	// at render time, so acting against an older unit attributes the write
 	// to a Ctx nothing downstream reads, silently dropping the patch.
-	u := a.lc.unit(a.ar.child)
+	u, owner := a.lc.held(a.ar.child)
 	if u == nil {
 		return actionResult{fail: failGone("no such child")}
 	}
@@ -123,11 +123,12 @@ func (a *liveAction) apply() actionResult {
 	if !ok {
 		return actionResult{fail: failGone(a.m.unknownAction(u, a.ar.act))}
 	}
-	return a.runOn(u, act, sessID, sess)
+	return a.runOn(u, owner, act, sessID, sess)
 }
 
-// runOn hydrates unit's signals from the posted body and runs act. unit is the bind
-// Ctx the last push produced, whose actions/hydrators table is current because
+// runOn hydrates owner's signals from the posted body and runs act on unit,
+// which is owner or a plain child of it. unit is the bind Ctx the last push
+// produced, whose actions/hydrators table is current because
 // every push is a render — so nothing re-renders here first. It runs on the
 // connection's serialized goroutine while the POST blocks in tabStream.run, so
 // w is safe to write to exactly as on a plain action.
@@ -137,9 +138,9 @@ func (a *liveAction) apply() actionResult {
 // delays only the next push item, never this response. Returning it as data,
 // not enqueuing it from a goroutine, keeps every push on the one goroutine, in
 // action order.
-func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *sessionData) (res actionResult) {
+func (a *liveAction) runOn(unit, owner *Ctx, act action, sessID string, beforeSession *sessionData) (res actionResult) {
 	lc, w, req := a.lc, a.ar.w, a.ar.req
-	defer lc.recoverAction(unit, act, &res)
+	defer lc.recoverAction(unit, owner.pusher, act, &res)
 	// Registered before the hydrate loop so every exit unwinds it, not just the
 	// one that reaches a push (livePush's restore): a malformed or unrendered
 	// arg returns without pushWork, and the client's posted values would stay on
@@ -160,12 +161,12 @@ func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *
 	if beforeSession != nil {
 		lc.bindSession(beforeSession.sid)
 	}
-	lc.hydrateUnit(unit, a.ar.in)
+	lc.hydrateUnit(owner, a.ar.in)
 	// A fresh Ctx per dispatch, not unit itself: a Tick/Listen handler holds
 	// unit for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
-	rc := &Ctx{reqScope: reqScope{req: req, sessions: a.m.sessions, policy: a.m.policy, sessW: w}, streamCtx: unit.streamCtx}
+	rc := &Ctx{reqScope: reqScope{req: req, sessions: a.m.sessions, policy: a.m.policy, sessW: w}, streamCtx: owner.streamCtx}
 	rc.adoptSession(sessID, beforeSession, nil)
 	rc.session.stream = lc
 	// unit.dirty is not reset here: clearDirty (via flushDirty, in the push) owns
@@ -178,9 +179,9 @@ func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *
 	// would otherwise frame the pre-action data. Skipped behind a Redirect —
 	// the tab is navigating away from this render. See reloader.
 	if rc.redirect.url == "" {
-		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: unit.streamCtx}
+		rl := &Ctx{reqScope: rc.reqScope, session: rc.Session(), base: unit.base, streamCtx: owner.streamCtx}
 		if err := reloadUnit(unit.unitV.v, rl); err != nil {
-			return actionResult{fail: &actionFail{hookErr: err}, pushWork: unit.pusher}
+			return actionResult{fail: &actionFail{hookErr: err}, pushWork: owner.pusher}
 		}
 		rc.redirect = rl.redirect
 	}
@@ -203,13 +204,19 @@ func (a *liveAction) runOn(unit *Ctx, act action, sessID string, beforeSession *
 	// takes — a Tick/Listen handler's Set included.
 	return actionResult{
 		redirect: rc.redirect,
-		pushWork: unit.pusher, // patch-signals, then re-render this unit and frame the element-patch
+		pushWork: owner.pusher, // patch-signals, then re-render the owner and frame the element-patch
 		session:  rc.session,
 	}
 }
 
-// hydrateUnit applies the posted body to unit's client-writable slots.
+// hydrateUnit applies the posted body to the client-writable slots of unit
+// and its plain children, skipping a branch the authority render lacks.
 func (c *tabStream) hydrateUnit(unit *Ctx, in map[string]json.RawMessage) {
+	for _, child := range unit.children {
+		if !child.unauthorized {
+			c.hydrateUnit(child, in)
+		}
+	}
 	for slot, raw := range in {
 		hydrate, ok := unit.hydrators[slot]
 		if !ok {
@@ -231,19 +238,19 @@ func (c *tabStream) hydrateUnit(unit *Ctx, in map[string]json.RawMessage) {
 // recoverAction turns a panic in liveAction.runOn into its actionResult: via's
 // sentinels get the answer the plain path gives them, anything else is logged
 // as a handler fault.
-func (c *tabStream) recoverAction(unit *Ctx, act action, res *actionResult) {
+func (c *tabStream) recoverAction(unit *Ctx, push *unitPusher, act action, res *actionResult) {
 	if rec := recover(); rec != nil {
 		if f := sentinelFail(c.mount.cfg.log, rec); f != nil {
 			*res = actionResult{fail: f}
 			// Param panics from inside the handler, which may already have
 			// Set state; as after a handler panic, the push flushes it.
 			if _, miss := rec.(paramMiss); miss {
-				res.pushWork = unit.pusher
+				res.pushWork = push
 			}
 			return
 		}
 		c.mount.cfg.log.Error("via: live action panic", "tab", c.id,
 			"unit", fmt.Sprintf("%T", unit.unitV.v), "act", act.name, "err", rec, "stack", string(debug.Stack()))
-		*res = actionResult{fail: failPanic(rec), pushWork: unit.pusher}
+		*res = actionResult{fail: failPanic(rec), pushWork: push}
 	}
 }

@@ -1017,8 +1017,7 @@ func TestChild_childOnInitForbiddenAnswers403(t *testing.T) {
 }
 
 // plainKid is a plain child of a live root: it holds no State and never
-// ticks, so its action is a plain in-place re-render even though the page
-// around it is streaming.
+// ticks, yet the tab owns it as it owns the root.
 type plainKid struct{ hits int }
 
 func (k *plainKid) Bump(ctx *via.Ctx) { k.hits++ }
@@ -1033,17 +1032,48 @@ type livePageWithPlainKid struct {
 
 func (p *livePageWithPlainKid) View() h.H { return h.Div(p.n.Display(), via.Child(&p.Kid)) }
 
-func TestDispatch_plainChildOfALivePageStaysPlain(t *testing.T) {
+func TestDispatch_aPlainChildOfALiveRootActsOnTheTabsInstance(t *testing.T) {
 	t.Parallel()
 	app := vt.Serve(t, via.Handler(livePageWithPlainKid{}))
 	conn := app.Connect()
 	defer conn.Close()
+	bump := func(p *livePageWithPlainKid) func(*via.Ctx) { return p.Kid.Bump }
 
-	status, body := vt.Act(app, func(p *livePageWithPlainKid) func(*via.Ctx) { return p.Kid.Bump }).Over(conn).Fire()
+	for range 2 {
+		status, _ := vt.Act(app, bump).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status, "the stream carries the patch, as for the root's own action")
+	}
+	conn.Await("kid-hits=2")
+}
 
-	assert.Equal(t, http.StatusOK, status,
-		"a plain child on a streaming page must dispatch on the plain path, not 410 as a missing live unit")
-	assert.Contains(t, body, "kid-hits=1", "its action answers with its own re-rendered container")
+// sayKid is a plain child whose action reads its own Signal.
+type sayKid struct {
+	Say  via.Signal[string]
+	said string
+}
+
+func (k *sayKid) Echo(*via.Ctx) { k.said = k.Say.Get() }
+func (k *sayKid) View() h.H {
+	return h.Div(h.Input(k.Say.Bind()), h.Button(on.Click(k.Echo)), h.P(h.Str("said="+k.said)))
+}
+
+type livePageWithSayKid struct {
+	n   via.State[int]
+	Kid sayKid
+}
+
+func (p *livePageWithSayKid) View() h.H { return h.Div(p.n.Display(), via.Child(&p.Kid)) }
+
+func TestDispatch_aPlainChildOfALiveRootReadsItsPostedSignal(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(livePageWithSayKid{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, _ := vt.Act(app, func(p *livePageWithSayKid) func(*via.Ctx) { return p.Kid.Echo }).
+		Over(conn).Body(`{"kid__say":"hi"}`).Fire()
+	require.Equal(t, http.StatusNoContent, status)
+	conn.Await("said=hi")
 }
 
 // deepCounter is a live leaf whose Signal sits at field offset 0 — the same
