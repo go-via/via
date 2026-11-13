@@ -26,8 +26,8 @@
 //     only. Keep per-tab state in a Signal, which the browser holds, or in a
 //     State, which makes the unit live.
 //   - A live unit keeps its instance for the tab's stream, and so do the plain
-//     children of a live root. Its actions answer 204 and the patch arrives on
-//     the stream.
+//     children of a live root. Their actions answer 204 and the patch arrives
+//     on the stream.
 //   - A live unit may not contain another live unit, and liveness must not
 //     depend on a branch an action can open. Both panic.
 //

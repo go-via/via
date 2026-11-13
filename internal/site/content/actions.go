@@ -188,9 +188,9 @@ func (p *Actions) View() h.H {
 		h.P(h.Str("The options take the same form on the …CS twins. A duration of zero or less panics, and so do two different durations for one option on the same binding.")),
 
 		d.H2("Concurrency"),
-		h.P(h.Str("On a plain unit every action POST gets its own copy of the composition and runs on its own net/http goroutine. "+
+		h.P(h.Str("On a plain unit with no live root, every action POST gets its own copy of the composition and runs on its own net/http goroutine. "+
 			"Two POSTs from one tab never share memory, but they can run at the same time and finish in either order.")),
-		h.P(h.Str("On a live unit, one that renders a State or List or registers a Tick or Listen, every action, Tick and Listen handler "+
+		h.P(h.Str("On a live unit, one that renders a State or List or registers a Tick or Listen, and on the plain children of a live root, every action, Tick and Listen handler "+
 			"for the tab runs on that tab's stream goroutine, one at a time, and the POST waits for its turn.")),
 		h.P(h.Str("Neither protects what you share outside the composition. A package-level map, a store, or a tally every visitor sees needs its own lock, as Vote's does. "+
 			"In the browser, Datastar aborts an in-flight request when the same binding fires again, so a double click reads only the second answer; the first may still have run on the server.")),

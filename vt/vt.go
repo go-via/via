@@ -383,8 +383,9 @@ func (a *Action) Expect(codes ...int) *Action {
 // Fire issues the POST and returns the status code and the response body. It
 // fails the test unless the action answers 2xx, or a code given to Expect. A
 // plain page answers 200 with the Datastar patch: HTML, or SSE frames when the
-// action wrote or opened signals. A live one answers 204 and sends the patch
-// to the open Conn, so assert on the Conn there; a plain page answers 204 too
+// action wrote or opened signals. A live unit, and a plain child of a live
+// root, answers 204 and sends the patch to the open Conn, so assert on the
+// Conn there; a plain page answers 204 too
 // when nothing changed. A refused dispatch answers with its reason as a
 // one-line text body: 410 when the target is gone (no such action id in the
 // current render, no such child, the stream closed), 403 for the origin or

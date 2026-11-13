@@ -4,10 +4,10 @@
 
 ### Changed
 
-- An action on a plain child of a live root runs on the tab's instance and
-  its patch rides the stream (204), as the root's own actions do. It used to
-  run on a fresh copy, so the child's fields reset on every click and the
-  tab never saw the change.
+- **Breaking:** an action on a plain child of a live root runs on the tab's
+  instance and its patch rides the stream (204), as the root's own actions
+  do. It used to run on a fresh copy, so the child's fields reset on every
+  click and the tab never saw the change.
 - **Breaking:** `via.Child` takes the field's address, `via.Child(&p.Chat)`,
   and keys the child by its field path (`Chat`, `Stats-A`, `Rows-1`,
   `Outer-Kid`) instead of its position among the parent's `Child` calls. A

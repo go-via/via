@@ -242,9 +242,10 @@ func (c *tabStream) held(child string) (unit, owner *Ctx) {
 // liveAncestor reports whether any node from bind down to (but excluding) the
 // unit at child is itself live — "every ancestor on the path is plain" is
 // Child's own liveness rule, and a plain child dispatched through
-// dispatchPlain can still sit beneath an already-live root (a native form
-// post carries no tab id, so it never reaches the root's stream), so
-// the re-render at child needs this to seed checkLiveUnderLive correctly.
+// dispatchPlain can still sit beneath an already-live root: a POST with no
+// tab id, or one whose stream did not come back by the pinned deadline,
+// takes the plain path. The re-render at child needs this to seed
+// checkLiveUnderLive.
 func liveAncestor(bind *Ctx, child string) bool {
 	_, live := findUnit(bind, child, false)
 	return live

@@ -126,10 +126,10 @@ func (a *liveAction) apply() actionResult {
 	return a.runOn(u, owner, act, sessID, sess)
 }
 
-// runOn hydrates owner's signals from the posted body and runs act on unit,
-// which is owner or a plain child of it. unit is the bind Ctx the last push
-// produced, whose actions/hydrators table is current because
-// every push is a render — so nothing re-renders here first. It runs on the
+// runOn hydrates owner and its plain children from the posted body and runs
+// act on unit, which is owner or a plain child of it. unit is the bind Ctx the
+// last push produced, whose actions/hydrators table is current because every
+// push is a render — so nothing re-renders here first. It runs on the
 // connection's serialized goroutine while the POST blocks in tabStream.run, so
 // w is safe to write to exactly as on a plain action.
 //
@@ -162,8 +162,8 @@ func (a *liveAction) runOn(unit, owner *Ctx, act action, sessID string, beforeSe
 		lc.bindSession(beforeSession.sid)
 	}
 	lc.hydrateUnit(owner, a.ar.in)
-	// A fresh Ctx per dispatch, not unit itself: a Tick/Listen handler holds
-	// unit for the life of the connection, so writing req/sessW/redirect onto
+	// A fresh Ctx per dispatch, not unit or owner: a Tick/Listen handler holds
+	// owner for the life of the connection, so writing req/sessW/redirect onto
 	// it would rewrite what that handler sees. Signal.Set and State.Set still
 	// land on unit — those handles were bound to it at render time.
 	rc := &Ctx{reqScope: reqScope{req: req, sessions: a.m.sessions, policy: a.m.policy, sessW: w}, streamCtx: owner.streamCtx}

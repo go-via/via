@@ -977,10 +977,10 @@ spelling outright.
 
 ## Upgrading from v0.10.0
 
-- **A plain child of a live root keeps its state**: its action now mutates
-  the tab's instance and answers 204, with the patch on the stream. A test
-  that asserted 200 and read the patch from the POST body awaits it on the
-  `Conn` instead.
+- **A plain child of a live root keeps its state**: Runtime. Its action now
+  mutates the tab's instance and answers 204, with the patch on the stream.
+  A test that asserted 200 and read the patch from the POST body awaits it on
+  the `Conn` instead.
 - **`via.Child` takes the field's address**: `via.Child(p.Chat)` →
   `via.Child(&p.Chat)`. Compiler. The argument must be a field (or array
   element) of the composition whose View renders it; a local variable,

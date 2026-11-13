@@ -67,7 +67,7 @@ func (p *Security) View() h.H {
 		h.P(h.Str("An action POST carries the tab's id in its body, a value same-origin script sets and the browser never "+
 			"attaches on its own. An action on a live unit runs only with that tab's id, and only under the session the tab "+
 			"connected with. A request carrying another session's cookie answers 403 "), Code("session mismatch"),
-			h.Str(", even with the right id. A plain action runs on a fresh instance and never checks the id, so for it the "+
+			h.Str(", even with the right id. An action on a plain unit with no live root runs on a fresh instance and never checks the id, so for it the "+
 				"origin check below is the only CSRF defence.")),
 		h.P(API("via.WithTrustedOrigin"), h.Str(" adds the origin check in front of every action, form submit and stream "+
 			"connect, in this order: an "),
