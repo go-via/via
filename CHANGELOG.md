@@ -31,6 +31,10 @@
   `App.Action(n)`, `App.ChildAction(key, n)`, `Conn.ActionURL` and
   `Action.Raw` are gone; `App.Post(url)` posts a literal URL,
   `Action.URL()` reads the resolved one and `vt.Key(fn)` gives a child's key.
+- **Breaking:** a `vt.App` keeps cookies as one browser does, so a session
+  an action mints or logs in carries to the next `Get`, `Fire` and
+  `Connect`. A test that needs a cookieless request copies `App.Client` and
+  clears its `Jar`.
 - `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
   via gives it, so a test names `&p.Chat.Draft` instead of writing
   `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.

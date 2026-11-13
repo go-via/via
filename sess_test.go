@@ -935,7 +935,9 @@ func TestSession_siblingChildsShareOneSessionAcrossHydratePasses(t *testing.T) {
 	require.NoError(t, err)
 	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.Header.Set("Datastar-Request", "true")
-	resp, err := app.Client().Do(req)
+	cookieless := *app.Client()
+	cookieless.Jar = nil // the page's GET minted a session; this POST must mint its own
+	resp, err := cookieless.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	b, err := io.ReadAll(resp.Body)

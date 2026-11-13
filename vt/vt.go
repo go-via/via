@@ -28,6 +28,7 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
@@ -84,7 +85,9 @@ func findActionURL(markup []byte, targets []actionid.Target, query string) (stri
 
 // Serve mounts handler on an in-memory httptest server (req.TLS is nil), so
 // the live-runtime suite can run under testing/synctest without touching a
-// real socket.
+// real socket. The App keeps cookies as one browser does: a session an action
+// mints or logs in carries to every later request. A test that needs a
+// cookieless request copies App.Client and clears its Jar.
 func Serve(t testing.TB, handler http.Handler) *App {
 	t.Helper()
 	srv := httptest.NewTestServer(t, handler)
@@ -92,7 +95,7 @@ func Serve(t testing.TB, handler http.Handler) *App {
 	// deliberately drives a render panic (e.g. the off-child State guard)
 	// would otherwise spam a recovered-panic stack trace to stderr.
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
-	srv.Client() // forces srv.URL to populate; harmless before any real request
+	keepCookies(srv.Client())
 	return &App{t: t, srv: srv}
 }
 
@@ -107,7 +110,16 @@ func ServeTLS(t testing.TB, handler http.Handler) *App {
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
+	keepCookies(srv.Client())
 	return &App{t: t, srv: srv}
+}
+
+// keepCookies gives c a cookie jar, so the App's requests share a session as
+// one browser's do: a login an action or form performs carries to the next
+// Get, Fire and Connect.
+func keepCookies(c *http.Client) {
+	jar, _ := cookiejar.New(nil)
+	c.Jar = jar
 }
 
 // Logger returns a logger that writes each record to t.Log, so via's

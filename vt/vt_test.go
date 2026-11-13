@@ -351,3 +351,26 @@ func TestSlot_isTheSignalsWireName(t *testing.T) {
 	assert.Equal(t, "form_name", vt.Slot(func(p *sigPage) *via.Signal[string] { return &p.Form.Name }))
 	assert.Equal(t, "kid__say", vt.Slot(func(p *sigPage) *via.Signal[string] { return &p.Kid.Say }))
 }
+
+type who struct{ Name string }
+
+type loginPage struct{ name string }
+
+func (p *loginPage) OnInit(ctx *via.Ctx) error {
+	u, _ := ctx.Session().Get[who]()
+	p.name = u.Name
+	return nil
+}
+func (p *loginPage) LogIn(ctx *via.Ctx) { ctx.Session().Put(who{Name: "ann"}) }
+func (p *loginPage) View() h.H {
+	return h.Div(h.Button(on.Click(p.LogIn)), h.P(h.Str("user="+p.name)))
+}
+
+func TestServe_keepsTheSessionCookieAcrossRequests(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(loginPage{}))
+
+	vt.Act(app, func(p *loginPage) func(*via.Ctx) { return p.LogIn }).Fire()
+	_, body := app.Get("/")
+	assert.Contains(t, body, "user=ann")
+}
