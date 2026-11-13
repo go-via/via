@@ -541,3 +541,153 @@ func TestHeldRoot_aPlainRootTurningLiveEndsTheStream(t *testing.T) {
 	vt.Act(app, func(p *liveBranchRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Fire()
 	require.NoError(t, conn.AwaitClose(), "the client reloads and gets a page that tells the truth")
 }
+
+// greetKid sets a signal and publishes its arrival when it connects.
+type greetKid struct {
+	S     via.Signal[int]
+	N     via.State[int]
+	joins *topic.Topic[string]
+}
+
+func (k *greetKid) OnInit(ctx *via.Ctx) error { ctx.OnConnect(k.greet); return nil }
+func (k *greetKid) greet() {
+	k.S.Set(7)
+	if k.joins != nil {
+		k.joins.Publish("joined")
+	}
+}
+func (k *greetKid) View() h.H { return h.Div(k.S.Display(), k.N.Display()) }
+
+type pairGateRoot struct {
+	Open  bool
+	Keep  heldKid
+	Greet greetKid
+	Hear  heldKid
+}
+
+func (p *pairGateRoot) Toggle(*via.Ctx) { p.Open = true }
+func (p *pairGateRoot) View() h.H {
+	return h.Div(h.Button(on.Click(p.Toggle)), via.Child(&p.Keep),
+		via.When(p.Open, func() h.H { return h.Div(via.Child(&p.Greet), via.Child(&p.Hear)) }))
+}
+
+func TestHeldRoot_childrenOneActionOpensAllListenBeforeAnyConnects(t *testing.T) {
+	t.Parallel()
+	joins := topic.New[string]()
+	app := vt.Serve(t, via.Handler(pairGateRoot{Keep: heldKid{feed: topic.New[string]()},
+		Greet: greetKid{joins: joins}, Hear: heldKid{feed: joins}}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *pairGateRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Fire()
+	conn.Await(vt.Slot(func(p *pairGateRoot) *via.Signal[int] { return &p.Greet.S }) + `":7`)
+	conn.Await("last=joined")
+}
+
+type whoKid struct {
+	feed *topic.Topic[string]
+	Who  via.State[string]
+}
+
+func (k *whoKid) OnInit(ctx *via.Ctx) error { ctx.Listen(k.feed, k.recv); return nil }
+func (k *whoKid) recv(ctx *via.Ctx, _ string) {
+	u, _ := ctx.Session().Get[heldUser]()
+	k.Who.Set(u.Name)
+}
+func (k *whoKid) View() h.H { return h.Div(h.Str("who="), k.Who.Display()) }
+
+type mintLoginRoot struct {
+	Open bool
+	Who  whoKid
+	M    mintKid
+}
+
+func (p *mintLoginRoot) Toggle(*via.Ctx) { p.Open = true }
+func (p *mintLoginRoot) Login(ctx *via.Ctx) {
+	ctx.Session().Put(heldUser{Name: "ann"})
+	ctx.Session().Rotate()
+}
+func (p *mintLoginRoot) View() h.H {
+	return h.Div(h.Button(on.Click(p.Toggle)), h.Button(on.Click(p.Login)), via.Child(&p.Who),
+		via.When(p.Open, func() h.H { return via.Child(&p.M) }))
+}
+
+func TestHeldRoot_aLoginAfterAMidStreamMintReachesTheHandlers(t *testing.T) {
+	t.Parallel()
+	feed := topic.New[string]()
+	app := vt.Serve(t, via.Handler(mintLoginRoot{Who: whoKid{feed: feed}}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *mintLoginRoot) func(*via.Ctx) { return p.Toggle }).Over(conn).Fire()
+	conn.Await("mint=")
+	vt.Act(app, func(p *mintLoginRoot) func(*via.Ctx) { return p.Login }).Over(conn).Fire()
+	feed.Publish("tick")
+	conn.Await("who=ann")
+}
+
+type formA struct{ Err string }
+
+func (a *formA) Save(ctx *via.Ctx) {
+	if ctx.Request().FormValue("name") == "" {
+		a.Err = "a-name-required"
+	}
+}
+func (a *formA) View() h.H {
+	return h.Div(h.Str("aerr=["+a.Err+"]"), via.PostForm(a.Save, h.Input(h.Name("name"))))
+}
+
+type formStats struct {
+	N via.State[int]
+	A formA
+}
+
+func (s *formStats) View() h.H { return h.Div(s.N.Display()) }
+
+type formStatsRoot struct{ Stats formStats }
+
+func (p *formStatsRoot) View() h.H { return h.Div(via.Child(&p.Stats), via.Child(&p.Stats.A)) }
+
+func TestHeldRoot_aNativeFormInAPlainChildBesideALiveOneStaysPlain(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(formStatsRoot{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	status, body := vt.Act(app, func(p *formStatsRoot) func(*via.Ctx) { return p.Stats.A.Save }).Over(conn).Form(url.Values{}).Fire()
+	require.Equal(t, http.StatusOK, status)
+	assert.Contains(t, body, "aerr=[a-name-required]")
+}
+
+type growKid struct {
+	N    via.State[int]
+	Open bool
+	Note heldDash
+}
+
+func (k *growKid) Grow(*via.Ctx) { k.Open = true }
+func (k *growKid) View() h.H {
+	return h.Div(k.N.Display(), h.Button(on.Click(k.Grow)), via.When(k.Open, func() h.H { return via.Child(&k.Note) }))
+}
+
+type growRoot struct {
+	hits int
+	Kid  growKid
+}
+
+func (p *growRoot) Bump(*via.Ctx) { p.hits++ }
+func (p *growRoot) View() h.H {
+	return h.Div(h.P(h.Str("hits="+strconv.Itoa(p.hits))), h.Button(on.Click(p.Bump)), via.Child(&p.Kid))
+}
+
+func TestHeldRoot_aRootPushCarriesAPlainChildALiveChildOpened(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(growRoot{}))
+	conn := app.Connect()
+	defer conn.Close()
+
+	vt.Act(app, func(p *growRoot) func(*via.Ctx) { return p.Kid.Grow }).Over(conn).Fire()
+	conn.Await("heldDash-who=")
+	vt.Act(app, func(p *growRoot) func(*via.Ctx) { return p.Bump }).Over(conn).Fire()
+	conn.Await("hits=1")
+}

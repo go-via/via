@@ -109,17 +109,23 @@ func (c *tabStream) adoptKids(bind *Ctx) {
 	var live []*Ctx
 	appendLiveChildren(bind, &live)
 	shown := make(map[string]bool, len(live))
+	var fresh []*Ctx
 	for _, k := range live {
 		if k.unauthorized {
 			continue // only the client's posted signals opened it, which may widen what it sees, never what it may call (I1)
 		}
 		shown[k.childKey] = true
-		p := c.kids[k.childKey]
-		if p == nil {
-			c.attach([]*Ctx{initedAs(bind, k)})
-			p = c.kids[k.childKey]
+		if c.kids[k.childKey] == nil {
+			fresh = append(fresh, initedAs(bind, k))
 		}
-		p.adopt(k)
+	}
+	// One batch, so every child an action opened subscribes before any of
+	// their OnConnect fns publishes.
+	c.attach(fresh)
+	for _, k := range live {
+		if shown[k.childKey] {
+			c.kids[k.childKey].adopt(k)
+		}
 	}
 	for key, p := range c.kids {
 		if !shown[key] {
@@ -139,6 +145,9 @@ func initedAs(bind, k *Ctx) *Ctx {
 }
 
 func (p *unitPusher) adopt(k *Ctx) {
+	// An OnConnect fn of a child attached just now wrote through the bind its
+	// baseline rendered, which this replaces.
+	p.lc.flushDirty(p.last)
 	k.pusher = p
 	k.guard = p.lc.guard
 	k.streamCtx = p.lc.streamCtx
@@ -245,7 +254,7 @@ func (p *unitPusher) render(rev *revertSet) (*Ctx, []byte) {
 }
 
 func (p *unitPusher) rerender(rev *revertSet) rerender {
-	return rerender{base: p.base, from: p.from, rev: rev, badDecodeLogged: p.lc.badDecodeLogged}
+	return rerender{base: p.base, from: p.from, rev: rev, badDecodeLogged: p.lc.badDecodeLogged, push: true}
 }
 
 // push renders and frames the unit. Unchanged frames are dropped (the
@@ -381,15 +390,6 @@ func (p *unitPusher) recoverFatal() {
 			"own, which via.Child cannot host; tearing the stream down so the client reloads and " +
 			"gets the real answer"
 		attrs = []any{"err", v.msg}
-	case string:
-		// The root's own render checks nesting with checkLiveNesting, whose
-		// panic is the GET's message: a held plain root a branch made live.
-		if v != liveUnderLiveMsg {
-			panic(rec)
-		}
-		msg = "via: live push aborted — the root turned live in a branch an action opened, " +
-			"over live children; tearing the stream down so the client reloads and gets the real answer"
-		attrs = []any{"err", v}
 	default:
 		panic(rec)
 	}

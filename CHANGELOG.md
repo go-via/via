@@ -38,9 +38,10 @@
   the tab's instance and its patch rides the stream (204): a plain root's,
   a plain child's and a live unit's alike. A plain root or plain child used
   to run on a fresh copy, so its fields reset on every click and the tab
-  never saw the change. A `PostForm` under a plain unit still answers with
-  the page its handler rendered on a fresh copy, since it replaces the
-  document. A plain root's OnConnect and OnDispose now run once per tab.
+  never saw the change. Under a plain root, a `PostForm` on any unit but a
+  live one still answers with the page its handler rendered on a fresh
+  copy, since it replaces the document. A plain root's OnConnect and
+  OnDispose now run once per tab.
 - On a page that streams, a live child a `via.When` branch opens joins the
   stream at its first render: its Ticks and Listens start, and it keeps its
   state while the branch is closed. A root action's patch shows what it

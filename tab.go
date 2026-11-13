@@ -163,7 +163,9 @@ func (c *tabStream) shareSession(s *Session) {
 		return
 	}
 	for _, u := range c.handlers {
-		if u.session.sid() == "" {
+		// Not only an anonymous one: a child attached mid-stream may have
+		// minted a session no cookie carries, which the tab never bound.
+		if u.session.sid() != sid {
 			u.adoptSession(s.id, s.data, nil)
 		}
 	}

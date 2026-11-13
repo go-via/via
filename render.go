@@ -16,9 +16,11 @@ type rerender struct {
 	from            *Ctx
 	rev             *revertSet
 	badDecodeLogged *atomic.Bool
+	push            bool // a live push: only checkLiveUnderLive applies, see there
 }
 
 func (r rerender) wire(ctx *Ctx) {
+	ctx.pushed = r.push
 	ctx.rev = r.rev
 	ctx.badDecodeLogged = r.badDecodeLogged
 	inheritRequestScope(ctx, r.from)
@@ -90,7 +92,11 @@ func renderRootWith(ctx *Ctx, v viewer) []byte {
 	b.Write(rr.Bytes())
 	b.WriteString(`</div>`)
 	out := b.Bytes()
-	checkLiveNesting(ctx, false)
+	if ctx.pushed {
+		checkLiveUnderLive(ctx, false)
+	} else {
+		checkLiveNesting(ctx, false)
+	}
 	return out
 }
 

@@ -421,7 +421,7 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 	// state is the tab's, so it stays on the stream. Which child exists is
 	// resolved on the stream goroutine (see tabStream.held), since each push
 	// may change it.
-	if ar.mode == modeNative && !ownerLive(lc, ar.child) {
+	if ar.mode == modeNative && !nativeOnStream(lc, ar.child) {
 		ticket.leave()
 		return false
 	}
@@ -429,12 +429,19 @@ func (m *mount) routeToStream(ar *actionReq, lc *tabStream, ticket *parkTicket, 
 	return true
 }
 
-// ownerLive reports whether the nearest held unit above child is live. The
-// native-submit routing reads it off the stream goroutine, so it goes by
-// address alone.
-func ownerLive(lc *tabStream, child string) bool {
+// nativeOnStream reports whether a native submit to child runs on the tab's
+// instance: under a live root, or on a live unit itself. Under a plain root
+// any other unit's submit takes the plain path. It is read off the stream
+// goroutine, so it goes by what is registered, not by a render's tree.
+func nativeOnStream(lc *tabStream, child string) bool {
 	owners := lc.owners(child)
-	return len(owners) > 0 && owners[0].live
+	if len(owners) == 0 {
+		return false
+	}
+	if root := owners[len(owners)-1]; root.live {
+		return true
+	}
+	return unitAddr(owners[0]) == child && owners[0].live
 }
 
 // actionTab reads the tab id an action POST echoes, from the form field or the

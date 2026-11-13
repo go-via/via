@@ -56,9 +56,10 @@
 //     or in a State, which makes the unit live.
 //   - A page that streams keeps its whole tree for the tab: the root and
 //     every child, plain or live. Every action the tab fires runs on that
-//     instance, answers 204, and its patch arrives on the stream. A PostForm
-//     under a plain unit is the exception: it replaces the document, so it
-//     answers with the page its handler rendered on a fresh copy.
+//     instance, answers 204, and its patch arrives on the stream. Under a
+//     plain root, a PostForm on any unit but a live one is the exception: it
+//     replaces the document, so it answers with the page its handler
+//     rendered on a fresh copy.
 //   - A live unit may not contain another live unit, and on a page served
 //     plain, liveness must not depend on a branch an action can open. Both
 //     panic. On a page that streams, a live child a branch opens joins the
@@ -672,6 +673,7 @@ type unitPass struct {
 	// unauthorized marks a child the last push's authority render lacks: a
 	// branch only a posted signal opened, shown but never dispatchable.
 	unauthorized bool
+	pushed       bool        // a live push renders this root; see checkLiveUnderLive
 	rendered     []byte      // inner HTML from the discovery render (for the 204 compare)
 	pusher       *unitPusher // live only: re-renders this unit and frames it on the stream
 	redirect     redirectTo
