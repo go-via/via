@@ -355,6 +355,7 @@ var apiSymbols = []apiSymbol{
 	{"vt", "Act", "func", "func Act[P any](a *App, fn func(*P) func(*via.Ctx)) *Action", "Act builds a POST to the action fn returns, taken off the mounted composition: vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Chat.Send }).", ""},
 	{"vt", "ActArg", "func", "func ActArg[P, T any](a *App, fn func(*P) func(*via.Ctx, T), arg T) *Action", "ActArg is Act for a handler bound with on.Bind(fn, arg): it posts to the binding of fn that carries arg, as clicking that row's button would.", ""},
 	{"vt", "Action", "type", "type Action struct{ … }", "Action is a builder for an action POST.", ""},
+	{"vt", "Action.At", "method", "func (a *Action) At(path string) *Action", "At reads the action's URL off the page at path instead of \"/\", for a handler on a composition mounted there.", ""},
 	{"vt", "Action.Body", "method", "func (a *Action) Body(json string) *Action", "Body sets the raw JSON signal body (defaults to \"{}\").", ""},
 	{"vt", "Action.Expect", "method", "func (a *Action) Expect(codes ...int) *Action", "Expect makes Fire accept exactly codes instead of any 2xx, for a test that asserts a refusal.", ""},
 	{"vt", "Action.Fire", "method", "func (a *Action) Fire() (int, string)", "Fire issues the POST and returns the status code and the response body.", ""},

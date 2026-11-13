@@ -374,3 +374,36 @@ func TestServe_keepsTheSessionCookieAcrossRequests(t *testing.T) {
 	_, body := app.Get("/")
 	assert.Contains(t, body, "user=ann")
 }
+
+type growList struct {
+	rows *[]string
+	got  string
+}
+
+func (p *growList) Add(*via.Ctx)              { *p.rows = append(*p.rows, fmt.Sprint(len(*p.rows))) }
+func (p *growList) Pick(_ *via.Ctx, r string) { p.got = r }
+func (p *growList) View() h.H {
+	return h.Div(h.Button(on.Click(p.Add)),
+		via.Each(*p.rows, func(r string) h.H { return h.Button(on.Click(on.Bind(p.Pick, r))) }),
+		h.P(h.Str("got="+p.got)))
+}
+
+func TestActArg_findsARowAddedAfterThePageWasFirstRead(t *testing.T) {
+	t.Parallel()
+	app := vt.Serve(t, via.Handler(growList{rows: &[]string{}}))
+
+	vt.Act(app, func(p *growList) func(*via.Ctx) { return p.Add }).Fire()
+	_, body := vt.ActArg(app, func(p *growList) func(*via.Ctx, string) { return p.Pick }, "0").Fire()
+	assert.Contains(t, body, "got=0")
+}
+
+func TestAt_actsOnAPageMountedAtAnotherPath(t *testing.T) {
+	t.Parallel()
+	r := via.NewRouter()
+	via.Mount(r, "/", tally{})
+	via.Mount(r, "/act", actPage{})
+	app := vt.Serve(t, r)
+
+	_, body := vt.Act(app, func(p *actPage) func(*via.Ctx) { return p.Reset }).At("/act").Fire()
+	assert.Contains(t, body, "picked=reset")
+}

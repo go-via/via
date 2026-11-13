@@ -2451,6 +2451,7 @@ type Sub[T any] struct{}
 type Topic[T any] struct{}
 `,
 	"vt": `
+func (*Action) At(string) *Action
 func (*Action) Body(string) *Action
 func (*Action) Expect(...int) *Action
 func (*Action) Fire() (int, string)

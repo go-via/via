@@ -20,6 +20,7 @@ package vt
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,11 +47,10 @@ import (
 
 // App wraps a via handler under an httptest server, registered for cleanup.
 type App struct {
-	t        testing.TB
-	srv      *httptest.Server
-	mu       sync.Mutex
-	pageBody string
-	fetched  bool
+	t     testing.TB
+	srv   *httptest.Server
+	mu    sync.Mutex
+	pages map[string]string // path → the HTML Act last read its URLs off
 }
 
 // actionURLRe matches every action URL in one chunk of rendered markup. The
@@ -200,9 +200,9 @@ func (a *App) Get(path string) (int, string) {
 // composition: vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Chat.Send }).
 // The handler is named, not counted, so reordering the View moves no test. A
 // handler on a field rendered with via.Child is found under that child. The
-// URL is read off the root page the App's first Fire fetched (or, with Over,
-// off the Conn's pushed frames), so an action that only appears after a
-// change needs Over or Post with a URL read off a fresh Get. By default it
+// URL is read off the page at "/" (another path with At), fetched once and
+// fetched again when the handler is not on it, or, with Over, off the Conn's
+// pushed frames. By default it
 // carries Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch;
 // the builder methods override that to exercise the origin floor.
 func Act[P any](a *App, fn func(*P) func(*via.Ctx)) *Action {
@@ -280,17 +280,27 @@ func Key[P, C any](fn func(*P) *C) string {
 	return key
 }
 
-// page fetches and caches the root page's HTML, so repeated Act calls don't
-// re-render it.
-func (a *App) page() string {
+// page returns the HTML at path: cached, so repeated Act calls don't
+// re-render it, unless fresh.
+func (a *App) page(path string, fresh bool) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if !a.fetched {
-		_, body := a.Get("/")
-		a.pageBody = body
-		a.fetched = true
+	body, ok := a.pages[path]
+	if !ok || fresh {
+		_, body = a.Get(path)
+		if a.pages == nil {
+			a.pages = map[string]string{}
+		}
+		a.pages[path] = body
 	}
-	return a.pageBody
+	return body
+}
+
+// At reads the action's URL off the page at path instead of "/", for a
+// handler on a composition mounted there.
+func (a *Action) At(path string) *Action {
+	a.path = path
+	return a
 }
 
 // Action is a builder for an action POST.
@@ -311,6 +321,7 @@ type Action struct {
 	conn        *Conn // when set, Fire reads the URL off conn's own pushed markup, not the plain page
 	expect      []int // the codes Fire accepts; empty means any 2xx
 	sigs        []SigValue
+	path        string // the page At names; "" is "/"
 }
 
 // Host overrides the request Host header (the authority the origin floor
@@ -471,7 +482,11 @@ func (a *Action) URL() string {
 			return u
 		}
 	}
-	u, ok := findActionURL([]byte(a.app.page()), a.targets, a.query)
+	path := cmp.Or(a.path, "/")
+	u, ok := findActionURL([]byte(a.app.page(path, false)), a.targets, a.query)
+	if !ok {
+		u, ok = findActionURL([]byte(a.app.page(path, true)), a.targets, a.query)
+	}
 	if !ok {
 		hint := ""
 		if strings.Contains(a.name, "[...]") {
@@ -483,7 +498,7 @@ func (a *Action) URL() string {
 		if a.query != "" {
 			name += " with ?" + a.query
 		}
-		a.app.t.Fatalf("vt.Action.URL: %s is bound nowhere on the rendered page%s", name, hint)
+		a.app.t.Fatalf("vt.Action.URL: %s is bound nowhere on the page at %s%s", name, path, hint)
 	}
 	return u
 }

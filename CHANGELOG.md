@@ -35,6 +35,9 @@
   an action mints or logs in carries to the next `Get`, `Fire` and
   `Connect`. A test that needs a cookieless request copies `App.Client` and
   clears its `Jar`.
+- `vt.Act` reads the page again when the handler is not on the copy it
+  cached, so a row an earlier action added is found, and `Action.At(path)`
+  reads a page mounted at another path.
 - `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
   via gives it, so a test names `&p.Chat.Draft` instead of writing
   `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.
