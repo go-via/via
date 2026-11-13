@@ -57,7 +57,7 @@ func (p *Live) View() h.H {
 			d.Link("/glossary#live-unit", "live unit"), h.Str(" on the page shares one connection. "+
 				"A tab is one page load: a dropped connection reconnects under the same tab id, and a reload is a new tab. "+
 				"Each connection runs OnInit afresh, so state these docs call per tab lasts one connection.")),
-		h.P(h.Str("Actions do not change transport. A click still POSTs; an action on a live unit, or on a plain child of a live root, answers "+
+		h.P(h.Str("Actions do not change transport. A click still POSTs; an action on any unit of a page that streams answers "+
 			"as a frame on the stream instead of in the POST's own body.")),
 		h.P(h.Str("Liveness is decided once, by the render that served the page. An action cannot turn a plain "+
 			"page into a live one.")),

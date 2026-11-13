@@ -20,6 +20,7 @@ import (
 	"github.com/go-via/via"
 	"github.com/go-via/via/h"
 	"github.com/go-via/via/on"
+	"github.com/go-via/via/topic"
 	"github.com/go-via/via/vt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1141,25 +1142,21 @@ func TestChild_plainChildActionKeepsItsNestedLiveChildAddressable(t *testing.T) 
 	conn := app.Connect()
 	defer conn.Close()
 
-	status, patch := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Search }).Over(conn).Fire()
-	require.Equal(t, http.StatusOK, status)
+	status, _ := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Search }).Over(conn).Fire()
+	require.Equal(t, http.StatusNoContent, status, "the plain panel's action runs on the tab's instance")
 	assert.Equal(t, int64(1), hits.Load(), "the left panel's own action ran")
 
+	patch := conn.Await(`hits=1`)
 	assert.Len(t, regexp.MustCompile(`id="via-iLeft"`).FindAllString(patch, -1), 1,
 		"the patch must carry the acted child's container exactly once")
-	assert.Contains(t, patch, `id="via-iLeft-Kid"`,
-		"the nested live child keeps its composed key in a partial re-render")
-	assert.Contains(t, patch, `data-bind="left__kid__step"`,
-		"and its signal prefix stays distinct from its parent's left__")
+	assert.Contains(t, patch, `<div id="via-iLeft-Kid" data-ignore-morph></div>`,
+		"the nested live child keeps its composed key, as a placeholder its own pusher owns")
 	assert.Len(t, regexp.MustCompile(`data-bind="left__query"`).FindAllString(patch, -1), 1,
 		"the parent's own Query slot must not be aliased by the nested child's Step")
 
-	childURL := actionURL(t, patch, "Left-Kid", 0)
-	assert.Contains(t, childURL, "/_via/a/Left-Kid/",
-		"the child's button is addressed by its composed key")
-	code, _ := app.Post(childURL).Over(conn).Body(`{"left__kid__step":5}`).Fire()
-	assert.Equal(t, http.StatusNoContent, code,
-		"the URL the parent's patch handed the browser must still reach the live child")
+	code, _ := vt.Act(app, func(p *deepRoot) func(*via.Ctx) { return p.Left.Kid.Inc }).Over(conn).
+		Set(vt.Sig(func(p *deepRoot) *via.Signal[int] { return &p.Left.Kid.Step }, 5)).Fire()
+	assert.Equal(t, http.StatusNoContent, code, "the live child stays reachable after its parent's push")
 	conn.Await("n=5<")
 }
 
@@ -1735,4 +1732,41 @@ func TestChild_anEmbeddedStructKeepsItsNameInTheKey(t *testing.T) {
 	_, body := app.Get("/")
 
 	assert.Contains(t, body, `id="via-ikeyBase-Nav"`, "an outer Nav field may shadow the promoted one, so the key names the embedding")
+}
+
+// liveFeedKid is a live child that follows a topic.
+type liveFeedKid struct {
+	feed *topic.Topic[string]
+	Last via.State[string]
+}
+
+func (k *liveFeedKid) OnInit(ctx *via.Ctx) error { ctx.Listen(k.feed, k.recv); return nil }
+func (k *liveFeedKid) recv(_ *via.Ctx, v string) { k.Last.Set(v) }
+func (k *liveFeedKid) View() h.H                 { return h.P(h.Str("last="), k.Last.Display()) }
+
+type hitsRootFeedKid struct {
+	hits int
+	Kid  liveFeedKid
+}
+
+func (p *hitsRootFeedKid) Inc(*via.Ctx) { p.hits++ }
+func (p *hitsRootFeedKid) View() h.H {
+	return h.Div(h.P(h.Str("root-hits="+strconv.Itoa(p.hits))), h.Button(on.Click(p.Inc)), via.Child(&p.Kid))
+}
+
+func TestDispatch_aPlainRootOfAStreamingPageActsOnTheTabsInstance(t *testing.T) {
+	t.Parallel()
+	feed := topic.New[string]()
+	app := vt.Serve(t, via.Handler(hitsRootFeedKid{Kid: liveFeedKid{feed: feed}}))
+	conn := app.Connect()
+	defer conn.Close()
+	inc := func(p *hitsRootFeedKid) func(*via.Ctx) { return p.Inc }
+
+	for range 2 {
+		status, _ := vt.Act(app, inc).Over(conn).Fire()
+		require.Equal(t, http.StatusNoContent, status, "the stream carries the root's patch")
+	}
+	conn.Await("root-hits=2")
+	feed.Publish("hi")
+	conn.Await("last=hi")
 }

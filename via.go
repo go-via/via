@@ -50,13 +50,13 @@
 // List; otherwise it is plain. A page with a live unit opens one SSE stream
 // per tab.
 //
-//   - A plain page is rebuilt for each request: an action runs on a fresh
-//     copy of the mounted value, so a field it sets lasts for that response
-//     only. Keep per-tab state in a Signal, which the browser holds, or in a
-//     State, which makes the unit live.
-//   - A live unit keeps its instance for the tab's stream, and so do the plain
-//     children of a live root. Their actions answer 204 and the patch arrives
-//     on the stream.
+//   - A page with no live unit is rebuilt for each request: an action runs
+//     on a fresh copy of the mounted value, so a field it sets lasts for that
+//     response only. Keep per-tab state in a Signal, which the browser holds,
+//     or in a State, which makes the unit live.
+//   - A page that streams keeps its whole tree for the tab: the root and
+//     every child, plain or live. Every action the tab fires runs on that
+//     instance, answers 204, and its patch arrives on the stream.
 //   - A live unit may not contain another live unit, and liveness must not
 //     depend on a branch an action can open. Both panic.
 //
@@ -561,21 +561,24 @@ type Ctx struct {
 	unitPass
 	live bool // OnInit registered a Tick/Listen, or the View rendered server State
 	reqScope
-	session   *Session
-	isChild   bool
-	childKey  string // field path from the root, '-'-joined ("Chat", "Stats-A", "Rows-1")
-	parent    *Ctx   // the Ctx whose View rendered this child; nil for a root
-	unitV     instance
-	declare   bool            // this render declares page-level data-signals
-	base      string          // mount path prefix for action POSTs
-	doInit    bool            // request-scoped, so each child's OnInit runs once, before its first View (see reqScope.inited)
-	inInit    bool            // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
-	inReload  bool            // this Ctx is OnReload's: load again, register nothing
-	errPage   bool            // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
-	viewRan   bool            // the View has run: a Set from here on is a change to patch, not a seed to declare
-	rev       *revertSet      // live only: how to put the server-authored signal values back after a display render (see livePush)
-	streamCtx context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
-	guard     *pushGuard      // live only: the connection's panic dedupe, which a Listen handler's recover reports to
+	session  *Session
+	isChild  bool
+	childKey string // field path from the root, '-'-joined ("Chat", "Stats-A", "Rows-1")
+	parent   *Ctx   // the Ctx whose View rendered this child; nil for a root
+	unitV    instance
+	declare  bool       // this render declares page-level data-signals
+	base     string     // mount path prefix for action POSTs
+	doInit   bool       // request-scoped, so each child's OnInit runs once, before its first View (see reqScope.inited)
+	inInit   bool       // true only while OnInit runs; outside it a Tick/Listen would register into a snapshot nobody reads
+	inReload bool       // this Ctx is OnReload's: load again, register nothing
+	errPage  bool       // this Ctx belongs to a WithErrorPage render: no mount, no route, no response of its own
+	viewRan  bool       // the View has run: a Set from here on is a change to patch, not a seed to declare
+	rev      *revertSet // live only: how to put the server-authored signal values back after a display render (see livePush)
+	// hollowLive: this render is a root push, so a connected live child
+	// renders as a placeholder (see childViewer). Children inherit it.
+	hollowLive bool
+	streamCtx  context.Context // live only: the connection's context, so Ctx.Context outlives the POST that req carries
+	guard      *pushGuard      // live only: the connection's panic dedupe, which a Listen handler's recover reports to
 
 	// badDecodeLogged dedupes the hydrator's decode-failure warning for the
 	// whole tree this Ctx belongs to: a shared pointer, allocated once per
