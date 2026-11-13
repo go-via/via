@@ -3,6 +3,35 @@
 // server-authoritative State/List, client-resident Signal, and always-on
 // sessions.
 //
+// A page is a struct with a View, its handlers are pointer methods, and its
+// state is its fields, exported or not:
+//
+//	type Counter struct {
+//		Step via.Signal[int] `via:"init=1"` // the browser holds it, bound to an input
+//		n    via.State[int]                // the server holds it; rendering it makes the page live
+//	}
+//
+//	func (c *Counter) Inc(*via.Ctx) { c.n.Set(c.n.Get() + c.Step.Get()) }
+//
+//	func (c *Counter) View() h.H {
+//		return h.Div(h.Input(c.Step.Bind()), h.Button(on.Click(c.Inc), h.Str("+")),
+//			h.P(h.Str("n="), c.n.Display()))
+//	}
+//
+//	func main() { http.ListenAndServe(":8080", via.Handler(Counter{})) }
+//
+// Its test drives it through package vt:
+//
+//	app := vt.Serve(t, via.Handler(Counter{}))
+//	conn := app.Connect()
+//	step := vt.Sig(func(c *Counter) *via.Signal[int] { return &c.Step }, 2)
+//	vt.Act(app, func(c *Counter) func(*via.Ctx) { return c.Inc }).Set(step).Over(conn).Fire()
+//	conn.Await("n=2")
+//
+// A page that loads data in OnInit reloads it in OnReload, or the render that
+// answers an action shows what OnInit loaded before the action ran; see
+// Lifecycle hooks.
+//
 // Hard guarantees (the point of the design): no '&' at a user call site but
 // via.Child's, which names the parent's field (via.Child(&p.Chat)), no
 // reflection in the public API surface (inside, reflect walks each composition
@@ -549,7 +578,8 @@ type Ctx struct {
 // stream connect post to via's own URLs. Don't keep page state in the query;
 // see [Ctx.Param].
 //
-// Read-only: the body is already consumed into the request's signals. A live
+// Read-only: a @post's body is already consumed into its signals, and a
+// PostForm submit's fields are parsed, so FormValue reads them. A live
 // action runs on the stream goroutine while the POST waits for it, and keeps
 // running if the client hangs up, so the request's Context may end mid-action.
 //
