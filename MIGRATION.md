@@ -1017,3 +1017,11 @@ spelling outright.
 - **`Fire` fails on a non-2xx status.** Runtime. A test that asserts a
   refusal adds `.Expect(code)` before `.Fire()`; a helper that only checked
   for 2xx can go.
+- **A `vt.App` keeps cookies.** Runtime. A session one request mints
+  carries to the next `Get`, `Fire` and `Connect`, so two `Connect`s are two
+  tabs of one visitor. A test that relied on each request starting without a
+  session copies `app.Client()`, sets its `Jar` to nil and sends through it.
+- **`Fire` no longer follows redirects.** Runtime. A form's 303 comes back
+  as the status. A test that read the target page from the followed
+  answer asserts on `act.Redirected()` instead, then calls
+  `app.Get` on that path.

@@ -38,10 +38,10 @@
 - `vt.Act` reads the page again when the handler is not on the copy it
   cached, so a row an earlier action added is found, and `Action.At(path)`
   reads a page mounted at another path.
-- `Action.Form(fields)` submits a `via.PostForm` as a browser does, and
-  `Action.Redirected()` reports where the last `Fire` navigates: a form's
-  303 `Location` or an action's navigation target. `Fire` no longer follows
-  redirects.
+- **Breaking:** `vt.Action.Fire` no longer follows redirects: it answers a
+  form's 303 itself, and `Action.Redirected()` reports where the last `Fire`
+  navigates, a 303's `Location` or an action's navigation target.
+- `Action.Form(fields)` submits a `via.PostForm` as a browser does.
 - `vt.Sig(fn, v)` and `Action.Set` post a signal value under the wire name
   via gives it, so a test names `&p.Chat.Draft` instead of writing
   `{"chat__draft":…}`. `vt.Slot(fn)` returns that name.

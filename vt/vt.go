@@ -112,13 +112,11 @@ func ServeTLS(t testing.TB, handler http.Handler) *App {
 	srv.Config.ErrorLog = log.New(io.Discard, "", 0)
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
-	keepCookies(srv.Client())
+	keepCookies(srv.Client()) // cookies as Serve keeps them
 	return &App{t: t, srv: srv}
 }
 
-// keepCookies gives c a cookie jar, so the App's requests share a session as
-// one browser's do: a login an action or form performs carries to the next
-// Get, Fire and Connect.
+// keepCookies gives c a cookie jar; see Serve.
 func keepCookies(c *http.Client) {
 	jar, _ := cookiejar.New(nil)
 	c.Jar = jar
@@ -202,11 +200,11 @@ func (a *App) Get(path string) (int, string) {
 // composition: vt.Act(app, func(p *Page) func(*via.Ctx) { return p.Chat.Send }).
 // The handler is named, not counted, so reordering the View moves no test. A
 // handler on a field rendered with via.Child is found under that child. The
-// URL is read off the page at "/" (another path with At), fetched once and
-// fetched again when the handler is not on it, or, with Over, off the Conn's
-// pushed frames. By default it
-// carries Sec-Fetch-Site: same-origin, modelling a same-origin browser fetch;
-// the builder methods override that to exercise the origin floor.
+// URL is read off the page at "/" (another path with At), cached and fetched
+// again when the handler is not on the cached copy, or, with Over, off the
+// Conn's pushed frames. By default it carries Sec-Fetch-Site: same-origin,
+// modelling a same-origin browser fetch; the builder methods override that to
+// exercise the origin floor.
 func Act[P any](a *App, fn func(*P) func(*via.Ctx)) *Action {
 	root := new(P)
 	return a.act(root, fn(root), "")
@@ -282,8 +280,8 @@ func Key[P, C any](fn func(*P) *C) string {
 	return key
 }
 
-// page returns the HTML at path: cached, so repeated Act calls don't
-// re-render it, unless fresh.
+// page returns the HTML at path, cached so repeated Act calls don't re-render
+// it; fresh fetches it again.
 func (a *App) page(path string, fresh bool) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -408,8 +406,8 @@ func (a *Action) Expect(codes ...int) *Action {
 }
 
 // Fire issues the POST and returns the status code and the response body. It
-// fails the test unless the action answers 2xx, a form's 303, or a code given
-// to Expect. It follows no redirect; Redirected reports the target. A
+// fails the test unless the action answers 2xx or 303, or a code given to
+// Expect. It follows no redirect; Redirected reports the target. A
 // plain page answers 200 with the Datastar patch: HTML, or SSE frames when the
 // action wrote or opened signals. A live unit, and a plain child of a live
 // root, answers 204 and sends the patch to the open Conn, so assert on the
@@ -453,8 +451,8 @@ func redirectTarget(resp *http.Response) string {
 }
 
 // Form submits fields as a browser submits a via.PostForm: multipart, with no
-// Datastar header, so the handler reads them with ctx.Request().FormValue.
-// Fire then answers 303 when the handler redirects; see Redirected.
+// Datastar header, so the handler reads them with ctx.Request().FormValue. A
+// handler's Redirect answers 303; see Redirected.
 func (a *Action) Form(fields url.Values) *Action {
 	a.form = fields
 	return a

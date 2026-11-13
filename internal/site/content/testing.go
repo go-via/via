@@ -54,10 +54,10 @@ func (p *Testing) View() h.H {
 			h.Str(" posts to wherever the View binds Counter.Inc, so reordering the View moves no test. vt reads the action's URL "+
 				"off the rendered page when the action fires, because the wire id is a hash of the handler's name and field path. "),
 			API("vt.Action.Fire"), h.Str(" returns the status and the body, which on a plain page is the Datastar patch. "+
-				"It fails the test on a status outside 2xx; a test that asserts a refusal chains "), API("vt.Action.Expect"),
+				"It fails the test on a status other than 2xx or 303; a test that asserts a refusal chains "), API("vt.Action.Expect"),
 			h.Str(" with the code it wants. "), API("vt.Action.Form"), h.Str(" submits a "), API("via.PostForm"),
-			h.Str(" as the browser does, and "), API("vt.Action.Redirected"),
-			h.Str(" reports where the answer navigates, since Fire follows no redirect.")),
+			h.Str(" as the browser does. Fire follows no redirect; "), API("vt.Action.Redirected"),
+			h.Str(" reports where the answer navigates.")),
 
 		d.H2("Actions and arguments"),
 		snippet.Region("testing/args.go", "body", snippet.Title("stepper_test.go"), snippet.Mark(".Set(")),
@@ -110,11 +110,10 @@ func (p *Testing) View() h.H {
 			h.Str(". An action over one tab that publishes on a "), API("topic.Topic"),
 			h.Str(" reaches every tab listening on it, so fan-out needs no browser. "), API("vt.Action.Tab"),
 			h.Str(" sets a tab id by hand, for a test that routes an action to the wrong tab on purpose.")),
-		Callout(Caveat, "No cookie jar",
-			h.P(h.Str("vt's client keeps no cookies, so every request starts without a session and two Connects are two "+
-				"visitors, not two tabs of one. To carry a session across requests, send them through an "),
-				Code("http.Client"), h.Str(" with a cookie jar and the transport of "), API("vt.App.Client"),
-				h.Str(", or use "), API("vtbrowser.Session.NewTab"), h.Str(".")),
+		Callout(Caveat, "One cookie jar per App",
+			h.P(h.Str("An App keeps cookies as one browser does, so a session an action mints or logs in carries to every "+
+				"later request, and two Connects are two tabs of one visitor. For a second visitor, or a cookieless "+
+				"request, copy "), API("vt.App.Client"), h.Str(" and clear its "), Code("Jar"), h.Str(".")),
 		),
 
 		d.H2("The wire protocol"),
