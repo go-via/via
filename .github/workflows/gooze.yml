@@ -1,0 +1,47 @@
+name: Mutation (gooze)
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gooze:
+    name: Mutation (gooze)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # gooze --diff needs the base branch's history.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: true
+          cache-dependency-path: go.sum
+
+      # setup-go sets GOTOOLCHAIN=local; gooze needs Go 1.27.3 to build.
+      - name: Install gooze
+        run: GOTOOLCHAIN=go1.27.3 go install gooze.dev/pkg/gooze@v1.3.0
+
+      # A second opinion next to the gomutants job: the same changed lines,
+      # report only (prints surviving mutants and the score).
+      - name: Mutate changed lines
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: gooze run -p 2 --diff "origin/$BASE_REF" ./...
+
+      - name: Mutate the whole module
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          gooze run -p 2 ./...
+          gooze report view
