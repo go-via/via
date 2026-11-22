@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/chromedp/cdproto v0.160.1
-	github.com/chromedp/chromedp v0.23.1
+	github.com/chromedp/chromedp v0.24.0
 	github.com/go-via/via v0.10.0
 	github.com/stretchr/testify v1.12.1
 )
