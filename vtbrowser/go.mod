@@ -3,7 +3,7 @@ module github.com/go-via/via/vtbrowser
 go 1.27
 
 require (
-	github.com/chromedp/cdproto v0.160.1
+	github.com/chromedp/cdproto v0.160.6
 	github.com/chromedp/chromedp v0.23.1
 	github.com/go-via/via v0.10.0
 	github.com/stretchr/testify v1.12.1
