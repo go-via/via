@@ -35,9 +35,9 @@ import (
 // and use that Signal's Ref instead.
 type State[T any] struct {
 	val T
-	// lit marks the start value as decided — by StateOf, by ListOf, or by the
-	// one apply of a via:"init=…" tag — so a literal wins over the tag and no
-	// later render re-seeds over what a Set has authored.
+	// lit marks the start value as decided — by StateOf, ListOf or StateTrack,
+	// or by the one apply of a via:"init=…" tag — so a literal wins over the
+	// tag and no later render re-seeds over what a Set has authored.
 	lit   bool
 	track trackSource[T] // set by StateTrack; nil on every other State
 }
@@ -73,7 +73,7 @@ func (*State[T]) startTrack(handle unsafe.Pointer, ctx *Ctx) {
 
 // StateTrack is the literal form of [State.Track]: a State that seeds from
 // load at every init of its unit, re-seeds once the stream has subscribed, and
-// re-runs load on every publish to t.
+// re-runs load once per batch of publishes to t.
 //
 //	via.Handler(Counter{Hits: via.StateTrack(room, n.Load)})
 //	via.Handler(Room{Count: via.StateTrack(chat.Feed, chat.Len)}) // Feed carries Msg
@@ -131,18 +131,17 @@ func (s *State[T]) Get() T { return s.val }
 func (s *State[T]) Set(v T) { s.val = v }
 
 // Track keeps s equal to a store announced on t: it seeds s from load now,
-// seeds it again once the stream has subscribed, and re-runs load on every
-// publish. The payload is never read, so t may carry anything: the whole
-// value, the changed row, or struct{}. load is the one source of truth, and a
-// late or reordered publish cannot leave s on an older value. Valid only
-// inside OnInit; a later call is ignored and logged.
+// seeds it again once the stream has subscribed, and re-runs load once per
+// batch of publishes the stream drains. The payload is never read, so t may
+// carry anything: the whole value, the changed row, or struct{}. load is the
+// one source of truth, and a late or reordered publish cannot leave s on an
+// older value. Valid only inside OnInit; a later call is ignored and logged.
 //
 // load is any func() T: a method value (store.Len) or a closure over the
 // request (func() int { return rooms.Len(id) }). It runs on the unit's own
-// goroutine, once per publish, so it must be cheap and safe to call alongside
-// the writers of the store it reads. An action that writes the store and
-// publishes need not Set s too: the publish reaches the acting tab as well, in
-// a push of its own.
+// goroutine and must be cheap and safe to call alongside the writers of the
+// store it reads. An action that writes the store and publishes need not Set
+// s too: the publish reaches the acting tab as well, in a push of its own.
 func (s *State[T]) Track[M any](ctx *Ctx, t *topic.Topic[M], load func() T) {
 	// No partial seed when refused: a one-shot copy that never follows is the
 	// trap this whole method exists to remove.
@@ -154,7 +153,7 @@ func (s *State[T]) Track[M any](ctx *Ctx, t *topic.Topic[M], load func() T) {
 	// The subscribe runs before any OnConnect fn, so this re-read covers every
 	// write between OnInit and it.
 	ctx.OnConnect(r.run)
-	ctx.Listen(t, stateNotice[T, M]{r}.recv)
+	listen(ctx, t, stateBatch[T, M]{r}.run)
 }
 
 type stateReload[T any] struct {
@@ -164,10 +163,12 @@ type stateReload[T any] struct {
 
 func (r stateReload[T]) run() { r.s.Set(r.load()) }
 
-// stateNotice re-reads on a publish; the payload only announces a change.
-type stateNotice[T, M any] struct{ r stateReload[T] }
+// stateBatch re-reads once per drained batch.
+type stateBatch[T, M any] struct{ r stateReload[T] }
 
-func (n stateNotice[T, M]) recv(*Ctx, M) { n.r.run() }
+// run needs no recover of its own: a panicking load has no value to push, and
+// the stream survives it.
+func (b stateBatch[T, M]) run(*Ctx, []M) { b.r.run() }
 
 // Display renders the current value as literal, escaped server text, with no
 // wrapping element, and marks its unit live, so server-held state alone earns

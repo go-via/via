@@ -231,7 +231,7 @@ func runDisposers(log *slog.Logger, g *pushGuard, units []*Ctx) {
 type pushItem struct {
 	unit   *Ctx         // the unit tick runs against
 	tick   func(*Ctx)   // a Tick handler; the unit is pushed after it
-	listen subscription // a Listen whose backlog was just drained
+	listen subscription // a Listen or Track whose backlog was just drained
 	action *liveAction  // a POST's action, handed over by tabStream.run
 	push   *unitPusher  // a bare push, after the unit's OnConnect fns
 	beat   *tabStream   // the keepalive: frame it, then revalidate the session

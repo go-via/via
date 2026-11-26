@@ -14,24 +14,24 @@ type tickReg struct {
 	fn func(*Ctx)
 }
 
-// subscription is one ctx.Listen, erased of its topic's element type. OnInit
-// records it; only the SSE handler subscribes it.
+// subscription is one Listen or Track, erased of its topic's element type.
+// OnInit records it; only the SSE handler subscribes it.
 type subscription interface {
 	// start subscribes onto the connection's shared wake channel. It spawns no
 	// goroutine.
 	start(wake chan struct{})
 	// drain takes the whole queued backlog and reports whether it was non-empty.
 	drain() bool
-	// deliver runs the handler over the drained backlog, then pushes.
+	// deliver runs the drained backlog, then pushes.
 	deliver()
 }
 
 type listenSub[T any] struct {
-	c       *Ctx
-	t       *topic.Topic[T]
-	handler func(*Ctx, T)
-	sub     *topic.Sub[T]
-	batch   []T
+	c *Ctx
+	t *topic.Topic[T]
+	run   func(*Ctx, []T) // takes one drained batch
+	sub   *topic.Sub[T]
+	batch []T
 }
 
 func (l *listenSub[T]) start(wake chan struct{}) {
@@ -52,22 +52,34 @@ func (l *listenSub[T]) drain() bool {
 }
 
 // deliver pushes only this unit's container, so a fan-out never re-renders a
-// sibling. One recover per value, and the push runs regardless: the batch is a
-// frame-rate optimisation, not a failure domain, so a panic on value k must not
-// swallow k+1..n or the re-render the surviving values earned.
+// sibling.
 func (l *listenSub[T]) deliver() {
-	for _, v := range l.batch {
-		l.callHandler(v)
-	}
+	l.run(l.c, l.batch)
 	l.batch = nil
 	l.c.pusher.push()
 }
 
-// callHandler recovers per call, so a panicking handler does not tear down
-// the tab's stream goroutine.
-func (l *listenSub[T]) callHandler(v T) {
-	defer l.c.recoverListener()
-	l.handler(l.c, v)
+// eachValue is a Listen handler run once per value with one recover per call,
+// so a panic on value k neither swallows k+1..n nor tears down the tab's
+// stream goroutine.
+type eachValue[T any] func(*Ctx, T)
+
+func (h eachValue[T]) run(c *Ctx, batch []T) {
+	for _, v := range batch {
+		h.call(c, v)
+	}
+}
+
+func (h eachValue[T]) call(c *Ctx, v T) {
+	defer c.recoverListener()
+	h(c, v)
+}
+
+// listen records a subscription on t that the stream runs per drained batch.
+// The caller has passed initOnly.
+func listen[T any](c *Ctx, t *topic.Topic[T], run func(*Ctx, []T)) {
+	c.live = true
+	c.subs = append(c.subs, &listenSub[T]{c: c, t: t, run: run})
 }
 
 func (c *Ctx) recoverListener() {
@@ -176,8 +188,7 @@ func (c *Ctx) Listen[T any](t *topic.Topic[T], handler func(*Ctx, T)) {
 	if !c.initOnly("Listen") {
 		return
 	}
-	c.live = true
-	c.subs = append(c.subs, &listenSub[T]{c: c, t: t, handler: handler})
+	listen(c, t, eachValue[T](handler).run)
 }
 
 // runTicker queues t on pushq every t.d until reqCtx ends. The item pushes

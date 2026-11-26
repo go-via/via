@@ -5,10 +5,11 @@
 ### New
 
 - `State.Track` and `via.StateTrack` take a topic of any payload type and
-  re-run load on every publish; the payload is not read. A message count can
-  follow the feed that carries the messages, and an out-of-order publish can
-  no longer leave a tab on an older value. Existing calls compile as before;
-  load now runs once per publish, so keep it cheap.
+  re-run load once per batch of publishes; the payload is not read. A
+  message count can follow the feed that carries the messages, and an
+  out-of-order publish can no longer leave a tab on an older value. Existing
+  calls compile as before. A burst published during one frame costs one more
+  load, not one per value.
 - `vt.Conn.Saw(needle)` reports whether any event so far, consumed or not,
   carried needle. Await a later push, then check `!Saw` to prove one did not
   arrive.

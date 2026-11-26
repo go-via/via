@@ -566,6 +566,51 @@ func TestStateTrack_followsAPublish(t *testing.T) {
 		"a publish from outside the unit must reach a literal-tracked State")
 }
 
+// gatedLoad is a Track load that, once armed, blocks its first call until
+// released, so a test can queue publishes behind a load in progress.
+type gatedLoad struct {
+	n       atomic.Int64
+	calls   atomic.Int64
+	armed   atomic.Bool
+	entered chan struct{}
+	release chan struct{}
+}
+
+// load reads n before it blocks, so the gated call returns the value from
+// before the burst and only a later load can show the last one.
+func (g *gatedLoad) load() int64 {
+	g.calls.Add(1)
+	v := g.n.Load()
+	if g.armed.CompareAndSwap(true, false) {
+		close(g.entered)
+		<-g.release
+	}
+	return v
+}
+
+func TestTrack_loadsOncePerBatchOfPublishes(t *testing.T) {
+	t.Parallel()
+	g := &gatedLoad{entered: make(chan struct{}), release: make(chan struct{})}
+	room := topic.New[int64]()
+	app := vt.Serve(t, via.Handler(litTrack{Hits: via.StateTrack(room, g.load)}))
+	conn := app.Connect()
+	require.Eventually(t, func() bool { return room.NumSubs() == 1 }, 2*time.Second, time.Millisecond,
+		"the tab must subscribe before the burst, or no publish reaches it")
+
+	g.armed.Store(true)
+	room.Publish(g.n.Add(1))
+	<-g.entered
+	before := g.calls.Load()
+	for range 99 {
+		room.Publish(g.n.Add(1))
+	}
+	close(g.release)
+
+	conn.Await("count: 100")
+	assert.Equal(t, int64(1), g.calls.Load()-before,
+		"99 publishes queued behind one load must cost one more load, not 99")
+}
+
 // litTrackRacer publishes from OnInit, inside the window a connect re-read must cover.
 type litTrackRacer struct {
 	n    *atomic.Int64
